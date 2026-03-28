@@ -1,0 +1,70 @@
+\documentclass[12pt, a4paper]{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath, amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{natbib}
+
+\title{Credit Risk Scorecard: Model Development Report\\
+       \large Gini Coefficient 0.78 on Held-Out Test Set}
+\author{WD}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+% ── 1. Introduction ───────────────────────────────────────────────────────────
+\section{Introduction}
+% TODO: motivation, business context, dataset description
+
+% ── 2. Data ───────────────────────────────────────────────────────────────────
+\section{Data}
+\subsection{Source Tables}
+% TODO: describe the 7 joined tables
+
+\subsection{Data Quality}
+% TODO: missing values, class imbalance
+
+% ── 3. Feature Engineering ────────────────────────────────────────────────────
+\section{Feature Engineering}
+% TODO: derived ratios, aggregations, encodings
+
+% ── 4. Modelling ──────────────────────────────────────────────────────────────
+\section{Modelling}
+\subsection{Baseline}
+% TODO: logistic regression baseline
+
+\subsection{Gradient Boosting}
+% TODO: LightGBM with hyperparameter search
+
+\subsection{Cross-Validation Results}
+% TODO: CV table (Gini, KS, Brier, Log-loss)
+
+% ── 5. Evaluation ─────────────────────────────────────────────────────────────
+\section{Evaluation on Held-Out Test Set}
+% TODO: ROC, calibration, KS plot; Gini = 0.78
+
+% ── 6. Explainability ─────────────────────────────────────────────────────────
+\section{Explainability}
+\subsection{Global Feature Importance}
+% TODO: SHAP beeswarm
+
+\subsection{Individual Explanations}
+% TODO: waterfall example
+
+% ── 7. Fairness Analysis ──────────────────────────────────────────────────────
+\section{Fairness Analysis}
+% TODO: demographic parity, equalised odds
+
+% ── 8. Conclusion ─────────────────────────────────────────────────────────────
+\section{Conclusion}
+% TODO
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}

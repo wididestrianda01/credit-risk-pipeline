@@ -1,0 +1,38 @@
+# AI guidance and personal reference docs
+CLAUDE.md
+P2_CreditRisk_Reference.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data (large files — download via Kaggle API)
+dataset/*.csv
+
+# Model artefacts
+*.pkl
+*.joblib
+*.json.model
+
+# Environment
+.env
+*.env
+
+# IDE
+.vscode/
+.idea/
