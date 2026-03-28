@@ -1,0 +1,29 @@
+# Data
+numpy>=1.26
+pandas>=2.2
+kaggle>=1.6                  # dataset download via Kaggle API
+
+# Feature engineering
+scikit-learn>=1.4
+imbalanced-learn>=0.12       # SMOTE, RandomUnderSampler, ImbPipeline
+
+# Models
+lightgbm>=4.3
+xgboost>=2.0
+
+# Hyperparameter optimisation
+optuna>=3.6
+
+# Explainability
+shap>=0.45
+
+# Deployment
+fastapi>=0.111
+uvicorn[standard]>=0.29
+pydantic>=2.7
+
+# Dashboard
+streamlit>=1.35
+
+# Testing
+pytest>=8.2

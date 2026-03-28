@@ -41,7 +41,9 @@ def roc_curve_plot(y_true: np.ndarray, y_score: np.ndarray, ax=None) -> plt.Axes
     raise NotImplementedError
 
 
-def calibration_plot(y_true: np.ndarray, y_score: np.ndarray, n_bins: int = 10, ax=None) -> plt.Axes:
+def calibration_plot(
+    y_true: np.ndarray, y_score: np.ndarray, n_bins: int = 10, ax=None
+) -> plt.Axes:
     """Reliability diagram."""
     # TODO: implement
     raise NotImplementedError

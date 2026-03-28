@@ -26,7 +26,7 @@ class ApplicantFeatures(BaseModel):
 
 class PredictionResponse(BaseModel):
     probability_of_default: float
-    risk_band: str          # e.g. "LOW" | "MEDIUM" | "HIGH"
+    risk_band: str  # e.g. "LOW" | "MEDIUM" | "HIGH"
     gini_at_training: float
 
 
