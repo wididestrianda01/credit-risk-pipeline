@@ -96,7 +96,7 @@ _CATEGORICAL_APP_COLS = [
 # ---------------------------------------------------------------------------
 
 _MISSING_DROP_THRESHOLD = 0.60  # drop columns with > 60% missing values
-_NAN_SENTINEL = -999             # sentinel fill for tree models (LightGBM/XGBoost)
+_NAN_SENTINEL = -999  # sentinel fill for tree models (LightGBM/XGBoost)
 
 
 # ---------------------------------------------------------------------------

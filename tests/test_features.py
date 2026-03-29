@@ -10,6 +10,7 @@ Run with
 
 import pandas as pd
 import pytest
+
 from credit_engine.features import build_features
 
 

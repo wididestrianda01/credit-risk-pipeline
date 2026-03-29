@@ -1,6 +1,10 @@
 # AI guidance and personal reference docs
 CLAUDE.md
 P2_CreditRisk_Reference.md
+credit_risk_tasks_list.md
+
+# Claude Code local settings
+.claude/
 
 # Python
 __pycache__/
@@ -8,6 +12,7 @@ __pycache__/
 *.pyo
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
 *.egg-info/
 dist/
 build/
@@ -24,10 +29,23 @@ env/
 # Data (large files — download via Kaggle API)
 dataset/*.csv
 
+# Generated figures (produced by executing notebooks)
+reports/figures/
+
+# Generated scan and codemap diff reports
+.reports/
+
 # Model artefacts
+models/
 *.pkl
 *.joblib
 *.json.model
+*.pt
+*.onnx
+
+# Hyperparameter optimisation storage
+optuna.db
+optuna_study.db
 
 # Environment
 .env

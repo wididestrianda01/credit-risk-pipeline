@@ -11,8 +11,8 @@ Key outputs
 """
 
 from __future__ import annotations
+
 import pandas as pd
-import numpy as np
 
 
 def compute_shap_values(model: object, X: pd.DataFrame) -> object:
