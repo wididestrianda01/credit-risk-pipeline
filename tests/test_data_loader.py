@@ -15,7 +15,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from credit_engine.data_loader import build_training_frame, load_data, save_training_frame
+from credit_engine.data_loader import (
+    build_training_frame,
+    load_data,
+    save_training_frame,
+)
 
 # ---------------------------------------------------------------------------
 # Synthetic data helpers
