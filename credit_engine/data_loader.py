@@ -28,11 +28,19 @@ to collapse N:M relationships. features.py adds 150+ derived features on top.
 
 Usage
 -----
-    from credit_engine.data_loader import load_data
+    from credit_engine.data_loader import load_data, build_training_frame, save_training_frame
+
+    # Low-level: raw joined DataFrame
     df = load_data(data_dir="dataset/", mode="train")
+
+    # High-level: clean (X, y) pair ready for feature engineering
+    X, y = build_training_frame(data_dir="dataset/")
+    save_training_frame(X, y, output_dir="data/processed/")
 """
 
+import math
 from pathlib import Path
+from typing import Tuple
 
 import numpy as np
 import pandas as pd
@@ -81,6 +89,14 @@ _CATEGORICAL_APP_COLS = [
     "WALLSMATERIAL_MODE",
     "EMERGENCYSTATE_MODE",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+_MISSING_DROP_THRESHOLD = 0.60  # drop columns with > 60% missing values
+_NAN_SENTINEL = -999             # sentinel fill for tree models (LightGBM/XGBoost)
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +150,91 @@ def load_data(data_dir: str | Path, mode: str = "train") -> pd.DataFrame:
     app = _enforce_dtypes(app)
 
     return app
+
+
+def build_training_frame(
+    data_dir: str | Path,
+) -> Tuple[pd.DataFrame, pd.Series]:
+    """Build the flat training matrix from all 7 source tables.
+
+    Calls ``load_data()``, drops high-missingness columns, fills remaining
+    numeric NaNs with a sentinel value, and returns a clean ``(X, y)`` pair
+    ready for ``features.py``.
+
+    Steps
+    -----
+    1. Join all 7 tables via ``load_data()``.
+    2. Drop columns where > 60 % of values are missing.
+    3. Fill remaining numeric NaNs with ``-999`` (sentinel; LightGBM/XGBoost
+       treat it as a separate bin rather than imputing a distribution value).
+    4. Split TARGET out of the feature matrix.
+
+    Parameters
+    ----------
+    data_dir : str or Path
+        Directory containing the 7 raw CSV files.
+
+    Returns
+    -------
+    X : pd.DataFrame
+        Feature matrix — one row per applicant, TARGET excluded.
+    y : pd.Series
+        Binary target (0 = repaid, 1 = defaulted), aligned with X.
+
+    Raises
+    ------
+    KeyError
+        If TARGET column is absent (e.g. called with test-mode data).
+    """
+    data_dir = Path(data_dir)
+    df = load_data(data_dir, mode="train")
+
+    if "TARGET" not in df.columns:
+        raise KeyError(
+            "TARGET column not found. build_training_frame() requires train data."
+        )
+
+    # --- drop columns with > 60 % missing -----------------------------------
+    n_rows = len(df)
+    min_non_null = math.ceil((1.0 - _MISSING_DROP_THRESHOLD) * n_rows)
+    df = df.dropna(axis=1, thresh=min_non_null)
+
+    # --- fill remaining numeric NaNs with sentinel --------------------------
+    numeric_cols = df.select_dtypes(include=[np.number]).columns
+    fill_map = {col: _NAN_SENTINEL for col in numeric_cols if df[col].isna().any()}
+    if fill_map:
+        df = df.fillna(fill_map)
+
+    # --- split target --------------------------------------------------------
+    y = df["TARGET"].astype(np.int8)
+    X = df.drop(columns=["TARGET"])
+
+    return X, y
+
+
+def save_training_frame(
+    X: pd.DataFrame,
+    y: pd.Series,
+    output_dir: str | Path,
+) -> None:
+    """Persist the training matrix and target to parquet.
+
+    Creates ``output_dir`` if it does not exist.
+
+    Parameters
+    ----------
+    X : pd.DataFrame
+        Feature matrix returned by ``build_training_frame()``.
+    y : pd.Series
+        Target series returned by ``build_training_frame()``.
+    output_dir : str or Path
+        Directory to write ``X_train.parquet`` and ``y_train.parquet``.
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    X.to_parquet(output_dir / "X_train.parquet", index=True)
+    y.to_frame().to_parquet(output_dir / "y_train.parquet", index=True)
 
 
 # ---------------------------------------------------------------------------

@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from credit_engine.data_loader import load_data
+from credit_engine.data_loader import build_training_frame, load_data, save_training_frame
 
 # ---------------------------------------------------------------------------
 # Synthetic data helpers
@@ -380,3 +380,94 @@ def test_missing_csv_raises_file_not_found(tmp_path):
 def test_invalid_mode_raises_value_error(data_dir):
     with pytest.raises(ValueError, match="mode"):
         load_data(data_dir, mode="validation")
+
+
+# ---------------------------------------------------------------------------
+# Contract tests: build_training_frame
+# ---------------------------------------------------------------------------
+
+
+def test_build_training_frame_returns_tuple(data_dir):
+    """build_training_frame returns a (DataFrame, Series) pair."""
+    X, y = build_training_frame(data_dir)
+    assert isinstance(X, pd.DataFrame)
+    assert isinstance(y, pd.Series)
+
+
+def test_build_training_frame_target_excluded_from_X(data_dir):
+    """TARGET must not appear in the feature matrix."""
+    X, _ = build_training_frame(data_dir)
+    assert "TARGET" not in X.columns
+
+
+def test_build_training_frame_y_is_binary(data_dir):
+    """Target series contains only 0 and 1."""
+    _, y = build_training_frame(data_dir)
+    assert set(y.unique()).issubset({0, 1})
+
+
+def test_build_training_frame_aligned_index(data_dir):
+    """X and y share the same index."""
+    X, y = build_training_frame(data_dir)
+    pd.testing.assert_index_equal(X.index, y.index)
+
+
+def test_build_training_frame_no_numeric_nans(data_dir):
+    """All numeric columns in X have no NaN values after sentinel fill."""
+    X, _ = build_training_frame(data_dir)
+    numeric_cols = X.select_dtypes(include="number").columns
+    assert X[numeric_cols].isna().sum().sum() == 0
+
+
+def test_build_training_frame_sentinel_value_present(data_dir):
+    """Columns that had NaNs should contain the -999 sentinel."""
+    X, _ = build_training_frame(data_dir)
+    # EXT_SOURCE_1 has a NaN in the synthetic data
+    if "EXT_SOURCE_1" in X.columns:
+        assert (X["EXT_SOURCE_1"] == -999).any()
+
+
+def test_build_training_frame_drops_high_missingness_columns(data_dir, tmp_path):
+    """Columns with > 60 % missing values are dropped."""
+    import shutil
+
+    # Copy synthetic CSVs to a new tmp dir and inject a >60%-missing column
+    new_dir = tmp_path / "data_drop_test"
+    shutil.copytree(data_dir, new_dir)
+
+    app_path = new_dir / "application_train.csv"
+    app = pd.read_csv(app_path)
+    # Add column that is 100 % NaN — must be dropped
+    app["MOSTLY_MISSING"] = np.nan
+    app.to_csv(app_path, index=False)
+
+    X, _ = build_training_frame(new_dir)
+    assert "MOSTLY_MISSING" not in X.columns
+
+
+# ---------------------------------------------------------------------------
+# Contract tests: save_training_frame
+# ---------------------------------------------------------------------------
+
+
+def test_save_training_frame_creates_parquet_files(data_dir, tmp_path):
+    """save_training_frame writes X_train.parquet and y_train.parquet."""
+    X, y = build_training_frame(data_dir)
+    out_dir = tmp_path / "processed"
+    save_training_frame(X, y, out_dir)
+
+    assert (out_dir / "X_train.parquet").exists()
+    assert (out_dir / "y_train.parquet").exists()
+
+
+def test_save_training_frame_roundtrip(data_dir, tmp_path):
+    """Data survives a parquet write-read round-trip."""
+    X, y = build_training_frame(data_dir)
+    out_dir = tmp_path / "processed"
+    save_training_frame(X, y, out_dir)
+
+    X_loaded = pd.read_parquet(out_dir / "X_train.parquet")
+    y_loaded = pd.read_parquet(out_dir / "y_train.parquet")["TARGET"]
+
+    pd.testing.assert_frame_equal(X, X_loaded)
+    pd.testing.assert_series_equal(y, y_loaded)
