@@ -12,7 +12,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from credit_engine.features import build_features, engineer_application_features
+from credit_engine.features import (
+    build_features,
+    compute_woe_iv,
+    engineer_application_features,
+    select_features_by_iv,
+)
 
 
 @pytest.fixture
@@ -226,6 +231,165 @@ def test_no_nan_in_ratio_columns(application_fixture):
         assert not result[col].isna().any(), (
             f"{col} must not contain NaN — should be filled with -999 sentinel"
         )
+
+
+# ---------------------------------------------------------------------------
+# Task 2.2 — compute_woe_iv() and select_features_by_iv() tests (TDD: RED)
+# ---------------------------------------------------------------------------
+
+
+def test_compute_woe_iv_returns_correct_shape():
+    """compute_woe_iv returns (DataFrame, float) with the five required columns."""
+    rng = np.random.default_rng(42)
+    n = 200
+    df = pd.DataFrame({"score": rng.uniform(0, 1, n)})
+    target = pd.Series(rng.binomial(1, 0.3, n))
+
+    tbl, total_iv = compute_woe_iv(df, "score", target, bins=5)
+
+    assert isinstance(tbl, pd.DataFrame)
+    assert isinstance(total_iv, float)
+    expected_cols = {"bin_range", "event_count", "non_event_count", "woe", "iv_contrib"}
+    assert set(tbl.columns) == expected_cols
+    # bins=5 with duplicates='drop' may produce fewer rows; at least 1.
+    assert 1 <= len(tbl) <= 5
+
+
+def test_compute_woe_iv_handles_zero_event_bins():
+    """
+    When a bin has zero events WoE must be clipped to +5 (no defaults = safe).
+    When a bin has zero non-events WoE must be clipped to -5 (all defaults = risky).
+    No inf or NaN must appear in the binning table.
+    """
+    # Rows 0-9 are all defaults; rows 10-99 are all non-defaults.
+    # With bins=10 each quantile bin holds exactly 10 rows, so:
+    #   bin 0 → 10 events, 0 non-events → WoE = -5
+    #   bins 1-9 → 0 events, 10 non-events → WoE = +5
+    feature = np.arange(100, dtype=float)
+    target = pd.Series([1] * 10 + [0] * 90)
+    df = pd.DataFrame({"feature": feature})
+
+    tbl, _ = compute_woe_iv(df, "feature", target, bins=10)
+
+    assert np.isfinite(tbl["woe"]).all(), "WoE column must contain only finite values"
+
+    zero_ne = tbl[tbl["non_event_count"] == 0]
+    assert len(zero_ne) > 0, "Expected at least one bin with zero non-events"
+    assert all(v == -5.0 for v in zero_ne["woe"]), "Zero-non-event bin must have WoE == -5"
+
+    zero_e = tbl[tbl["event_count"] == 0]
+    assert len(zero_e) > 0, "Expected at least one bin with zero events"
+    assert all(v == 5.0 for v in zero_e["woe"]), "Zero-event bin must have WoE == +5"
+
+
+def test_compute_woe_iv_finite():
+    """All WoE values must be finite, IV non-negative, and IV equals sum of contributions."""
+    rng = np.random.default_rng(42)
+    n = 1000
+    df = pd.DataFrame({"value": rng.uniform(0, 100, n)})
+    target = pd.Series(rng.binomial(1, 0.2, n))
+
+    tbl, total_iv = compute_woe_iv(df, "value", target, bins=10)
+
+    assert np.isfinite(tbl["woe"]).all(), "All WoE values must be finite"
+    assert total_iv >= 0, "Total IV must be non-negative"
+    assert total_iv == pytest.approx(tbl["iv_contrib"].sum(), abs=1e-9)
+
+
+def test_select_features_by_iv_returns_sorted_dict():
+    """select_features_by_iv returns a dict with str keys, float values, sorted descending."""
+    rng = np.random.default_rng(42)
+    n = 500
+    score = rng.uniform(0, 1, n)
+    df = pd.DataFrame({
+        "score": score,
+        "noise": rng.uniform(0, 1, n),
+    })
+    target = pd.Series((score < 0.3).astype(int))
+
+    iv_dict = select_features_by_iv(df, target, min_iv=0.0, bins=5)
+
+    assert isinstance(iv_dict, dict)
+    assert all(isinstance(k, str) for k in iv_dict)
+    assert all(isinstance(v, float) for v in iv_dict.values())
+    values = list(iv_dict.values())
+    assert values == sorted(values, reverse=True), "IV dict must be sorted descending by IV"
+
+
+def test_select_features_by_iv_skips_non_numeric():
+    """Non-numeric (object) columns must be silently excluded from IV computation."""
+    rng = np.random.default_rng(0)
+    n = 200
+    df = pd.DataFrame({
+        "numeric_a": rng.uniform(0, 1, n),
+        "numeric_b": rng.exponential(10, n),
+        "category": ["A", "B"] * 100,
+        "flag": ["yes", "no"] * 100,
+    })
+    target = pd.Series(rng.binomial(1, 0.2, n))
+
+    iv_dict = select_features_by_iv(df, target, min_iv=0.0)
+
+    assert "category" not in iv_dict
+    assert "flag" not in iv_dict
+    assert set(iv_dict.keys()) == {"numeric_a", "numeric_b"}
+
+
+def test_select_features_by_iv_min_iv_threshold():
+    """Only features with IV >= min_iv appear in the output; all returned IVs satisfy the threshold."""
+    rng = np.random.default_rng(42)
+    n = 1000
+    df = pd.DataFrame({
+        "a": rng.uniform(0, 1, n),
+        "b": rng.uniform(0, 1, n),
+        "c": rng.uniform(0, 1, n),
+    })
+    target = pd.Series(rng.binomial(1, 0.15, n))
+
+    iv_all = select_features_by_iv(df, target, min_iv=0.0, bins=5)
+    threshold = max(iv_all.values()) * 0.5
+
+    iv_filtered = select_features_by_iv(df, target, min_iv=threshold, bins=5)
+
+    for col, iv_val in iv_filtered.items():
+        assert iv_val >= threshold, f"{col}: IV {iv_val:.6f} is below threshold {threshold:.6f}"
+    assert len(iv_filtered) <= len(iv_all)
+
+
+def test_compute_woe_iv_sentinel_creates_separate_bin():
+    """
+    Option B: -999 sentinel values form a dedicated '-999 (missing)' bin,
+    keeping them separate from the true low-value quantile bins.
+    """
+    rng = np.random.default_rng(42)
+    n = 200
+    raw = np.where(rng.random(n) < 0.2, -999.0, rng.uniform(0, 1, n))
+    df = pd.DataFrame({"feature": raw})
+    target = pd.Series(rng.binomial(1, 0.3, n))
+
+    tbl, _ = compute_woe_iv(df, "feature", target, bins=5)
+
+    assert "-999 (missing)" in tbl["bin_range"].values, (
+        "Sentinel -999 values must produce a dedicated '-999 (missing)' bin"
+    )
+    non_sentinel_bins = tbl[tbl["bin_range"] != "-999 (missing)"]
+    assert len(non_sentinel_bins) >= 1, "At least one non-sentinel quantile bin must exist"
+
+
+def test_compute_woe_iv_does_not_mutate_input():
+    """compute_woe_iv must not mutate the input DataFrame or the target Series."""
+    rng = np.random.default_rng(42)
+    n = 100
+    df = pd.DataFrame({"feature": rng.uniform(0, 1, n)})
+    target = pd.Series(rng.binomial(1, 0.2, n))
+
+    df_copy = df.copy()
+    target_copy = target.copy()
+
+    compute_woe_iv(df, "feature", target, bins=5)
+
+    pd.testing.assert_frame_equal(df, df_copy)
+    pd.testing.assert_series_equal(target, target_copy)
 
 
 def test_engineer_application_features_does_not_mutate_input(application_fixture):
