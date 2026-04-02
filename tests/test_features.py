@@ -13,6 +13,8 @@ import pandas as pd
 import pytest
 
 from credit_engine.features import (
+    apply_feature_store,
+    build_feature_store,
     build_features,
     compute_woe_iv,
     engineer_application_features,
@@ -406,3 +408,224 @@ def test_engineer_application_features_does_not_mutate_input(application_fixture
         "Input DataFrame columns were mutated"
     )
     pd.testing.assert_frame_equal(application_fixture, original_values)
+
+
+# ---------------------------------------------------------------------------
+# Task 2.3 — build_feature_store() and apply_feature_store() tests (TDD: RED)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def feature_store_data() -> tuple[pd.DataFrame, pd.Series]:
+    """
+    Synthetic training data with enough rows (500) and variance to exercise
+    IV filtering, WoE binning, and variance filtering realistically.
+
+    Columns:
+      - high_iv_feature: strongly correlated with target (high IV)
+      - medium_iv_feature: moderately correlated with target
+      - noise_feature: random noise (low IV, likely filtered out)
+      - constant_feature: zero variance (must be dropped)
+    """
+    rng = np.random.default_rng(42)
+    n = 500
+    high_iv = rng.uniform(0, 1, n)
+    target = pd.Series((high_iv < 0.25).astype(int))  # 25% event rate
+
+    df = pd.DataFrame({
+        "high_iv_feature": high_iv,
+        "medium_iv_feature": rng.uniform(0, 1, n) * 0.5 + high_iv * 0.5,
+        "noise_feature": rng.uniform(0, 1, n),
+        "constant_feature": np.ones(n),
+    })
+    return df, target
+
+
+def test_build_feature_store_reduces_features(feature_store_data):
+    """
+    Final feature count must be less than the raw input count.
+    IV filter removes low-IV features; variance filter removes constant ones.
+    """
+    X, y = feature_store_data
+    X_out, woe_map = build_feature_store(X, y)
+
+    assert X_out.shape[1] < X.shape[1], (
+        f"Expected fewer features after filtering: got {X_out.shape[1]}, raw was {X.shape[1]}"
+    )
+
+
+def test_build_feature_store_no_nan_in_output(feature_store_data):
+    """No NaN values must appear in the final WoE-transformed feature matrix."""
+    X, y = feature_store_data
+    X_out, _ = build_feature_store(X, y)
+
+    assert not X_out.isna().any().any(), (
+        "X_features must not contain NaN after WoE transformation and sentinel filling"
+    )
+
+
+def test_build_feature_store_woe_mappings_structure(feature_store_data):
+    """
+    woe_mappings must be a dict of dicts, each containing 'bin_edges' (list)
+    and 'bin_woe_values' (dict mapping bin label string -> float).
+    """
+    X, y = feature_store_data
+    _, woe_map = build_feature_store(X, y)
+
+    assert isinstance(woe_map, dict), "woe_mappings must be a dict"
+    assert len(woe_map) > 0, "woe_mappings must not be empty"
+
+    for feature, entry in woe_map.items():
+        assert isinstance(entry, dict), f"woe_mappings[{feature!r}] must be a dict"
+        assert "bin_edges" in entry, f"woe_mappings[{feature!r}] missing 'bin_edges'"
+        assert "bin_woe_values" in entry, f"woe_mappings[{feature!r}] missing 'bin_woe_values'"
+        assert isinstance(entry["bin_edges"], list), f"bin_edges for {feature!r} must be a list"
+        assert isinstance(entry["bin_woe_values"], dict), f"bin_woe_values for {feature!r} must be a dict"
+        assert all(isinstance(v, float) for v in entry["bin_woe_values"].values()), (
+            f"All WoE values for {feature!r} must be floats"
+        )
+
+
+def test_build_feature_store_woe_mappings_keys_match_columns(feature_store_data):
+    """woe_mappings keys must exactly match X_features column names."""
+    X, y = feature_store_data
+    X_out, woe_map = build_feature_store(X, y)
+
+    assert set(woe_map.keys()) == set(X_out.columns), (
+        f"woe_mappings keys {set(woe_map.keys())} != X_features columns {set(X_out.columns)}"
+    )
+
+
+def test_build_feature_store_constant_feature_dropped(feature_store_data):
+    """Constant columns (variance == 0) must be absent from X_features and woe_mappings."""
+    X, y = feature_store_data
+    X_out, woe_map = build_feature_store(X, y)
+
+    assert "constant_feature" not in X_out.columns, (
+        "constant_feature has zero variance and must be dropped"
+    )
+    assert "constant_feature" not in woe_map, (
+        "constant_feature must not appear in woe_mappings"
+    )
+
+
+def test_build_feature_store_pickle_round_trip(feature_store_data, tmp_path):
+    """Pickle save and load must preserve all woe_mappings entries exactly."""
+    import pickle
+
+    X, y = feature_store_data
+    _, woe_map = build_feature_store(X, y)
+
+    pkl_path = tmp_path / "woe_mappings.pkl"
+    with open(pkl_path, "wb") as f:
+        pickle.dump(woe_map, f)
+    with open(pkl_path, "rb") as f:
+        loaded = pickle.load(f)
+
+    assert set(loaded.keys()) == set(woe_map.keys()), "Pickle must preserve all feature keys"
+    for feature in woe_map:
+        assert loaded[feature]["bin_edges"] == woe_map[feature]["bin_edges"], (
+            f"bin_edges for {feature!r} changed after pickle round-trip"
+        )
+        assert loaded[feature]["bin_woe_values"] == woe_map[feature]["bin_woe_values"], (
+            f"bin_woe_values for {feature!r} changed after pickle round-trip"
+        )
+
+
+def test_apply_feature_store_transforms_correctly(feature_store_data):
+    """
+    Re-applying woe_mappings to the training data must produce only valid WoE
+    values (finite floats or the -999 sentinel), with no NaN.
+    """
+    X, y = feature_store_data
+    X_train_out, woe_map = build_feature_store(X, y)
+
+    # Use a fresh copy of X (same data) to simulate inference
+    X_infer = X[list(woe_map.keys())].copy()
+    X_applied = apply_feature_store(X_infer, woe_map)
+
+    assert not X_applied.isna().any().any(), "apply_feature_store must not produce NaN"
+    assert set(X_applied.columns) == set(woe_map.keys()), (
+        "apply_feature_store must return exactly the columns in woe_mappings"
+    )
+
+
+def test_apply_feature_store_handles_ood_values(feature_store_data):
+    """
+    Values outside training bin edges are out-of-distribution (OOD).
+    apply_feature_store must fill them with _NAN_SENTINEL (-999), not leave NaN.
+    """
+    X, y = feature_store_data
+    _, woe_map = build_feature_store(X, y)
+
+    # Build a DataFrame with deliberately extreme values (outside any training range)
+    ood_X = pd.DataFrame(
+        {feat: [1e9, -1e9] for feat in woe_map.keys()}
+    )
+    X_out = apply_feature_store(ood_X, woe_map)
+
+    assert not X_out.isna().any().any(), (
+        "OOD values must be filled with -999 sentinel, not left as NaN"
+    )
+
+
+def test_apply_feature_store_does_not_mutate_input(feature_store_data):
+    """apply_feature_store must return a new DataFrame without mutating the input."""
+    X, y = feature_store_data
+    _, woe_map = build_feature_store(X, y)
+
+    X_infer = X[list(woe_map.keys())].copy()
+    original_values = X_infer.copy()
+
+    apply_feature_store(X_infer, woe_map)
+
+    pd.testing.assert_frame_equal(X_infer, original_values, check_like=True)
+
+
+# ---------------------------------------------------------------------------
+# Task 2.4 — Additional edge case and inference-path tests
+# ---------------------------------------------------------------------------
+
+
+def test_engineer_application_features_no_nulls(application_fixture):
+    """All 11 engineered columns must contain zero NaN values."""
+    result = engineer_application_features(application_fixture)
+    nulls = {col: result[col].isna().sum() for col in EXPECTED_COLUMNS if result[col].isna().any()}
+    assert nulls == {}, f"NaN found in engineered columns: {nulls}"
+
+
+def test_credit_income_ratio_correct(application_fixture):
+    row = application_fixture.iloc[[0]].assign(
+        AMT_CREDIT=500_000,
+        AMT_INCOME_TOTAL=100_000,
+    )
+    result = engineer_application_features(row)
+    assert result["CREDIT_INCOME_RATIO"].iloc[0] == pytest.approx(5.0)
+
+
+def test_apply_feature_store_matches_train(feature_store_data):
+    """
+    apply_feature_store (inference path) must return the same columns as training
+    and produce no NaN values — even on a separate held-out set.
+
+    This test is more critical than testing build_feature_store because
+    apply_feature_store runs at prediction time on every incoming request.
+    build_feature_store runs once during training in a controlled environment;
+    apply_feature_store must be rock-solid against OOD values, missing ranges,
+    and unseen bin edges — any silent NaN here breaks the downstream model.
+    """
+    X, y = feature_store_data
+    X_train_out, woe_map = build_feature_store(X, y)
+
+    rng = np.random.default_rng(99)
+    X_test = pd.DataFrame(
+        {col: rng.uniform(0, 1, 50) for col in woe_map.keys()}
+    )
+    X_test_out = apply_feature_store(X_test, woe_map)
+
+    assert set(X_test_out.columns) == set(X_train_out.columns), (
+        "apply_feature_store must return exactly the training columns"
+    )
+    assert not X_test_out.isna().any().any(), (
+        "apply_feature_store must not produce NaN on held-out data"
+    )
