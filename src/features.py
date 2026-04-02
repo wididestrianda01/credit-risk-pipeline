@@ -12,7 +12,9 @@ Convention
 - Boolean flags use the suffix `_flag`.
 """
 
+import pickle
 import warnings
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -250,7 +252,11 @@ def engineer_application_features(df: pd.DataFrame) -> pd.DataFrame:
     result = _engineer_demographics(result)
     result = _engineer_documents(result)
     result = _engineer_ext_source(result)
-    return result
+
+    # Drop raw source columns that are fully superseded by engineered equivalents.
+    # DAYS_BIRTH → AGE_YEARS (r = 1.0 by construction; keeping both is pure redundancy).
+    cols_to_drop = [c for c in ["DAYS_BIRTH"] if c in result.columns]
+    return result.drop(columns=cols_to_drop)
 
 
 def build_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -471,6 +477,331 @@ def compute_woe_iv(
     if result is None:
         return _EMPTY, 0.0
     return result
+
+
+# ---------------------------------------------------------------------------
+# Private helpers — feature store (WoE mapping extraction + transformation)
+# ---------------------------------------------------------------------------
+
+
+def _compute_woe_mapping_dict(
+    series: pd.Series,
+    binning_table: pd.DataFrame,
+    bins: int,
+) -> dict:
+    """
+    Build the WoE mapping entry for one feature.
+
+    Returns a dict with two keys:
+
+    ``bin_edges``
+        Sorted list of float cut-points (including left/right extremes) that
+        can be passed to ``pd.cut(..., bins=bin_edges)`` at inference time.
+        The sentinel bin ``'-999 (missing)'`` is handled separately and is
+        never included in ``bin_edges``.
+
+    ``bin_woe_values``
+        Dict mapping bin-label string (as produced by ``pd.cut``) → WoE float.
+        Also includes the ``'-999 (missing)'`` key when sentinel rows are present.
+
+    Parameters
+    ----------
+    series : pd.Series
+        Non-sentinel values of the feature (sentinel rows already excluded).
+    binning_table : pd.DataFrame
+        Output of ``_compute_binning_table``: columns
+        ``[bin_range, event_count, non_event_count, woe, iv_contrib]``.
+    bins : int
+        Number of quantile buckets used during training.
+    """
+    sentinel_label = f"{int(_NAN_SENTINEL)} (missing)"
+
+    # Separate sentinel row from quantile rows
+    tbl_q = binning_table[binning_table["bin_range"] != sentinel_label].copy()
+    tbl_s = binning_table[binning_table["bin_range"] == sentinel_label].copy()
+
+    bin_woe_values: dict[str, float] = {}
+
+    # Build float bin edges from the non-sentinel portion of the series.
+    # pd.qcut on the same data reproduces the identical Interval categories.
+    bin_edges: list[float] = []
+    if len(tbl_q) > 0 and series.nunique() > 1:
+        try:
+            _, edge_bins = pd.qcut(series, q=bins, duplicates="drop", retbins=True)
+            # Extend edges slightly so pd.cut at inference includes boundary values.
+            edge_bins[0] = edge_bins[0] - 1e-9
+            bin_edges = [float(e) for e in edge_bins]
+
+            # Map interval label strings to WoE values
+            for _, row in tbl_q.iterrows():
+                bin_woe_values[row["bin_range"]] = float(row["woe"])
+        except ValueError:
+            pass  # degenerate feature — no quantile bins possible
+
+    # Add sentinel mapping
+    if len(tbl_s) > 0:
+        bin_woe_values[sentinel_label] = float(tbl_s.iloc[0]["woe"])
+
+    return {"bin_edges": bin_edges, "bin_woe_values": bin_woe_values}
+
+
+def _bin_feature_and_compute_woe(
+    series: pd.Series,
+    target: pd.Series,
+    bins: int = 10,
+) -> tuple[dict, pd.Series]:
+    """
+    Bin one feature, compute its WoE mapping, and return the transformed series.
+
+    Parameters
+    ----------
+    series : pd.Series
+        Raw feature values (may contain ``_NAN_SENTINEL`` or actual NaN).
+    target : pd.Series
+        Binary response aligned with ``series``.
+    bins : int, optional
+        Number of quantile buckets (default 10).
+
+    Returns
+    -------
+    woe_entry : dict
+        ``{"bin_edges": [...], "bin_woe_values": {...}}`` — the mapping to
+        store in ``woe_mappings`` for later use by ``apply_feature_store``.
+        Empty dict when the feature carries no information.
+    woe_series : pd.Series
+        Feature values replaced by their per-bin WoE scores.
+        Unresolved values (all-missing, constant) are filled with
+        ``_NAN_SENTINEL``.
+    """
+    series_filled = series.fillna(_NAN_SENTINEL).reset_index(drop=True)
+    aligned_target = target.reset_index(drop=True)
+
+    result = _compute_binning_table(series_filled, aligned_target, bins)
+    if result is None:
+        return {}, pd.Series(_NAN_SENTINEL, index=series.index, dtype=float)
+
+    binning_table, _ = result
+    sentinel_label = f"{int(_NAN_SENTINEL)} (missing)"
+    sentinel_mask = series_filled == _NAN_SENTINEL
+
+    # Non-sentinel values used for edge extraction
+    non_s = series_filled[~sentinel_mask]
+
+    woe_entry = _compute_woe_mapping_dict(non_s, binning_table, bins)
+
+    # Apply WoE transform to produce the output series
+    woe_series = pd.Series(_NAN_SENTINEL, index=series.index, dtype=float)
+
+    if woe_entry["bin_edges"]:
+        binned = pd.cut(
+            series_filled,
+            bins=woe_entry["bin_edges"],
+            include_lowest=True,
+        )
+        label_to_woe = {
+            label: woe
+            for label, woe in woe_entry["bin_woe_values"].items()
+            if label != sentinel_label
+        }
+        # Map Interval objects → float WoE values.
+        # Cast to float explicitly before fillna — pd.cut returns a Categorical
+        # and fillna on a Categorical requires the fill value to be a known
+        # category, which _NAN_SENTINEL (-999) is not.
+        mapped = binned.map(lambda iv: label_to_woe.get(str(iv), np.nan))
+        woe_series = pd.Series(mapped.to_numpy(dtype=float), index=series.index).fillna(_NAN_SENTINEL)
+        woe_series.index = series.index
+
+    # Apply sentinel WoE (if a sentinel bin exists)
+    if sentinel_label in woe_entry["bin_woe_values"] and sentinel_mask.any():
+        woe_series[sentinel_mask.values] = woe_entry["bin_woe_values"][sentinel_label]
+
+    return woe_entry, woe_series
+
+
+# ---------------------------------------------------------------------------
+# Public API — feature store
+# ---------------------------------------------------------------------------
+
+
+def build_feature_store(
+    X: pd.DataFrame,
+    y: pd.Series,
+    min_iv: float = _IV_WEAK,
+    bins: int = 10,
+) -> tuple[pd.DataFrame, dict]:
+    """
+    Build the final feature store: engineer features, apply IV filter, WoE
+    transform, and variance filter.  Saves artifacts to disk.
+
+    This function is the training-time entry point.  All bin edges are fit
+    exclusively on the training data passed here; they are stored in
+    ``woe_mappings`` so that ``apply_feature_store`` can apply the exact same
+    transformation at inference without re-fitting.
+
+    Parameters
+    ----------
+    X : pd.DataFrame
+        Raw application DataFrame (joined 7-table frame from ``load_data``).
+    y : pd.Series
+        Binary target (1 = default, 0 = non-default), aligned with ``X``.
+    min_iv : float, optional
+        Minimum Information Value threshold for feature selection (default 0.02).
+    bins : int, optional
+        Number of quantile bins per feature (default 10).
+
+    Returns
+    -------
+    X_final : pd.DataFrame
+        WoE-transformed feature matrix after IV and variance filtering.
+        Contains no NaN values (sentinel -999 used for missing/OOD).
+    woe_mappings : dict
+        ``{feature_name: {"bin_edges": [...], "bin_woe_values": {...}}}``
+        Serialised to ``models/woe_mappings.pkl``.
+
+    Notes
+    -----
+    The 3-line reduction summary printed to stdout is intentional
+    user-facing output (consistent with ``select_features_by_iv``).
+
+    **Data leakage prevention:** ``woe_mappings`` contains only bin edges
+    derived from training data.  Never call ``pd.qcut`` on test data.
+    """
+    X_eng = engineer_application_features(X) if "AMT_CREDIT" in X.columns else X.copy()
+    print(f"Raw features: {X_eng.shape[1]}")
+
+    iv_features = select_features_by_iv(X_eng, y, min_iv=min_iv, bins=bins)
+    X_iv = X_eng[list(iv_features.keys())].copy()
+    print(f"After IV filter (IV >= {min_iv}): {X_iv.shape[1]}")
+
+    # WoE transform each IV-selected feature
+    woe_mappings: dict = {}
+    transformed_cols: dict[str, pd.Series] = {}
+    for feature in X_iv.columns:
+        woe_entry, woe_series = _bin_feature_and_compute_woe(X_iv[feature], y, bins)
+        if woe_entry:  # skip degenerate features (no bin edges)
+            woe_mappings[feature] = woe_entry
+            transformed_cols[feature] = woe_series
+
+    X_woe = pd.DataFrame(transformed_cols, index=X_iv.index)
+
+    # Variance filter: drop constant columns then bottom 5% by variance
+    variances = X_woe.var()
+    positive_var = variances[variances > 0]
+    if len(positive_var) == 0:
+        X_final = pd.DataFrame(index=X_woe.index)
+    else:
+        var_threshold = positive_var.quantile(0.05)
+        keep_cols = positive_var[positive_var >= var_threshold].index
+        X_final = X_woe[keep_cols].copy()
+
+    # Sync woe_mappings to only the columns that survived variance filtering
+    woe_mappings = {k: v for k, v in woe_mappings.items() if k in X_final.columns}
+    print(f"After variance filter: {X_final.shape[1]}")
+
+    # Correlation deduplication: for pairs with |r| > 0.95, drop the lower-IV feature.
+    # This removes near-redundant building measurement variants (_AVG/_MEDI/_MODE)
+    # that pass the IV filter individually but carry overlapping information.
+    _CORR_THRESHOLD: float = 0.90
+    if X_final.shape[1] > 1:
+        corr_matrix = X_final.corr().abs()
+        upper_tri = corr_matrix.where(
+            np.triu(np.ones(corr_matrix.shape, dtype=bool), k=1)
+        )
+        cols_to_drop: set[str] = set()
+        # Sort pairs by correlation descending so highest-redundancy is handled first
+        high_pairs = (
+            upper_tri.stack()
+            .loc[lambda s: s > _CORR_THRESHOLD]
+            .sort_values(ascending=False)
+        )
+        iv_lookup = iv_features  # dict {feature: iv} from select_features_by_iv
+        for (col_a, col_b), _ in high_pairs.items():
+            if col_a in cols_to_drop or col_b in cols_to_drop:
+                continue
+            # Keep the feature with higher IV; drop the other
+            iv_a = iv_lookup.get(col_a, 0.0)
+            iv_b = iv_lookup.get(col_b, 0.0)
+            cols_to_drop.add(col_b if iv_a >= iv_b else col_a)
+        if cols_to_drop:
+            X_final = X_final.drop(columns=list(cols_to_drop))
+            woe_mappings = {k: v for k, v in woe_mappings.items() if k not in cols_to_drop}
+            print(f"After correlation dedup (|r| > {_CORR_THRESHOLD}): {X_final.shape[1]}")
+
+    # Persist artifacts
+    Path("data/processed").mkdir(parents=True, exist_ok=True)
+    Path("models").mkdir(parents=True, exist_ok=True)
+    X_final.to_parquet("data/processed/X_features.parquet", index=False)
+    with open("models/woe_mappings.pkl", "wb") as fh:
+        pickle.dump(woe_mappings, fh)
+
+    return X_final, woe_mappings
+
+
+def apply_feature_store(
+    X: pd.DataFrame,
+    woe_mappings: dict,
+) -> pd.DataFrame:
+    """
+    Apply stored WoE mappings to transform inference data.
+
+    Uses the bin edges and WoE values computed during training — never
+    re-fits on the incoming data.  Values outside training bin edges are
+    out-of-distribution and are filled with ``_NAN_SENTINEL`` (-999).
+
+    Parameters
+    ----------
+    X : pd.DataFrame
+        Raw or partially-processed inference DataFrame.  Must contain all
+        columns present in ``woe_mappings``.
+    woe_mappings : dict
+        ``{feature_name: {"bin_edges": [...], "bin_woe_values": {...}}}``
+        as produced by ``build_feature_store`` or loaded from
+        ``models/woe_mappings.pkl``.
+
+    Returns
+    -------
+    pd.DataFrame
+        Transformed DataFrame with exactly the columns in ``woe_mappings``,
+        all values replaced by their WoE scores.  No NaN values remain.
+
+    Notes
+    -----
+    **Data leakage prevention:** This function only calls ``pd.cut`` with
+    stored ``bin_edges``.  It never calls ``pd.qcut`` or any fitting
+    operation.
+    """
+    features = list(woe_mappings.keys())
+    X_out = X[features].copy()
+    sentinel_label = f"{int(_NAN_SENTINEL)} (missing)"
+
+    for feature, entry in woe_mappings.items():
+        series = X_out[feature].fillna(_NAN_SENTINEL)
+        sentinel_mask = series == _NAN_SENTINEL
+
+        result = pd.Series(_NAN_SENTINEL, index=X_out.index, dtype=float)
+
+        bin_edges = entry["bin_edges"]
+        bin_woe_values = entry["bin_woe_values"]
+
+        if bin_edges:
+            label_to_woe = {
+                label: woe
+                for label, woe in bin_woe_values.items()
+                if label != sentinel_label
+            }
+            binned = pd.cut(series, bins=bin_edges, include_lowest=True)
+            mapped = binned.map(lambda iv: label_to_woe.get(str(iv), np.nan))
+            result = pd.Series(mapped.to_numpy(dtype=float), index=X_out.index).fillna(_NAN_SENTINEL)
+            result.index = X_out.index
+
+        # Override sentinel positions with sentinel WoE (or -999 if no sentinel bin)
+        if sentinel_mask.any():
+            sentinel_woe = bin_woe_values.get(sentinel_label, _NAN_SENTINEL)
+            result[sentinel_mask] = sentinel_woe
+
+        X_out[feature] = result
+
+    return X_out
 
 
 def select_features_by_iv(
