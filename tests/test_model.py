@@ -21,7 +21,12 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from credit_engine.model import load_model, save_model, train_logistic_baseline
+from credit_engine.model import (
+    benchmark_imbalance_strategies,
+    load_model,
+    save_model,
+    train_logistic_baseline,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -197,3 +202,150 @@ def test_brier_skill_score_is_finite(trained_model):
     """BrierSkill is a finite float (not NaN — would indicate zero-variance prevalence)."""
     _, metrics, *_ = trained_model
     assert np.isfinite(metrics["BrierSkill"])
+
+
+# ---------------------------------------------------------------------------
+# benchmark_imbalance_strategies — Phase 1 TDD tests (RED before implementation)
+# ---------------------------------------------------------------------------
+
+_EXPECTED_STRATEGIES = ["SMOTE", "Cost-Sensitive", "Threshold-Tuned", "SMOTE+Cost-Sensitive"]
+_EXPECTED_COLUMNS = ["Strategy", "AUC-ROC", "Gini", "KS", "F1-Macro", "Precision", "Recall"]
+_METRIC_COLUMNS = ["AUC-ROC", "Gini", "KS", "F1-Macro", "Precision", "Recall"]
+
+
+@pytest.fixture
+def benchmark_splits(mock_data):
+    """
+    Extract (X_train, y_train, X_test, y_test) from the logistic baseline 6-tuple.
+
+    Reuses the identical train/test split so Task 3.3 compares on the same
+    hold-out set as the LR baseline (Gini 0.489).
+    """
+    X, y = mock_data
+    _, _, X_train, X_test, y_train, y_test = train_logistic_baseline(X, y)
+    return X_train, y_train, X_test, y_test
+
+
+@pytest.fixture
+def benchmark_result(benchmark_splits):
+    """Run benchmark once; reused across structural tests to avoid repeated training."""
+    X_train, y_train, X_test, y_test = benchmark_splits
+    return benchmark_imbalance_strategies(X_train, y_train, X_test, y_test)
+
+
+def test_benchmark_returns_dataframe(benchmark_result):
+    """benchmark_imbalance_strategies returns a pandas DataFrame."""
+    assert isinstance(benchmark_result, pd.DataFrame)
+
+
+def test_benchmark_has_correct_shape(benchmark_result):
+    """Result has exactly 4 rows (one per strategy) and 7 columns."""
+    assert benchmark_result.shape == (4, 7), (
+        f"Expected (4, 7), got {benchmark_result.shape}"
+    )
+
+
+def test_benchmark_column_names(benchmark_result):
+    """Result columns exactly match the expected metric names."""
+    assert list(benchmark_result.columns) == _EXPECTED_COLUMNS
+
+
+def test_benchmark_strategy_names(benchmark_result):
+    """Strategy column contains the four expected strategy names in order."""
+    assert list(benchmark_result["Strategy"]) == _EXPECTED_STRATEGIES
+
+
+def test_benchmark_metrics_in_valid_range(benchmark_result):
+    """All 6 metric columns are in [0, 1] — catch numerical errors early."""
+    for col in _METRIC_COLUMNS:
+        col_min = benchmark_result[col].min()
+        col_max = benchmark_result[col].max()
+        assert col_min >= 0.0, f"{col} has value below 0: {col_min:.4f}"
+        assert col_max <= 1.0, f"{col} has value above 1: {col_max:.4f}"
+
+
+def test_benchmark_no_nan_metrics(benchmark_result):
+    """No NaN in any metric column — NaN indicates a compute error (e.g., empty class)."""
+    assert not benchmark_result[_METRIC_COLUMNS].isnull().any().any(), (
+        f"NaN found in benchmark metrics:\n{benchmark_result}"
+    )
+
+
+def test_benchmark_gini_above_floor(benchmark_result):
+    """At least one strategy achieves Gini > 0.10 on separable mock data."""
+    assert benchmark_result["Gini"].max() > 0.10, (
+        "All strategies have near-zero Gini — model is failing to learn."
+    )
+
+
+def test_smote_strategy_no_leakage(benchmark_splits):
+    """SMOTE must never receive more rows than X_train.
+
+    Verifies by patching SMOTE.fit_resample and asserting the row count
+    seen is always ≤ len(X_train). If SMOTE were applied to the full
+    dataset (train+test), the call would arrive with > len(X_train) rows.
+    """
+    from unittest.mock import patch
+    from imblearn.over_sampling import SMOTE
+
+    X_train, y_train, X_test, y_test = benchmark_splits
+    seen_row_counts: list[int] = []
+    original_fit_resample = SMOTE.fit_resample
+
+    def tracking_fit_resample(self, X, y):
+        seen_row_counts.append(len(X))
+        return original_fit_resample(self, X, y)
+
+    with patch.object(SMOTE, "fit_resample", tracking_fit_resample):
+        benchmark_imbalance_strategies(X_train, y_train, X_test, y_test)
+
+    assert len(seen_row_counts) > 0, "SMOTE.fit_resample was never called (SMOTE not used)"
+    assert all(n <= len(X_train) for n in seen_row_counts), (
+        f"SMOTE received {max(seen_row_counts)} rows but X_train has {len(X_train)}. "
+        "Leakage: SMOTE was applied to validation or test data."
+    )
+
+
+def test_threshold_search_uses_cv_validation_only(benchmark_splits, monkeypatch):
+    """Threshold optimization is computed on CV validation folds, not test data.
+
+    Patches _find_optimal_threshold_f1_macro and records the size of every
+    call. Each call must receive a fold-sized slice (< len(X_train)),
+    confirming the function never sees the test set.
+    """
+    import credit_engine.model as model_module
+
+    X_train, y_train, X_test, y_test = benchmark_splits
+    call_sizes: list[int] = []
+    original_fn = model_module._find_optimal_threshold_f1_macro
+
+    def tracking_fn(y_true_val: np.ndarray, y_prob_val: np.ndarray) -> float:
+        call_sizes.append(len(y_true_val))
+        return original_fn(y_true_val, y_prob_val)
+
+    monkeypatch.setattr(model_module, "_find_optimal_threshold_f1_macro", tracking_fn)
+    benchmark_imbalance_strategies(X_train, y_train, X_test, y_test)
+
+    assert len(call_sizes) > 0, "_find_optimal_threshold_f1_macro was never called"
+    assert all(n < len(X_train) for n in call_sizes), (
+        f"Threshold search received {max(call_sizes)} rows — X_train has {len(X_train)}. "
+        "Threshold is being computed on full training set or test data."
+    )
+
+
+def test_benchmark_csv_saved(benchmark_splits, tmp_path, monkeypatch):
+    """benchmark_imbalance_strategies saves results to reports/imbalance_benchmark.csv."""
+    import credit_engine.model as model_module
+
+    # Redirect the save path to tmp_path so tests don't pollute the working tree
+    monkeypatch.setattr(model_module, "_BENCHMARK_REPORT_PATH", str(tmp_path / "imbalance_benchmark.csv"))
+
+    X_train, y_train, X_test, y_test = benchmark_splits
+    result = benchmark_imbalance_strategies(X_train, y_train, X_test, y_test)
+
+    csv_path = tmp_path / "imbalance_benchmark.csv"
+    assert csv_path.exists(), "imbalance_benchmark.csv was not created"
+
+    saved = pd.read_csv(csv_path)
+    assert saved.shape == result.shape
+    assert list(saved.columns) == list(result.columns)

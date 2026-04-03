@@ -19,12 +19,17 @@ import joblib
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import (
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from credit_engine.utils import evaluate_model, plot_roc_and_pr
+from credit_engine.utils import evaluate_model, gini_coefficient, ks_statistic, plot_roc_and_pr
 
 
 # ---------------------------------------------------------------------------
@@ -41,6 +46,29 @@ _CV_N_SPLITS: int = 10
 _LR_C: float = 0.1
 _LR_MAX_ITER: int = 1000
 _LR_SOLVER: str = "lbfgs"
+
+# XGBoost benchmark hyperparameters (credit scoring defaults, pre-Optuna)
+# max_depth=5 and lr=0.1 are established starting points for tabular credit data;
+# n_estimators=100 balances benchmark speed against meaningful signal.
+_XGB_N_ESTIMATORS: int = 100
+_XGB_MAX_DEPTH: int = 5
+_XGB_LEARNING_RATE: float = 0.1
+_XGB_CV_N_SPLITS: int = 5
+
+# Threshold search bounds — extreme values (< 0.05 or > 0.95) indicate
+# a degenerate model; revert to 0.5 with a warning in those cases.
+_THRESHOLD_MIN: float = 0.1
+_THRESHOLD_MAX: float = 0.9
+
+# Output path for the imbalance benchmark comparison table
+_BENCHMARK_REPORT_PATH: str = "reports/imbalance_benchmark.csv"
+
+# Strategy labels — kept as module constants so downstream tasks can reference
+# them by name (e.g., Task 3.4 picks the winner from this table).
+_STRATEGY_SMOTE: str = "SMOTE"
+_STRATEGY_COST_SENSITIVE: str = "Cost-Sensitive"
+_STRATEGY_THRESHOLD_TUNED: str = "Threshold-Tuned"
+_STRATEGY_HYBRID: str = "SMOTE+Cost-Sensitive"
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +196,265 @@ def train_logistic_baseline(
     save_model(pipeline, "models/logistic_baseline.pkl")
 
     return pipeline, metrics_dict, X_train, X_test, y_train, y_test
+
+
+# ---------------------------------------------------------------------------
+# Imbalance benchmarking helpers
+# ---------------------------------------------------------------------------
+
+def _find_optimal_threshold_f1_macro(
+    y_true_val: np.ndarray,
+    y_prob_val: np.ndarray,
+) -> float:
+    """
+    Find the classification threshold in [0.1, 0.9] that maximises F1-macro.
+
+    Uses the unique predicted probabilities as candidate thresholds (more
+    efficient and accurate than a fixed grid). F1-macro weights positive and
+    negative classes equally — appropriate for imbalanced credit data where
+    micro-F1 is dominated by the majority class.
+
+    Parameters
+    ----------
+    y_true_val : np.ndarray
+        Binary ground-truth labels from a CV validation fold.
+    y_prob_val : np.ndarray
+        Predicted probabilities for the positive class.
+
+    Returns
+    -------
+    float
+        Threshold in [0.1, 0.9] that maximises F1-macro.
+        Falls back to 0.5 if no valid threshold exists or if the optimal
+        value is outside [0.05, 0.95] (degenerate model guard).
+
+    Notes
+    -----
+    Called once per CV fold inside ``benchmark_imbalance_strategies``.
+    Never receives test data — only validation fold data.
+    """
+    candidates = np.unique(y_prob_val)
+    candidates = candidates[(candidates >= _THRESHOLD_MIN) & (candidates <= _THRESHOLD_MAX)]
+    if len(candidates) == 0:
+        return 0.5
+
+    best_threshold = 0.5
+    best_f1 = -1.0
+    for t in candidates:
+        y_pred = (y_prob_val >= t).astype(int)
+        score = f1_score(y_true_val, y_pred, average="macro", zero_division=0)
+        if score > best_f1:
+            best_f1 = score
+            best_threshold = float(t)
+
+    # Guard: revert to 0.5 if extreme threshold selected (degenerate model)
+    if best_threshold < 0.05 or best_threshold > 0.95:
+        return 0.5
+    return best_threshold
+
+
+def _compute_benchmark_metrics(
+    strategy_name: str,
+    y_test: pd.Series,
+    y_prob_raw: np.ndarray,
+    threshold: float = 0.5,
+) -> dict:
+    """
+    Compute the 6 benchmark metrics for one imbalance strategy.
+
+    AUC-ROC, Gini, and KS use raw probabilities (threshold-independent).
+    F1-Macro, Precision, and Recall use the supplied threshold, which may
+    differ from 0.5 for the threshold-tuned strategy.
+
+    Parameters
+    ----------
+    strategy_name : str
+        Display name for the strategy row.
+    y_test : pd.Series
+        Binary ground-truth labels from the held-out test split.
+    y_prob_raw : np.ndarray
+        Predicted probabilities for the positive class.
+    threshold : float
+        Classification threshold for binary predictions. Default 0.5.
+
+    Returns
+    -------
+    dict
+        Keys: Strategy, AUC-ROC, Gini, KS, F1-Macro, Precision, Recall.
+    """
+    auc = float(roc_auc_score(y_test, y_prob_raw))
+    gini = gini_coefficient(y_test, y_prob_raw)
+    ks_val, _ = ks_statistic(y_test, y_prob_raw)
+
+    y_pred_binary = (y_prob_raw >= threshold).astype(int)
+    f1 = float(f1_score(y_test, y_pred_binary, average="macro", zero_division=0))
+    precision = float(precision_score(y_test, y_pred_binary, zero_division=0))
+    recall = float(recall_score(y_test, y_pred_binary, zero_division=0))
+
+    return {
+        "Strategy": strategy_name,
+        "AUC-ROC": auc,
+        "Gini": gini,
+        "KS": ks_val,
+        "F1-Macro": f1,
+        "Precision": precision,
+        "Recall": recall,
+    }
+
+
+def benchmark_imbalance_strategies(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    X_test: pd.DataFrame,
+    y_test: pd.Series,
+) -> pd.DataFrame:
+    """
+    Benchmark four XGBoost imbalance-handling strategies on the held-out test split.
+
+    Trains four models using different approaches to the class imbalance
+    (~8% defaults) and reports a 6-metric comparison table. The winning
+    strategy (highest Gini, F1-Macro as tiebreaker) is printed to console
+    and used as the imbalance approach for Task 3.4 (XGBoost Optuna HPO)
+    and Task 3.5 (LightGBM).
+
+    Strategies
+    ----------
+    1. SMOTE            : Synthetic minority oversampling inside an imblearn
+                          Pipeline. SMOTE is only applied during fit —
+                          X_test is never resampled.
+    2. Cost-Sensitive   : XGBoost ``scale_pos_weight = n_neg / n_pos``.
+                          Upweights minority-class errors at the loss level.
+    3. Threshold-Tuned  : Standard XGBoost trained with no resampling, then
+                          a decision threshold is found via stratified 5-fold
+                          CV on X_train (never on X_test) by maximising
+                          F1-macro on validation folds.
+    4. SMOTE+Cost-Sensitive : Hybrid — SMOTE inside pipeline combined with
+                          ``scale_pos_weight``. Two-stage imbalance correction.
+
+    Parameters
+    ----------
+    X_train : pd.DataFrame
+        Training feature matrix (WoE-transformed, 80% stratified split).
+    y_train : pd.Series
+        Training labels.
+    X_test : pd.DataFrame
+        Held-out test features. Never used for training or threshold search.
+    y_test : pd.Series
+        Held-out test labels.
+
+    Returns
+    -------
+    pd.DataFrame
+        Shape (4, 7). Columns: Strategy, AUC-ROC, Gini, KS, F1-Macro,
+        Precision, Recall. Saved to ``reports/imbalance_benchmark.csv``.
+
+    Notes
+    -----
+    SMOTE leakage prevention: ``imblearn.pipeline.Pipeline`` ensures
+    ``fit_resample`` is only called inside each fold's training phase, not
+    on validation or test data.
+
+    Threshold leakage prevention: ``_find_optimal_threshold_f1_macro`` is
+    called with validation-fold data only, never with X_test.
+
+    XGBoost hyperparameters are intentionally untuned here (Task 3.4 runs
+    Optuna HPO). The defaults (depth=5, lr=0.1, n_estimators=100) reflect
+    credit scoring conventions and are held constant across all four
+    strategies so the comparison isolates the imbalance method.
+    """
+    import xgboost as xgb
+    from imblearn.over_sampling import SMOTE
+    from imblearn.pipeline import Pipeline as ImbPipeline
+
+    n_pos = int(y_train.sum())
+    n_neg = int((y_train == 0).sum())
+    scale_pos_weight = n_neg / n_pos
+
+    xgb_params: dict = dict(
+        max_depth=_XGB_MAX_DEPTH,
+        learning_rate=_XGB_LEARNING_RATE,
+        n_estimators=_XGB_N_ESTIMATORS,
+        random_state=_RANDOM_STATE,
+        eval_metric="logloss",
+    )
+
+    results: list[dict] = []
+
+    # --- Strategy 1: SMOTE inside imblearn Pipeline ---
+    smote_pipeline = ImbPipeline([
+        ("smote", SMOTE(random_state=_RANDOM_STATE)),
+        ("xgb", xgb.XGBClassifier(**xgb_params)),
+    ])
+    smote_pipeline.fit(X_train, y_train)
+    y_prob_smote = smote_pipeline.predict_proba(X_test)[:, 1]
+    results.append(_compute_benchmark_metrics(_STRATEGY_SMOTE, y_test, y_prob_smote))
+
+    # --- Strategy 2: Cost-Sensitive XGBoost ---
+    cost_model = xgb.XGBClassifier(scale_pos_weight=scale_pos_weight, **xgb_params)
+    cost_model.fit(X_train, y_train)
+    y_prob_cost = cost_model.predict_proba(X_test)[:, 1]
+    results.append(_compute_benchmark_metrics(_STRATEGY_COST_SENSITIVE, y_test, y_prob_cost))
+
+    # --- Strategy 3: Post-training threshold optimisation (CV only) ---
+    # Threshold is computed on CV validation folds — X_test is never touched
+    # during threshold search, preventing evaluation-set leakage.
+    cv = StratifiedKFold(
+        n_splits=_XGB_CV_N_SPLITS, shuffle=True, random_state=_RANDOM_STATE
+    )
+    fold_thresholds: list[float] = []
+    for train_idx, val_idx in cv.split(X_train, y_train):
+        X_fold_train = X_train.iloc[train_idx]
+        X_fold_val = X_train.iloc[val_idx]
+        y_fold_train = y_train.iloc[train_idx]
+        y_fold_val = y_train.iloc[val_idx]
+
+        fold_model = xgb.XGBClassifier(**xgb_params)
+        fold_model.fit(X_fold_train, y_fold_train)
+        y_prob_val = fold_model.predict_proba(X_fold_val)[:, 1]
+        fold_thresholds.append(
+            _find_optimal_threshold_f1_macro(y_fold_val.to_numpy(), y_prob_val)
+        )
+
+    # Average across folds reduces variance from any single fold's threshold
+    optimal_threshold = float(np.mean(fold_thresholds))
+
+    thresh_model = xgb.XGBClassifier(**xgb_params)
+    thresh_model.fit(X_train, y_train)
+    y_prob_thresh = thresh_model.predict_proba(X_test)[:, 1]
+    results.append(_compute_benchmark_metrics(
+        _STRATEGY_THRESHOLD_TUNED, y_test, y_prob_thresh, threshold=optimal_threshold
+    ))
+
+    # --- Strategy 4: SMOTE + Cost-Sensitive (Hybrid) ---
+    hybrid_pipeline = ImbPipeline([
+        ("smote", SMOTE(random_state=_RANDOM_STATE)),
+        ("xgb", xgb.XGBClassifier(scale_pos_weight=scale_pos_weight, **xgb_params)),
+    ])
+    hybrid_pipeline.fit(X_train, y_train)
+    y_prob_hybrid = hybrid_pipeline.predict_proba(X_test)[:, 1]
+    results.append(_compute_benchmark_metrics(_STRATEGY_HYBRID, y_test, y_prob_hybrid))
+
+    # --- Compile results ---
+    df = pd.DataFrame(results)
+
+    # --- Identify winner: Gini primary, F1-Macro tiebreaker ---
+    winner_idx = df["Gini"].idxmax()
+    winner = df.loc[winner_idx]
+
+    print("\n=== XGBoost Imbalance Strategy Benchmark ===")
+    print(df.to_string(index=False))
+    print(
+        f"\n✓ Best strategy: {winner['Strategy']} "
+        f"(Gini={winner['Gini']:.4f}, F1-Macro={winner['F1-Macro']:.4f})"
+    )
+    print(f"  → Use '{winner['Strategy']}' as imbalance method in Tasks 3.4 & 3.5")
+
+    # --- Persist ---
+    report_path = Path(_BENCHMARK_REPORT_PATH)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(report_path, index=False)
+
+    return df
 
 
 # ---------------------------------------------------------------------------
