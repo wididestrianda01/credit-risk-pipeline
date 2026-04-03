@@ -241,9 +241,6 @@ def evaluate_model(
         "AvgPrecision": avg_prec,
     }
 
-    import pandas as pd  # local import — pandas is available but not a module-level dep
-    print(pd.Series({k: v for k, v in result.items() if k != "Model"}, name=model_name).to_string())
-
     return result
 
 

@@ -60,6 +60,33 @@ _XGB_CV_N_SPLITS: int = 5
 _THRESHOLD_MIN: float = 0.1
 _THRESHOLD_MAX: float = 0.9
 
+# XGBoost Optuna HPO — search space bounds
+# Ranges reflect credit scoring literature: depth 3–8 prevents overfitting on
+# high-cardinality categorical WoE features; learning rate log-uniform so
+# Optuna explores slow (0.01) and fast (0.3) regimes equally.
+_XGB_OPTUNA_N_TRIALS: int = 50
+_XGB_N_ESTIMATORS_MIN: int = 100
+_XGB_N_ESTIMATORS_MAX: int = 1000
+_XGB_MAX_DEPTH_MIN: int = 3
+_XGB_MAX_DEPTH_MAX: int = 8
+_XGB_LEARNING_RATE_MIN: float = 0.01
+_XGB_LEARNING_RATE_MAX: float = 0.3
+_XGB_SUBSAMPLE_MIN: float = 0.6
+_XGB_SUBSAMPLE_MAX: float = 1.0
+_XGB_COLSAMPLE_BYTREE_MIN: float = 0.6
+_XGB_COLSAMPLE_BYTREE_MAX: float = 1.0
+_XGB_MIN_CHILD_WEIGHT_MIN: int = 1
+_XGB_MIN_CHILD_WEIGHT_MAX: int = 10
+_XGB_REG_ALPHA_MIN: float = 0.0
+_XGB_REG_ALPHA_MAX: float = 5.0
+_XGB_REG_LAMBDA_MIN: float = 1.0
+_XGB_REG_LAMBDA_MAX: float = 10.0
+
+# Output paths for XGBoost Optuna HPO artefacts
+_XGB_OPTUNA_MODEL_PATH: str = "models/xgboost_best.pkl"
+_XGB_OPTUNA_PARAMS_PATH: str = "models/xgboost_params.json"
+_XGB_OPTUNA_FIGURE_PATH: str = "reports/figures/xgboost_roc_pr.png"
+
 # Output path for the imbalance benchmark comparison table
 _BENCHMARK_REPORT_PATH: str = "reports/imbalance_benchmark.csv"
 
@@ -505,6 +532,218 @@ def load_model(path: str | Path) -> object:
     if not path.exists():
         raise FileNotFoundError(f"Model file not found: {path}")
     return joblib.load(path)
+
+
+# ---------------------------------------------------------------------------
+# XGBoost with Optuna hyperparameter optimisation
+# ---------------------------------------------------------------------------
+
+def _xgboost_optuna_objective(
+    trial: "optuna.Trial",
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    scale_pos_weight: float,
+    cv: StratifiedKFold,
+) -> float:
+    """
+    Optuna objective: 5-fold CV AUC-ROC for a suggested XGBoost configuration.
+
+    This function is called once per trial by ``study.optimize()``. It samples
+    hyperparameters, runs stratified k-fold CV on X_train, and returns the mean
+    out-of-fold AUC-ROC. X_test is never passed in — it lives only in the outer
+    ``train_xgboost_optuna`` scope and is withheld for final evaluation.
+
+    Parameters
+    ----------
+    trial : optuna.Trial
+        Current Optuna trial handle for hyperparameter suggestions.
+    X_train : pd.DataFrame
+        Training features (80% split). Never the held-out test set.
+    y_train : pd.Series
+        Training labels.
+    scale_pos_weight : float
+        Cost-sensitive weight = n_negatives / n_positives, from Task 3.3 winner.
+    cv : StratifiedKFold
+        5-fold CV splitter, seeded for reproducibility.
+
+    Returns
+    -------
+    float
+        Mean out-of-fold AUC-ROC across all CV folds.
+    """
+    import xgboost as xgb
+
+    params = {
+        "n_estimators": trial.suggest_int(
+            "n_estimators", _XGB_N_ESTIMATORS_MIN, _XGB_N_ESTIMATORS_MAX
+        ),
+        "max_depth": trial.suggest_int(
+            "max_depth", _XGB_MAX_DEPTH_MIN, _XGB_MAX_DEPTH_MAX
+        ),
+        "learning_rate": trial.suggest_float(
+            "learning_rate", _XGB_LEARNING_RATE_MIN, _XGB_LEARNING_RATE_MAX, log=True
+        ),
+        "subsample": trial.suggest_float(
+            "subsample", _XGB_SUBSAMPLE_MIN, _XGB_SUBSAMPLE_MAX
+        ),
+        "colsample_bytree": trial.suggest_float(
+            "colsample_bytree", _XGB_COLSAMPLE_BYTREE_MIN, _XGB_COLSAMPLE_BYTREE_MAX
+        ),
+        "min_child_weight": trial.suggest_int(
+            "min_child_weight", _XGB_MIN_CHILD_WEIGHT_MIN, _XGB_MIN_CHILD_WEIGHT_MAX
+        ),
+        "reg_alpha": trial.suggest_float(
+            "reg_alpha", _XGB_REG_ALPHA_MIN, _XGB_REG_ALPHA_MAX
+        ),
+        "reg_lambda": trial.suggest_float(
+            "reg_lambda", _XGB_REG_LAMBDA_MIN, _XGB_REG_LAMBDA_MAX
+        ),
+        "scale_pos_weight": scale_pos_weight,
+        "eval_metric": "auc",
+        "use_label_encoder": False,
+        "verbosity": 0,
+        "random_state": _RANDOM_STATE,
+    }
+
+    fold_aucs: list[float] = []
+    for train_idx, val_idx in cv.split(X_train, y_train):
+        X_fold_train = X_train.iloc[train_idx]
+        X_fold_val = X_train.iloc[val_idx]
+        y_fold_train = y_train.iloc[train_idx]
+        y_fold_val = y_train.iloc[val_idx]
+
+        model = xgb.XGBClassifier(**params)
+        model.fit(X_fold_train, y_fold_train)
+        y_prob_val = model.predict_proba(X_fold_val)[:, 1]
+        fold_aucs.append(float(roc_auc_score(y_fold_val, y_prob_val)))
+
+    return float(np.mean(fold_aucs))
+
+
+def train_xgboost_optuna(
+    X: pd.DataFrame,
+    y: pd.Series,
+    n_trials: int = _XGB_OPTUNA_N_TRIALS,
+) -> tuple[object, dict, pd.DataFrame, pd.Series, dict]:
+    """
+    Train XGBoost with Bayesian hyperparameter optimisation via Optuna.
+
+    Runs ``n_trials`` of TPE-based search over an 8-dimensional space,
+    selecting the configuration that maximises mean out-of-fold AUC-ROC
+    on the training split. The final model is retrained on the full
+    training split with the best parameters, then evaluated on the
+    held-out test split (never seen during optimisation).
+
+    Imbalance handling uses ``scale_pos_weight = n_neg / n_pos`` (Cost-Sensitive
+    strategy), the winner from the Task 3.3 benchmark (Gini=0.882, AUC=0.941).
+
+    Parameters
+    ----------
+    X : pd.DataFrame
+        WoE-transformed feature matrix (40 columns, produced by
+        ``credit_engine.features.apply_feature_store``).
+    y : pd.Series
+        Binary TARGET series (0 = repaid, 1 = defaulted).
+    n_trials : int, optional
+        Number of Optuna trials. Default 50 balances exploration depth
+        against compute budget for the 8-dimensional search space.
+
+    Returns
+    -------
+    xgb_model : XGBClassifier
+        Fitted XGBoost model with best hyperparameters, trained on X_train.
+    metrics_dict : dict
+        Evaluation metrics on X_test. Keys: Model, AUC-ROC, Gini, KS,
+        Brier, BrierSkill, AvgPrecision.
+    X_test : pd.DataFrame
+        Held-out test features (20% stratified split, seed=42).
+    y_test : pd.Series
+        Held-out test labels.
+    best_params : dict
+        Optimised hyperparameters (8 keys). Also persisted to
+        ``models/xgboost_params.json``.
+
+    Raises
+    ------
+    ValueError
+        If y has no positive or no negative samples (scale_pos_weight
+        would be inf or zero).
+
+    Notes
+    -----
+    Artefacts written to disk:
+    - ``models/xgboost_best.pkl`` — joblib-serialised XGBClassifier
+    - ``models/xgboost_params.json`` — best hyperparameters as JSON
+    - ``reports/figures/xgboost_roc_pr.png`` — ROC + PR curves
+    """
+    import json as _json
+
+    import optuna
+    import xgboost as xgb
+
+    # --- Input guards ---
+    n_pos = int(y.sum())
+    n_neg = int((y == 0).sum())
+    if n_pos == 0:
+        raise ValueError("y has no positive samples — cannot compute scale_pos_weight.")
+    if n_neg == 0:
+        raise ValueError("y has no negative samples — cannot compute scale_pos_weight.")
+
+    # --- Train / test split (stratified, identical seed to LR baseline) ---
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=_TEST_SIZE, stratify=y, random_state=_RANDOM_STATE
+    )
+
+    # Cost-sensitive weight: Task 3.3 winner strategy
+    scale_pos_weight = float((y_train == 0).sum()) / float((y_train == 1).sum())
+
+    # --- Optuna study ---
+    # Suppress INFO/DEBUG trial logs — keeps library stdout clean.
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+    cv = StratifiedKFold(
+        n_splits=_XGB_CV_N_SPLITS, shuffle=True, random_state=_RANDOM_STATE
+    )
+
+    def objective(trial: optuna.Trial) -> float:
+        return _xgboost_optuna_objective(
+            trial, X_train, y_train, scale_pos_weight, cv
+        )
+
+    study = optuna.create_study(direction="maximize")
+    study.optimize(objective, n_trials=n_trials)
+
+    best_params: dict = study.best_params
+
+    # --- Final model: retrain on full X_train with best params ---
+    final_model = xgb.XGBClassifier(
+        **best_params,
+        scale_pos_weight=scale_pos_weight,
+        eval_metric="auc",
+        use_label_encoder=False,
+        verbosity=0,
+        random_state=_RANDOM_STATE,
+    )
+    final_model.fit(X_train, y_train)
+
+    # --- Evaluate on held-out test set ---
+    metrics_dict = evaluate_model(final_model, X_test, y_test, "XGBoost")
+
+    # --- ROC + PR figure ---
+    figure_path = Path(_XGB_OPTUNA_FIGURE_PATH)
+    figure_path.parent.mkdir(parents=True, exist_ok=True)
+    plot_roc_and_pr(final_model, X_test, y_test, "XGBoost", save_path=str(figure_path))
+
+    # --- Persist model (joblib, consistent with save_model pattern) ---
+    save_model(final_model, _XGB_OPTUNA_MODEL_PATH)
+
+    # --- Persist params (JSON — human-readable, portable across services) ---
+    params_path = Path(_XGB_OPTUNA_PARAMS_PATH)
+    params_path.parent.mkdir(parents=True, exist_ok=True)
+    with params_path.open("w") as fh:
+        _json.dump(best_params, fh, indent=2)
+
+    return final_model, metrics_dict, X_test, y_test, best_params
 
 
 # ---------------------------------------------------------------------------

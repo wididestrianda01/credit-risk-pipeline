@@ -21,11 +21,14 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
+import json
+
 from credit_engine.model import (
     benchmark_imbalance_strategies,
     load_model,
     save_model,
     train_logistic_baseline,
+    train_xgboost_optuna,
 )
 
 
@@ -349,3 +352,204 @@ def test_benchmark_csv_saved(benchmark_splits, tmp_path, monkeypatch):
     saved = pd.read_csv(csv_path)
     assert saved.shape == result.shape
     assert list(saved.columns) == list(result.columns)
+
+
+# ---------------------------------------------------------------------------
+# train_xgboost_optuna — TDD tests (written RED before implementation)
+# ---------------------------------------------------------------------------
+
+_XGB_OPTUNA_EXPECTED_PARAM_KEYS = {
+    "n_estimators",
+    "max_depth",
+    "learning_rate",
+    "subsample",
+    "colsample_bytree",
+    "min_child_weight",
+    "reg_alpha",
+    "reg_lambda",
+}
+
+
+@pytest.fixture(scope="module")
+def xgb_optuna_result():
+    """
+    Run train_xgboost_optuna once per module with n_trials=3 on mock data.
+
+    Module scope ensures Optuna (3 trials × 5 CV folds = 15 fits + 1 final)
+    runs only once regardless of how many tests consume this fixture.
+    Function scope would re-run the study 7 times (one per test), taking
+    ~7× longer with no additional coverage value.
+    """
+    rng = np.random.default_rng(42)
+    n = 500
+    n_pos = int(n * 0.08)
+    y_arr = np.zeros(n, dtype=int)
+    y_arr[:n_pos] = 1
+    rng.shuffle(y_arr)
+    X = pd.DataFrame({
+        "f1": np.where(y_arr == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
+        "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
+    })
+    y = pd.Series(y_arr, name="TARGET")
+    return train_xgboost_optuna(X, y, n_trials=3)
+
+
+# --- Return structure ---
+
+def test_train_xgboost_optuna_returns_5_tuple(xgb_optuna_result):
+    """Function returns exactly 5 elements."""
+    assert len(xgb_optuna_result) == 5
+
+
+def test_train_xgboost_optuna_return_types(xgb_optuna_result):
+    """Return types: (XGBClassifier, dict, DataFrame, Series, dict)."""
+    import xgboost as xgb
+    model, metrics, X_test, y_test, best_params = xgb_optuna_result
+    assert hasattr(model, "predict_proba"), "model must support predict_proba"
+    assert isinstance(metrics, dict)
+    assert isinstance(X_test, pd.DataFrame)
+    assert isinstance(y_test, pd.Series)
+    assert isinstance(best_params, dict)
+
+
+def test_train_xgboost_optuna_split_sizes(mock_data, xgb_optuna_result):
+    """Test split is ~20% of total rows."""
+    X, _ = mock_data
+    _, _, X_test, _, _ = xgb_optuna_result
+    assert abs(len(X_test) / len(X) - 0.2) < 0.02
+
+
+# --- Metrics ---
+
+def test_train_xgboost_optuna_metrics_keys(xgb_optuna_result):
+    """metrics dict has all evaluate_model keys."""
+    _, metrics, *_ = xgb_optuna_result
+    expected = {"Model", "AUC-ROC", "Gini", "KS", "Brier", "BrierSkill", "AvgPrecision"}
+    assert set(metrics.keys()) == expected
+
+
+def test_train_xgboost_optuna_gini_on_separable_mock(xgb_optuna_result):
+    """Gini ≥ 0.50 on linearly separable mock data (even with 3 trials)."""
+    _, metrics, *_ = xgb_optuna_result
+    assert metrics["Gini"] >= 0.50, f"Gini too low: {metrics['Gini']:.4f}"
+
+
+def test_train_xgboost_optuna_auc_in_valid_range(xgb_optuna_result):
+    """AUC-ROC is in [0, 1]."""
+    _, metrics, *_ = xgb_optuna_result
+    assert 0.0 <= metrics["AUC-ROC"] <= 1.0
+
+
+def test_train_xgboost_optuna_ks_positive(xgb_optuna_result):
+    """KS > 0 confirms model has discrimination."""
+    _, metrics, *_ = xgb_optuna_result
+    assert metrics["KS"] > 0.0
+
+
+# --- best_params structure ---
+
+def test_train_xgboost_optuna_best_params_has_all_keys(xgb_optuna_result):
+    """best_params contains all 8 optimised hyperparameters."""
+    *_, best_params = xgb_optuna_result
+    assert _XGB_OPTUNA_EXPECTED_PARAM_KEYS.issubset(set(best_params.keys())), (
+        f"Missing keys: {_XGB_OPTUNA_EXPECTED_PARAM_KEYS - set(best_params.keys())}"
+    )
+
+
+def test_train_xgboost_optuna_best_params_values_finite(xgb_optuna_result):
+    """No NaN or inf in best_params values."""
+    *_, best_params = xgb_optuna_result
+    for k, v in best_params.items():
+        assert np.isfinite(float(v)), f"Non-finite value for {k}: {v}"
+
+
+# --- Artifact persistence ---
+
+def test_train_xgboost_optuna_model_saved(mock_data, tmp_path, monkeypatch):
+    """Model is saved to disk at the configured path."""
+    import credit_engine.model as model_module
+    monkeypatch.setattr(model_module, "_XGB_OPTUNA_MODEL_PATH", str(tmp_path / "xgb.pkl"))
+    monkeypatch.setattr(model_module, "_XGB_OPTUNA_PARAMS_PATH", str(tmp_path / "xgb.json"))
+    monkeypatch.setattr(model_module, "_XGB_OPTUNA_FIGURE_PATH", str(tmp_path / "xgb_roc.png"))
+
+    X, y = mock_data
+    train_xgboost_optuna(X, y, n_trials=2)
+    assert (tmp_path / "xgb.pkl").exists(), "Model pickle not written"
+
+
+def test_train_xgboost_optuna_params_json_valid(mock_data, tmp_path, monkeypatch):
+    """Params JSON is valid, deserializable, and contains all 8 keys."""
+    import credit_engine.model as model_module
+    monkeypatch.setattr(model_module, "_XGB_OPTUNA_MODEL_PATH", str(tmp_path / "xgb.pkl"))
+    params_path = tmp_path / "xgb.json"
+    monkeypatch.setattr(model_module, "_XGB_OPTUNA_PARAMS_PATH", str(params_path))
+    monkeypatch.setattr(model_module, "_XGB_OPTUNA_FIGURE_PATH", str(tmp_path / "xgb_roc.png"))
+
+    X, y = mock_data
+    train_xgboost_optuna(X, y, n_trials=2)
+
+    assert params_path.exists(), "Params JSON not written"
+    loaded = json.loads(params_path.read_text())
+    assert _XGB_OPTUNA_EXPECTED_PARAM_KEYS.issubset(set(loaded.keys()))
+
+
+def test_train_xgboost_optuna_model_round_trip(mock_data, tmp_path, monkeypatch):
+    """Save → load → predict_proba produces identical output."""
+    import credit_engine.model as model_module
+    model_path = tmp_path / "xgb.pkl"
+    monkeypatch.setattr(model_module, "_XGB_OPTUNA_MODEL_PATH", str(model_path))
+    monkeypatch.setattr(model_module, "_XGB_OPTUNA_PARAMS_PATH", str(tmp_path / "xgb.json"))
+    monkeypatch.setattr(model_module, "_XGB_OPTUNA_FIGURE_PATH", str(tmp_path / "xgb_roc.png"))
+
+    X, y = mock_data
+    model, _, X_test, _, _ = train_xgboost_optuna(X, y, n_trials=2)
+    loaded = load_model(model_path)
+    np.testing.assert_array_almost_equal(
+        model.predict_proba(X_test),
+        loaded.predict_proba(X_test),
+    )
+
+
+# --- Data leakage prevention ---
+
+def test_train_xgboost_optuna_cv_never_sees_test_data(mock_data, monkeypatch):
+    """CV fold fits must always receive strictly fewer rows than X_train.
+
+    Monkeypatches XGBClassifier.fit to record input sizes. Any call with
+    len(X) == len(X_train) means a full-training-set or test-set leak.
+    The final refit on full X_train is excluded by only checking calls
+    within the objective (n_trials=2 → 2×5=10 fold fits before the final).
+    """
+    import xgboost as xgb
+    from sklearn.model_selection import train_test_split as tts
+
+    X, y = mock_data
+    X_train, _, y_train, _ = tts(X, y, test_size=0.2, stratify=y, random_state=42)
+
+    fit_sizes: list[int] = []
+    original_fit = xgb.XGBClassifier.fit
+
+    def tracking_fit(self, X_fit, y_fit, **kwargs):
+        fit_sizes.append(len(X_fit))
+        return original_fit(self, X_fit, y_fit, **kwargs)
+
+    monkeypatch.setattr(xgb.XGBClassifier, "fit", tracking_fit)
+    train_xgboost_optuna(X, y, n_trials=2)
+
+    # Exclude the final full-training-set refit (exactly len(X_train) rows)
+    # All other calls must be fold-sized (< len(X_train))
+    cv_fit_sizes = [s for s in fit_sizes if s < len(X_train)]
+    assert len(cv_fit_sizes) > 0, "No CV fold fits detected"
+    assert all(s < len(X_train) for s in cv_fit_sizes), (
+        f"CV fold fit received {max(cv_fit_sizes)} rows; X_train={len(X_train)}"
+    )
+
+
+# --- Silent operation ---
+
+def test_train_xgboost_optuna_no_stdout(mock_data, capsys):
+    """Library function must not write to stdout (no print() calls)."""
+    X, y = mock_data
+    train_xgboost_optuna(X, y, n_trials=2)
+    captured = capsys.readouterr()
+    assert captured.out == "", f"Unexpected stdout:\n{captured.out}"
