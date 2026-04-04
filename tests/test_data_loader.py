@@ -475,3 +475,53 @@ def test_save_training_frame_roundtrip(data_dir, tmp_path):
 
     pd.testing.assert_frame_equal(X, X_loaded)
     pd.testing.assert_series_equal(y, y_loaded)
+
+
+# ---------------------------------------------------------------------------
+# Tests for Phase B: binary presence flags + secondary column filling
+# ---------------------------------------------------------------------------
+
+
+def test_build_training_frame_cc_has_records_flag_is_binary(data_dir):
+    """cc_has_records column exists and contains only 0 or 1."""
+    X, _ = build_training_frame(data_dir)
+    assert "cc_has_records" in X.columns
+    assert set(X["cc_has_records"].unique()).issubset({0, 1})
+    assert X["cc_has_records"].dtype in [np.int8, np.int32, np.int64]
+
+
+def test_build_training_frame_bureau_has_bbal_flag_is_binary(data_dir):
+    """bureau_has_bbal column exists and contains only 0 or 1."""
+    X, _ = build_training_frame(data_dir)
+    assert "bureau_has_bbal" in X.columns
+    assert set(X["bureau_has_bbal"].unique()).issubset({0, 1})
+    assert X["bureau_has_bbal"].dtype in [np.int8, np.int32, np.int64]
+
+
+def test_build_training_frame_cc_features_survive_missingness_filter(data_dir):
+    """cc_ columns with high missingness are preserved (not dropped)."""
+    X, _ = build_training_frame(data_dir)
+    # At least one credit card feature should survive
+    cc_features = ["cc_bal_mean", "cc_bal_max", "cc_utilization_mean", "cc_sk_dpd_max"]
+    cc_present = [f for f in cc_features if f in X.columns]
+    assert len(cc_present) > 0, f"No CC features found in {X.columns.tolist()}"
+
+
+def test_build_training_frame_cc_features_have_sentinel_not_nan(data_dir):
+    """cc_ columns should contain -999 sentinel, not NaN."""
+    X, _ = build_training_frame(data_dir)
+    # For applicants without CC history (cc_cnt == 0), cc_features should be -999
+    if "cc_cnt" in X.columns and "cc_bal_mean" in X.columns:
+        # Find rows with no CC history
+        no_cc_rows = X[X["cc_cnt"] == 0]
+        if len(no_cc_rows) > 0:
+            # These rows should have -999 in cc_bal_mean, not NaN
+            assert (no_cc_rows["cc_bal_mean"] == -999).all(), \
+                f"Expected -999 for no-CC rows, got {no_cc_rows['cc_bal_mean'].unique()}"
+
+
+def test_build_training_frame_no_new_column_duplication(data_dir):
+    """cc_has_records and bureau_has_bbal appear exactly once each."""
+    X, _ = build_training_frame(data_dir)
+    assert X.columns.tolist().count("cc_has_records") == 1
+    assert X.columns.tolist().count("bureau_has_bbal") == 1

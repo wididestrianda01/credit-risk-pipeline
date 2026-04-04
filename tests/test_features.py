@@ -20,6 +20,7 @@ from credit_engine.features import (
     build_raw_feature_store,
     compute_woe_iv,
     engineer_application_features,
+    engineer_secondary_features,
     select_features_by_iv,
 )
 
@@ -750,3 +751,115 @@ def test_apply_raw_feature_store_handles_missing_columns(feature_store_data):
             assert (X_out[col] == -999.0).all(), (
                 f"Missing column {col} must be filled with -999 sentinel"
             )
+
+
+# ---------------------------------------------------------------------------
+# Phase C — engineer_secondary_features() tests (TDD: RED phase)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def secondary_fixture() -> pd.DataFrame:
+    """
+    Minimal DataFrame with secondary table aggregate columns for testing.
+
+    Contains bureau, previous, POS, installments, and credit card aggregates
+    along with a few application columns needed for ratios.
+    """
+    return pd.DataFrame(
+        {
+            # Application columns (for income-based ratios)
+            "AMT_INCOME_TOTAL": [100_000, 50_000, 0, 120_000, 80_000],
+            # Previous application aggregates
+            "prev_cnt": [3, 0, 5, 2, 1],
+            "prev_approved_cnt": [2, 0, 0, 2, 1],
+            "prev_amt_credit_mean": [50_000, 0, 100_000, 60_000, 40_000],
+            # Bureau aggregates
+            "bureau_cnt": [5, 3, 0, 2, 4],
+            "bureau_credit_sum": [300_000, 150_000, 0, 200_000, 250_000],
+            "bureau_credit_debt_sum": [90_000, 45_000, 0, 50_000, 100_000],
+            # Installments aggregates
+            "inst_cnt": [20, 15, 0, 30, 10],
+            "inst_late_cnt": [2, 3, 0, 5, 0],
+            "inst_amt_payment_sum": [21_000, 15_500, 0, 31_500, 10_100],
+            "inst_payment_ratio_mean": [1.05, 1.03, 0.0, 1.05, 1.01],
+            # POS aggregates
+            "pos_sk_dpd_max": [0, 45, 0, 0, 60],
+            # Credit card aggregates
+            "cc_sk_dpd_max": [0, 0, 0, 30, 0],
+        }
+    )
+
+
+class TestEngineerSecondaryFeatures:
+    """Test suite for engineer_secondary_features()."""
+
+    def test_engineer_secondary_features_returns_dataframe(self, secondary_fixture):
+        """Output must be a DataFrame."""
+        result = engineer_secondary_features(secondary_fixture)
+        assert isinstance(result, pd.DataFrame)
+
+    def test_engineer_secondary_features_no_mutation(self, secondary_fixture):
+        """Input DataFrame must not be modified."""
+        original_columns = set(secondary_fixture.columns)
+        original_values = secondary_fixture.copy()
+
+        engineer_secondary_features(secondary_fixture)
+
+        assert set(secondary_fixture.columns) == original_columns
+        pd.testing.assert_frame_equal(secondary_fixture, original_values)
+
+    def test_prev_approval_rate_correct(self, secondary_fixture):
+        """prev_approval_rate = prev_approved_cnt / max(prev_cnt, 1)."""
+        result = engineer_secondary_features(secondary_fixture)
+
+        # Row 0: prev_approved_cnt=2, prev_cnt=3 → 2/3 ≈ 0.667
+        assert result.loc[0, "prev_approval_rate"] == pytest.approx(2.0 / 3.0)
+        # Row 4: prev_approved_cnt=1, prev_cnt=1 → 1/1 = 1.0
+        assert result.loc[4, "prev_approval_rate"] == pytest.approx(1.0)
+
+    def test_prev_approval_rate_zero_denominator(self, secondary_fixture):
+        """When prev_cnt=0, result must be 0.0, not inf/nan."""
+        result = engineer_secondary_features(secondary_fixture)
+
+        # Row 1: prev_cnt=0, prev_approved_cnt=0 → 0.0
+        assert result.loc[1, "prev_approval_rate"] == pytest.approx(0.0)
+
+    def test_inst_pct_late_correct(self, secondary_fixture):
+        """inst_pct_late = inst_late_cnt / max(inst_cnt, 1)."""
+        result = engineer_secondary_features(secondary_fixture)
+
+        # Row 0: inst_late_cnt=2, inst_cnt=20 → 2/20 = 0.1
+        assert result.loc[0, "inst_pct_late"] == pytest.approx(0.1)
+        # Row 3: inst_late_cnt=5, inst_cnt=30 → 5/30 ≈ 0.167
+        assert result.loc[3, "inst_pct_late"] == pytest.approx(5.0 / 30.0)
+
+    def test_bureau_debt_ratio_correct(self, secondary_fixture):
+        """bureau_debt_ratio = bureau_credit_debt_sum / max(bureau_credit_sum, 1e-6)."""
+        result = engineer_secondary_features(secondary_fixture)
+
+        # Row 0: bureau_credit_debt_sum=90k, bureau_credit_sum=300k → 0.3
+        assert result.loc[0, "bureau_debt_ratio"] == pytest.approx(0.3)
+        # Row 4: bureau_credit_debt_sum=100k, bureau_credit_sum=250k → 0.4
+        assert result.loc[4, "bureau_debt_ratio"] == pytest.approx(0.4)
+
+    def test_cc_overdue_flag_binary(self, secondary_fixture):
+        """cc_overdue_flag must be 0 or 1, never NaN."""
+        result = engineer_secondary_features(secondary_fixture)
+
+        assert result["cc_overdue_flag"].isin([0.0, 1.0]).all()
+        assert not result["cc_overdue_flag"].isna().any()
+
+    def test_engineer_secondary_features_skips_missing_columns(self):
+        """If required columns are missing, features depending on them are skipped."""
+        # Create a minimal DataFrame without secondary columns
+        minimal_df = pd.DataFrame({
+            "AMT_INCOME_TOTAL": [100_000],
+        })
+
+        result = engineer_secondary_features(minimal_df)
+
+        # Should return a DataFrame without error
+        assert isinstance(result, pd.DataFrame)
+        # Should have only the input column (no secondary features added)
+        assert len(result.columns) == 1

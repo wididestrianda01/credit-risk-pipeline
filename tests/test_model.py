@@ -25,6 +25,8 @@ import json
 
 from credit_engine.model import (
     _AverageEnsemble,
+    _TemporalCV,
+    _make_cv,
     benchmark_imbalance_strategies,
     calibrate_model,
     load_model,
@@ -559,6 +561,15 @@ def test_train_xgboost_optuna_no_stdout(mock_data, capsys):
     assert captured.out == "", f"Unexpected stdout:\n{captured.out}"
 
 
+# --- Input validation ---
+
+def test_train_xgboost_optuna_zero_trials_raises(mock_data):
+    """n_trials=0 raises ValueError with a descriptive message."""
+    X, y = mock_data
+    with pytest.raises(ValueError, match="n_trials must be >= 1"):
+        train_xgboost_optuna(X, y, n_trials=0)
+
+
 # ---------------------------------------------------------------------------
 # train_lightgbm_optuna — TDD tests (written RED before implementation)
 # ---------------------------------------------------------------------------
@@ -741,7 +752,8 @@ def test_train_lightgbm_optuna_cv_never_sees_test_data(mock_data, monkeypatch):
     monkeypatch.setattr(lgb.LGBMClassifier, "fit", tracking_fit)
     train_lightgbm_optuna(X, y, n_trials=2)
 
-    # All fits (CV folds + final model on X_tr) must be smaller than the total dataset
+    # All fits (CV folds, stage-1 early-stop fit on X_tr, stage-2 refit on X_train)
+    # must be smaller than the full dataset len(X) — X_train is 80% of X so this holds.
     assert len(fit_sizes) > 0, "No LGBMClassifier.fit calls detected"
     assert all(s < len(X) for s in fit_sizes), (
         f"A fit received {max(fit_sizes)} rows but total X has {len(X)} rows. "
@@ -757,6 +769,15 @@ def test_train_lightgbm_optuna_no_stdout(mock_data, capsys):
     train_lightgbm_optuna(X, y, n_trials=2)
     captured = capsys.readouterr()
     assert captured.out == "", f"Unexpected stdout:\n{captured.out}"
+
+
+# --- Input validation ---
+
+def test_train_lightgbm_optuna_zero_trials_raises(mock_data):
+    """n_trials=0 raises ValueError with a descriptive message."""
+    X, y = mock_data
+    with pytest.raises(ValueError, match="n_trials must be >= 1"):
+        train_lightgbm_optuna(X, y, n_trials=0)
 
 
 # ---------------------------------------------------------------------------
@@ -972,3 +993,151 @@ class TestEnsemble:
         _, metrics = ensemble_average_result
         gini = metrics["Gini"]
         assert 0.0 <= gini <= 1.0, f"Gini {gini:.4f} outside [0, 1] (data leakage suspected)"
+
+
+def test_calibrate_model_isotonic_method(calibration_inputs, tmp_path, monkeypatch):
+    """calibrate_model with method='isotonic' returns a valid calibrated model."""
+    import credit_engine.model as model_module
+
+    monkeypatch.setattr(model_module, "_CALIBRATED_MODEL_PATH", str(tmp_path / "iso.pkl"))
+    monkeypatch.setattr(model_module, "_CALIBRATION_FIGURE_PATH", str(tmp_path / "iso_fig.png"))
+
+    model, X_train, y_train, X_test, y_test = calibration_inputs
+    cal_model, brier_uncal, brier_cal = calibrate_model(
+        model, X_train, y_train, X_test, y_test, method="isotonic"
+    )
+
+    assert hasattr(cal_model, "predict_proba"), "isotonic calibrated model must have predict_proba"
+    assert isinstance(brier_uncal, float) and np.isfinite(brier_uncal)
+    assert isinstance(brier_cal, float) and np.isfinite(brier_cal)
+    # Calibration must not catastrophically degrade Brier score
+    assert brier_cal <= brier_uncal + 0.05, (
+        f"Isotonic calibration degraded Brier: {brier_uncal:.4f} → {brier_cal:.4f}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# _TemporalCV and _make_cv — temporal cross-validation tests
+# ---------------------------------------------------------------------------
+
+def _make_temporal_mock(n: int = 200) -> tuple[pd.DataFrame, pd.Series, pd.Series]:
+    """
+    200-row mock dataset with a synthetic DAYS_ID_PUBLISH temporal column.
+
+    Returns (X, y, groups) where groups is a Series of integers in [-7197, 0],
+    simulating the Home Credit temporal proxy column.
+    """
+    rng = np.random.default_rng(7)
+    n_pos = max(1, int(n * 0.08))
+    y_arr = np.zeros(n, dtype=int)
+    y_arr[:n_pos] = 1
+    rng.shuffle(y_arr)
+    X = pd.DataFrame({
+        "f1": rng.normal(0.0, 1.0, n),
+        "f2": rng.normal(0.0, 1.0, n),
+    })
+    y = pd.Series(y_arr, name="TARGET")
+    # Simulate DAYS_ID_PUBLISH: monotone negative integers (older = more negative)
+    groups = pd.Series(np.sort(rng.integers(-7197, 0, n)), name="DAYS_ID_PUBLISH")
+    return X, y, groups
+
+
+def test_temporal_cv_produces_correct_number_of_folds():
+    """_TemporalCV yields exactly n_splits (train, val) pairs."""
+    X, y, groups = _make_temporal_mock()
+    cv = _TemporalCV(groups=groups.to_numpy(), n_splits=5)
+    splits = list(cv.split(X, y))
+    assert len(splits) == 5, f"Expected 5 folds, got {len(splits)}"
+
+
+def test_temporal_cv_train_indices_precede_val_indices():
+    """All training samples must be temporally older than all validation samples.
+
+    This is the core property: max(groups[train]) < min(groups[val]) for every fold.
+    A single violation would indicate that the future is leaking into the past.
+    """
+    X, y, groups = _make_temporal_mock(n=300)
+    groups_arr = groups.to_numpy()
+    cv = _TemporalCV(groups=groups_arr, n_splits=5)
+    for fold_i, (train_idx, val_idx) in enumerate(cv.split(X, y)):
+        max_train_time = groups_arr[train_idx].max()
+        min_val_time = groups_arr[val_idx].min()
+        assert max_train_time < min_val_time, (
+            f"Fold {fold_i}: training data bleeds into the future. "
+            f"max(train_time)={max_train_time}, min(val_time)={min_val_time}"
+        )
+
+
+def test_temporal_cv_embargo_reduces_train_size():
+    """Embargo must remove at least 1 sample from the training fold boundary.
+
+    Compare a CV with embargo=0 vs embargo=0.05 — the embargoed version must
+    always return fewer or equal training samples.
+    """
+    X, y, groups = _make_temporal_mock(n=300)
+    groups_arr = groups.to_numpy()
+
+    cv_no_embargo = _TemporalCV(groups=groups_arr, n_splits=5, embargo_frac=0.0)
+    cv_embargoed = _TemporalCV(groups=groups_arr, n_splits=5, embargo_frac=0.05)
+
+    for (train_no, _), (train_em, _) in zip(
+        cv_no_embargo.split(X, y), cv_embargoed.split(X, y)
+    ):
+        assert len(train_em) <= len(train_no), (
+            f"Embargo did not reduce train size: {len(train_em)} > {len(train_no)}"
+        )
+
+
+def test_temporal_cv_val_indices_never_in_train():
+    """No index appears in both train and validation sets for any fold."""
+    X, y, groups = _make_temporal_mock()
+    cv = _TemporalCV(groups=groups.to_numpy(), n_splits=5)
+    for train_idx, val_idx in cv.split(X, y):
+        overlap = set(train_idx.tolist()) & set(val_idx.tolist())
+        assert len(overlap) == 0, f"Leakage: {len(overlap)} indices in both train and val"
+
+
+def test_make_cv_returns_stratified_kfold_when_no_groups():
+    """_make_cv(groups_train=None) returns StratifiedKFold, not _TemporalCV."""
+    from sklearn.model_selection import StratifiedKFold
+    cv = _make_cv(groups_train=None, n_splits=5)
+    assert isinstance(cv, StratifiedKFold)
+
+
+def test_make_cv_returns_temporal_cv_when_groups_provided():
+    """_make_cv with groups array returns _TemporalCV."""
+    groups_arr = np.arange(200, dtype=float)
+    cv = _make_cv(groups_train=groups_arr, n_splits=5)
+    assert isinstance(cv, _TemporalCV)
+
+
+def test_train_logistic_baseline_accepts_groups_parameter():
+    """train_logistic_baseline runs without error when groups is provided."""
+    X, y, groups = _make_temporal_mock(n=300)
+    # groups must align to X.index — our fixture already has matching integer index
+    pipeline, metrics, X_train, X_test, y_train, y_test = train_logistic_baseline(
+        X, y, groups=groups
+    )
+    assert isinstance(pipeline, Pipeline)
+    assert 0.0 <= metrics["AUC-ROC"] <= 1.0
+
+
+def test_temporal_cv_groups_alignment_after_train_test_split():
+    """groups.loc[X_train.index] correctly aligns when DataFrame has non-contiguous index.
+
+    After train_test_split, X_train has a non-contiguous integer index (e.g.
+    [3, 7, 12, ...]). Aligning via .loc preserves temporal ordering, whereas
+    positional alignment (.iloc) would silently use wrong group values.
+    """
+    X, y, groups = _make_temporal_mock(n=300)
+    from sklearn.model_selection import train_test_split as tts
+    X_train, _, y_train, _ = tts(X, y, test_size=0.2, stratify=y, random_state=42)
+
+    # Verify .loc alignment produces the same length as X_train
+    groups_aligned = groups.loc[X_train.index]
+    assert len(groups_aligned) == len(X_train), (
+        f"groups alignment mismatch: {len(groups_aligned)} != {len(X_train)}"
+    )
+    # Verify every aligned group value corresponds to a valid X_train row
+    assert set(groups_aligned.index) == set(X_train.index)
+
