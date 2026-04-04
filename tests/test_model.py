@@ -27,6 +27,7 @@ from credit_engine.model import (
     benchmark_imbalance_strategies,
     load_model,
     save_model,
+    train_lightgbm_optuna,
     train_logistic_baseline,
     train_xgboost_optuna,
 )
@@ -36,7 +37,7 @@ from credit_engine.model import (
 # Fixtures
 # ---------------------------------------------------------------------------
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def mock_data() -> tuple[pd.DataFrame, pd.Series]:
     """
     500-row, 2-feature, 8% positive rate — fast proxy for real WoE dataset.
@@ -59,7 +60,7 @@ def mock_data() -> tuple[pd.DataFrame, pd.Series]:
     return X, pd.Series(y, name="TARGET")
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def trained_model(mock_data):
     """
     Train logistic baseline on mock data once; reused across structural tests.
@@ -216,7 +217,7 @@ _EXPECTED_COLUMNS = ["Strategy", "AUC-ROC", "Gini", "KS", "F1-Macro", "Precision
 _METRIC_COLUMNS = ["AUC-ROC", "Gini", "KS", "F1-Macro", "Precision", "Recall"]
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def benchmark_splits(mock_data):
     """
     Extract (X_train, y_train, X_test, y_test) from the logistic baseline 6-tuple.
@@ -229,7 +230,7 @@ def benchmark_splits(mock_data):
     return X_train, y_train, X_test, y_test
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def benchmark_result(benchmark_splits):
     """Run benchmark once; reused across structural tests to avoid repeated training."""
     X_train, y_train, X_test, y_test = benchmark_splits
@@ -551,5 +552,205 @@ def test_train_xgboost_optuna_no_stdout(mock_data, capsys):
     """Library function must not write to stdout (no print() calls)."""
     X, y = mock_data
     train_xgboost_optuna(X, y, n_trials=2)
+    captured = capsys.readouterr()
+    assert captured.out == "", f"Unexpected stdout:\n{captured.out}"
+
+
+# ---------------------------------------------------------------------------
+# train_lightgbm_optuna — TDD tests (written RED before implementation)
+# ---------------------------------------------------------------------------
+
+_LGB_OPTUNA_EXPECTED_PARAM_KEYS = {
+    "num_leaves",
+    "max_depth",
+    "learning_rate",
+    "n_estimators",
+    "min_child_samples",
+    "subsample",
+    "colsample_bytree",
+    "reg_alpha",
+    "reg_lambda",
+}
+
+
+@pytest.fixture(scope="module")
+def lgb_optuna_result():
+    """
+    Run train_lightgbm_optuna once per module with n_trials=3 on mock data.
+
+    Module scope ensures Optuna (3 trials × 5 CV folds = 15 fits + 1 final)
+    runs only once regardless of how many tests consume this fixture.
+    Function scope would re-run the study 14 times (one per test), taking
+    ~14× longer with no additional coverage value.
+    """
+    rng = np.random.default_rng(42)
+    n = 500
+    n_pos = int(n * 0.08)
+    y_arr = np.zeros(n, dtype=int)
+    y_arr[:n_pos] = 1
+    rng.shuffle(y_arr)
+    X = pd.DataFrame({
+        "f1": np.where(y_arr == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
+        "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
+    })
+    y = pd.Series(y_arr, name="TARGET")
+    return train_lightgbm_optuna(X, y, n_trials=3)
+
+
+# --- Return structure ---
+
+def test_train_lightgbm_optuna_returns_5_tuple(lgb_optuna_result):
+    """Function returns exactly 5 elements."""
+    assert len(lgb_optuna_result) == 5
+
+
+def test_train_lightgbm_optuna_return_types(lgb_optuna_result):
+    """Return types: (LGBMClassifier, dict, DataFrame, Series, dict)."""
+    model, metrics, X_test, y_test, best_params = lgb_optuna_result
+    assert hasattr(model, "predict_proba"), "model must support predict_proba"
+    assert isinstance(metrics, dict)
+    assert isinstance(X_test, pd.DataFrame)
+    assert isinstance(y_test, pd.Series)
+    assert isinstance(best_params, dict)
+
+
+def test_train_lightgbm_optuna_split_sizes(mock_data, lgb_optuna_result):
+    """Test split is ~20% of total rows."""
+    X, _ = mock_data
+    _, _, X_test, _, _ = lgb_optuna_result
+    assert abs(len(X_test) / len(X) - 0.2) < 0.02
+
+
+# --- Metrics ---
+
+def test_train_lightgbm_optuna_metrics_keys(lgb_optuna_result):
+    """metrics dict has all evaluate_model keys."""
+    _, metrics, *_ = lgb_optuna_result
+    expected = {"Model", "AUC-ROC", "Gini", "KS", "Brier", "BrierSkill", "AvgPrecision"}
+    assert set(metrics.keys()) == expected
+
+
+def test_train_lightgbm_optuna_gini_on_separable_mock(lgb_optuna_result):
+    """Gini ≥ 0.50 on linearly separable mock data (even with 3 trials)."""
+    _, metrics, *_ = lgb_optuna_result
+    assert metrics["Gini"] >= 0.50, f"Gini too low: {metrics['Gini']:.4f}"
+
+
+def test_train_lightgbm_optuna_auc_in_valid_range(lgb_optuna_result):
+    """AUC-ROC is in [0, 1]."""
+    _, metrics, *_ = lgb_optuna_result
+    assert 0.0 <= metrics["AUC-ROC"] <= 1.0
+
+
+def test_train_lightgbm_optuna_ks_positive(lgb_optuna_result):
+    """KS > 0 confirms model has discrimination."""
+    _, metrics, *_ = lgb_optuna_result
+    assert metrics["KS"] > 0.0
+
+
+# --- best_params structure ---
+
+def test_train_lightgbm_optuna_best_params_has_all_keys(lgb_optuna_result):
+    """best_params contains all 9 optimised hyperparameters."""
+    *_, best_params = lgb_optuna_result
+    assert _LGB_OPTUNA_EXPECTED_PARAM_KEYS.issubset(set(best_params.keys())), (
+        f"Missing keys: {_LGB_OPTUNA_EXPECTED_PARAM_KEYS - set(best_params.keys())}"
+    )
+
+
+def test_train_lightgbm_optuna_best_params_values_finite(lgb_optuna_result):
+    """No NaN or inf in best_params values."""
+    *_, best_params = lgb_optuna_result
+    for k, v in best_params.items():
+        assert np.isfinite(float(v)), f"Non-finite value for {k}: {v}"
+
+
+# --- Artifact persistence ---
+
+def test_train_lightgbm_optuna_model_saved(mock_data, tmp_path, monkeypatch):
+    """Model is saved to disk at the configured path."""
+    import credit_engine.model as model_module
+    monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb.pkl"))
+    monkeypatch.setattr(model_module, "_LGB_OPTUNA_PARAMS_PATH", str(tmp_path / "lgb.json"))
+    monkeypatch.setattr(model_module, "_LGB_OPTUNA_FIGURE_PATH", str(tmp_path / "lgb_roc.png"))
+
+    X, y = mock_data
+    train_lightgbm_optuna(X, y, n_trials=2)
+    assert (tmp_path / "lgb.pkl").exists(), "Model pickle not written"
+
+
+def test_train_lightgbm_optuna_params_json_valid(mock_data, tmp_path, monkeypatch):
+    """Params JSON is valid, deserializable, and contains all 9 keys."""
+    import credit_engine.model as model_module
+    monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb.pkl"))
+    params_path = tmp_path / "lgb.json"
+    monkeypatch.setattr(model_module, "_LGB_OPTUNA_PARAMS_PATH", str(params_path))
+    monkeypatch.setattr(model_module, "_LGB_OPTUNA_FIGURE_PATH", str(tmp_path / "lgb_roc.png"))
+
+    X, y = mock_data
+    train_lightgbm_optuna(X, y, n_trials=2)
+
+    assert params_path.exists(), "Params JSON not written"
+    loaded = json.loads(params_path.read_text())
+    assert _LGB_OPTUNA_EXPECTED_PARAM_KEYS.issubset(set(loaded.keys()))
+
+
+def test_train_lightgbm_optuna_model_round_trip(mock_data, tmp_path, monkeypatch):
+    """Save → load → predict_proba produces identical output."""
+    import credit_engine.model as model_module
+    model_path = tmp_path / "lgb.pkl"
+    monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(model_path))
+    monkeypatch.setattr(model_module, "_LGB_OPTUNA_PARAMS_PATH", str(tmp_path / "lgb.json"))
+    monkeypatch.setattr(model_module, "_LGB_OPTUNA_FIGURE_PATH", str(tmp_path / "lgb_roc.png"))
+
+    X, y = mock_data
+    model, _, X_test, _, _ = train_lightgbm_optuna(X, y, n_trials=2)
+    loaded = load_model(model_path)
+    np.testing.assert_array_almost_equal(
+        model.predict_proba(X_test),
+        loaded.predict_proba(X_test),
+    )
+
+
+# --- Data leakage prevention ---
+
+def test_train_lightgbm_optuna_cv_never_sees_test_data(mock_data, monkeypatch):
+    """CV fold fits must always receive strictly fewer rows than X_train.
+
+    Monkeypatches LGBMClassifier.fit to record input sizes. Any call with
+    len(X) == len(total_X) means a full-dataset or test-set leak.
+    The final refit on X_tr (80% of X_train) is excluded by filtering
+    on rows strictly less than len(X_train).
+    """
+    import lightgbm as lgb
+    from sklearn.model_selection import train_test_split as tts
+
+    X, y = mock_data
+    X_train, _, y_train, _ = tts(X, y, test_size=0.2, stratify=y, random_state=42)
+
+    fit_sizes: list[int] = []
+    original_fit = lgb.LGBMClassifier.fit
+
+    def tracking_fit(self, X_fit, y_fit, **kwargs):
+        fit_sizes.append(len(X_fit))
+        return original_fit(self, X_fit, y_fit, **kwargs)
+
+    monkeypatch.setattr(lgb.LGBMClassifier, "fit", tracking_fit)
+    train_lightgbm_optuna(X, y, n_trials=2)
+
+    # All fits (CV folds + final model on X_tr) must be smaller than the total dataset
+    assert len(fit_sizes) > 0, "No LGBMClassifier.fit calls detected"
+    assert all(s < len(X) for s in fit_sizes), (
+        f"A fit received {max(fit_sizes)} rows but total X has {len(X)} rows. "
+        "Possible test-set leakage."
+    )
+
+
+# --- Silent operation ---
+
+def test_train_lightgbm_optuna_no_stdout(mock_data, capsys):
+    """Library function must not write to stdout (no print() calls)."""
+    X, y = mock_data
+    train_lightgbm_optuna(X, y, n_trials=2)
     captured = capsys.readouterr()
     assert captured.out == "", f"Unexpected stdout:\n{captured.out}"

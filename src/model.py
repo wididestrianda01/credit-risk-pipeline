@@ -87,6 +87,42 @@ _XGB_OPTUNA_MODEL_PATH: str = "models/xgboost_best.pkl"
 _XGB_OPTUNA_PARAMS_PATH: str = "models/xgboost_params.json"
 _XGB_OPTUNA_FIGURE_PATH: str = "reports/figures/xgboost_roc_pr.png"
 
+# LightGBM Optuna HPO — search space bounds
+# num_leaves 20–300: controls model expressiveness (leaf-wise growth);
+# kept well below 2^max_depth to prevent overfitting on 40 WoE features.
+# learning rate log-uniform (Optuna explores slow and fast regimes equally).
+# min_child_samples 5–100: minimum samples per leaf — key regulariser for
+# imbalanced credit data where the minority class has few examples per leaf.
+_LGB_OPTUNA_N_TRIALS: int = 50
+_LGB_NUM_LEAVES_MIN: int = 20
+_LGB_NUM_LEAVES_MAX: int = 300
+_LGB_MAX_DEPTH_MIN: int = 3
+_LGB_MAX_DEPTH_MAX: int = 12
+_LGB_LEARNING_RATE_MIN: float = 0.01
+_LGB_LEARNING_RATE_MAX: float = 0.2
+_LGB_N_ESTIMATORS_MIN: int = 100
+_LGB_N_ESTIMATORS_MAX: int = 500
+_LGB_MIN_CHILD_SAMPLES_MIN: int = 5
+_LGB_MIN_CHILD_SAMPLES_MAX: int = 100
+_LGB_SUBSAMPLE_MIN: float = 0.6
+_LGB_SUBSAMPLE_MAX: float = 1.0
+_LGB_COLSAMPLE_BYTREE_MIN: float = 0.6
+_LGB_COLSAMPLE_BYTREE_MAX: float = 1.0
+_LGB_REG_ALPHA_MIN: float = 0.0
+_LGB_REG_ALPHA_MAX: float = 5.0
+_LGB_REG_LAMBDA_MIN: float = 0.0
+_LGB_REG_LAMBDA_MAX: float = 10.0
+# Two-tier early stopping: HPO objective uses aggressive patience to quickly
+# triage bad configs; final refit uses standard patience for a proper model.
+_LGB_OBJ_EARLY_STOPPING_ROUNDS: int = 20   # fast config triage inside Optuna
+_LGB_EARLY_STOPPING_ROUNDS: int = 50        # full patience for final refit
+_LGB_FINAL_VAL_SIZE: float = 0.2
+
+# Output paths for LightGBM Optuna HPO artefacts
+_LGB_OPTUNA_MODEL_PATH: str = "models/lightgbm_best.pkl"
+_LGB_OPTUNA_PARAMS_PATH: str = "models/lightgbm_params.json"
+_LGB_OPTUNA_FIGURE_PATH: str = "reports/figures/lightgbm_roc_pr.png"
+
 # Output path for the imbalance benchmark comparison table
 _BENCHMARK_REPORT_PATH: str = "reports/imbalance_benchmark.csv"
 
@@ -739,6 +775,232 @@ def train_xgboost_optuna(
 
     # --- Persist params (JSON — human-readable, portable across services) ---
     params_path = Path(_XGB_OPTUNA_PARAMS_PATH)
+    params_path.parent.mkdir(parents=True, exist_ok=True)
+    with params_path.open("w") as fh:
+        _json.dump(best_params, fh, indent=2)
+
+    return final_model, metrics_dict, X_test, y_test, best_params
+
+
+# ---------------------------------------------------------------------------
+# LightGBM with Optuna hyperparameter optimisation
+# ---------------------------------------------------------------------------
+
+def _lightgbm_optuna_objective(
+    trial: "optuna.Trial",
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    cv: StratifiedKFold,
+) -> float:
+    """
+    Optuna objective: 5-fold CV AUC-ROC for a suggested LightGBM configuration.
+
+    Called once per trial by ``study.optimize()``. Samples 9 hyperparameters,
+    runs stratified k-fold CV on X_train with early stopping inside each fold,
+    and returns the mean out-of-fold AUC-ROC. X_test is never passed in.
+
+    Early stopping uses the CV validation fold as the eval set — no additional
+    data split is needed inside the objective. This means ``n_estimators`` is
+    the maximum; early stopping may terminate sooner if the validation AUC
+    plateaus for ``_LGB_EARLY_STOPPING_ROUNDS`` consecutive rounds.
+
+    Parameters
+    ----------
+    trial : optuna.Trial
+        Current Optuna trial handle for hyperparameter suggestions.
+    X_train : pd.DataFrame
+        Training features (80% split). Never the held-out test set.
+    y_train : pd.Series
+        Training labels.
+    cv : StratifiedKFold
+        5-fold CV splitter, seeded for reproducibility.
+
+    Returns
+    -------
+    float
+        Mean out-of-fold AUC-ROC across all CV folds.
+    """
+    import lightgbm as lgb
+
+    params = {
+        "num_leaves": trial.suggest_int(
+            "num_leaves", _LGB_NUM_LEAVES_MIN, _LGB_NUM_LEAVES_MAX
+        ),
+        "max_depth": trial.suggest_int(
+            "max_depth", _LGB_MAX_DEPTH_MIN, _LGB_MAX_DEPTH_MAX
+        ),
+        "learning_rate": trial.suggest_float(
+            "learning_rate", _LGB_LEARNING_RATE_MIN, _LGB_LEARNING_RATE_MAX, log=True
+        ),
+        "n_estimators": trial.suggest_int(
+            "n_estimators", _LGB_N_ESTIMATORS_MIN, _LGB_N_ESTIMATORS_MAX
+        ),
+        "min_child_samples": trial.suggest_int(
+            "min_child_samples", _LGB_MIN_CHILD_SAMPLES_MIN, _LGB_MIN_CHILD_SAMPLES_MAX
+        ),
+        "subsample": trial.suggest_float(
+            "subsample", _LGB_SUBSAMPLE_MIN, _LGB_SUBSAMPLE_MAX
+        ),
+        "colsample_bytree": trial.suggest_float(
+            "colsample_bytree", _LGB_COLSAMPLE_BYTREE_MIN, _LGB_COLSAMPLE_BYTREE_MAX
+        ),
+        "reg_alpha": trial.suggest_float(
+            "reg_alpha", _LGB_REG_ALPHA_MIN, _LGB_REG_ALPHA_MAX
+        ),
+        "reg_lambda": trial.suggest_float(
+            "reg_lambda", _LGB_REG_LAMBDA_MIN, _LGB_REG_LAMBDA_MAX
+        ),
+        "is_unbalance": True,
+        "verbosity": -1,
+        "random_state": _RANDOM_STATE,
+    }
+
+    # Aggressive early stopping inside the objective: enough to distinguish
+    # good from bad configs without training to full depth on each fold.
+    callbacks = [
+        lgb.early_stopping(stopping_rounds=_LGB_OBJ_EARLY_STOPPING_ROUNDS, verbose=False),
+        lgb.log_evaluation(period=0),
+    ]
+
+    fold_aucs: list[float] = []
+    for train_idx, val_idx in cv.split(X_train, y_train):
+        X_fold_train = X_train.iloc[train_idx]
+        X_fold_val = X_train.iloc[val_idx]
+        y_fold_train = y_train.iloc[train_idx]
+        y_fold_val = y_train.iloc[val_idx]
+
+        model = lgb.LGBMClassifier(**params)
+        model.fit(
+            X_fold_train,
+            y_fold_train,
+            eval_set=[(X_fold_val, y_fold_val)],
+            callbacks=callbacks,
+        )
+        y_prob_val = model.predict_proba(X_fold_val)[:, 1]
+        fold_aucs.append(float(roc_auc_score(y_fold_val, y_prob_val)))
+
+    return float(np.mean(fold_aucs))
+
+
+def train_lightgbm_optuna(
+    X: pd.DataFrame,
+    y: pd.Series,
+    n_trials: int = _LGB_OPTUNA_N_TRIALS,
+) -> tuple[object, dict, pd.DataFrame, pd.Series, dict]:
+    """
+    Train LightGBM with Bayesian hyperparameter optimisation via Optuna.
+
+    Runs ``n_trials`` of TPE-based search over a 9-dimensional space,
+    selecting the configuration that maximises mean out-of-fold AUC-ROC.
+    Early stopping inside each CV fold prevents over-training on any given
+    hyperparameter configuration. The final model is retrained on the full
+    training split (with a held-out validation slice for early stopping),
+    then evaluated on the held-out test split.
+
+    Imbalance handling uses ``is_unbalance=True`` — LightGBM's built-in
+    strategy that internally computes ``n_neg / n_pos`` and adjusts both
+    the loss weights and leaf output values, avoiding external resampling.
+
+    Parameters
+    ----------
+    X : pd.DataFrame
+        WoE-transformed feature matrix (40 columns, produced by
+        ``credit_engine.features.apply_feature_store``).
+    y : pd.Series
+        Binary TARGET series (0 = repaid, 1 = defaulted).
+    n_trials : int, optional
+        Number of Optuna trials. Default 50 balances exploration depth
+        against compute budget for the 9-dimensional search space.
+
+    Returns
+    -------
+    lgb_model : LGBMClassifier
+        Fitted LightGBM model with best hyperparameters and early stopping.
+    metrics_dict : dict
+        Evaluation metrics on X_test. Keys: Model, AUC-ROC, Gini, KS,
+        Brier, BrierSkill, AvgPrecision.
+    X_test : pd.DataFrame
+        Held-out test features (20% stratified split, seed=42).
+    y_test : pd.Series
+        Held-out test labels.
+    best_params : dict
+        Optimised hyperparameters (9 keys). Also persisted to
+        ``models/lightgbm_params.json``.
+
+    Notes
+    -----
+    Artefacts written to disk:
+    - ``models/lightgbm_best.pkl``        — joblib-serialised LGBMClassifier
+    - ``models/lightgbm_params.json``     — best hyperparameters as JSON
+    - ``reports/figures/lightgbm_roc_pr.png`` — ROC + PR curves
+    """
+    import json as _json
+
+    import lightgbm as lgb
+    import matplotlib.pyplot as plt
+    import optuna
+
+    # --- Train / test split (stratified, identical seed across all models) ---
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=_TEST_SIZE, stratify=y, random_state=_RANDOM_STATE
+    )
+
+    # --- Optuna study ---
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+    cv = StratifiedKFold(
+        n_splits=_XGB_CV_N_SPLITS, shuffle=True, random_state=_RANDOM_STATE
+    )
+
+    def objective(trial: optuna.Trial) -> float:
+        return _lightgbm_optuna_objective(trial, X_train, y_train, cv)
+
+    study = optuna.create_study(direction="maximize")
+    study.optimize(objective, n_trials=n_trials)
+
+    best_params: dict = study.best_params
+
+    # --- Final model: retrain on X_train with early stopping on val split ---
+    # A held-out slice from X_train provides the early-stopping signal;
+    # X_test is never used here — it is reserved for final evaluation only.
+    X_tr, X_val, y_tr, y_val = train_test_split(
+        X_train,
+        y_train,
+        test_size=_LGB_FINAL_VAL_SIZE,
+        stratify=y_train,
+        random_state=_RANDOM_STATE,
+    )
+
+    final_model = lgb.LGBMClassifier(
+        **best_params,
+        is_unbalance=True,
+        verbosity=-1,
+        random_state=_RANDOM_STATE,
+    )
+    final_model.fit(
+        X_tr,
+        y_tr,
+        eval_set=[(X_val, y_val)],
+        callbacks=[
+            lgb.early_stopping(stopping_rounds=_LGB_EARLY_STOPPING_ROUNDS, verbose=False),
+            lgb.log_evaluation(period=0),
+        ],
+    )
+
+    # --- Evaluate on held-out test set ---
+    metrics_dict = evaluate_model(final_model, X_test, y_test, "LightGBM")
+
+    # --- ROC + PR figure ---
+    figure_path = Path(_LGB_OPTUNA_FIGURE_PATH)
+    figure_path.parent.mkdir(parents=True, exist_ok=True)
+    fig = plot_roc_and_pr(final_model, X_test, y_test, "LightGBM", save_path=str(figure_path))
+    plt.close(fig)
+
+    # --- Persist model (joblib, consistent with save_model pattern) ---
+    save_model(final_model, _LGB_OPTUNA_MODEL_PATH)
+
+    # --- Persist params (JSON — human-readable, portable across services) ---
+    params_path = Path(_LGB_OPTUNA_PARAMS_PATH)
     params_path.parent.mkdir(parents=True, exist_ok=True)
     with params_path.open("w") as fh:
         _json.dump(best_params, fh, indent=2)
