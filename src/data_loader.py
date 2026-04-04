@@ -97,6 +97,7 @@ _CATEGORICAL_APP_COLS = [
 
 _MISSING_DROP_THRESHOLD = 0.60  # drop columns with > 60% missing values
 _NAN_SENTINEL = -999  # sentinel fill for tree models (LightGBM/XGBoost)
+_SECONDARY_COL_PREFIXES = ("bureau_bbal_", "cc_")  # secondary table column prefixes
 
 
 # ---------------------------------------------------------------------------
@@ -164,10 +165,12 @@ def build_training_frame(
     Steps
     -----
     1. Join all 7 tables via ``load_data()``.
-    2. Drop columns where > 60 % of values are missing.
-    3. Fill remaining numeric NaNs with ``-999`` (sentinel; LightGBM/XGBoost
+    2. Add binary presence flags for secondary tables (absence itself is predictive).
+    3. Fill secondary table NaN columns with sentinel before missingness filter.
+    4. Drop columns where > 60 % of values are missing.
+    5. Fill remaining numeric NaNs with ``-999`` (sentinel; LightGBM/XGBoost
        treat it as a separate bin rather than imputing a distribution value).
-    4. Split TARGET out of the feature matrix.
+    6. Split TARGET out of the feature matrix.
 
     Parameters
     ----------
@@ -193,6 +196,28 @@ def build_training_frame(
         raise KeyError(
             "TARGET column not found. build_training_frame() requires train data."
         )
+
+    # --- add binary presence flags (absence is itself predictive) -----------
+    # Credit card presence flag
+    df = df.assign(cc_has_records=(df["cc_cnt"] > 0).astype(np.int8))
+
+    # Bureau balance presence flag (derived from bureau_bbal_cnt_mean)
+    if "bureau_bbal_cnt_mean" in df.columns:
+        df = df.assign(
+            bureau_has_bbal=(df["bureau_bbal_cnt_mean"] > 0).astype(np.int8)
+        )
+    else:
+        # Fallback if the column doesn't exist (shouldn't happen)
+        df = df.assign(bureau_has_bbal=np.int8(0))
+
+    # --- fill secondary table NaN columns with sentinel BEFORE drop ---------
+    # This prevents high-missingness secondary table columns from being dropped
+    for col in df.columns:
+        if any(col.startswith(p) for p in _SECONDARY_COL_PREFIXES):
+            # Skip count/flag columns (cc_cnt, cc_has_records, bureau_has_bbal)
+            if col not in ("cc_cnt", "cc_has_records", "bureau_has_bbal"):
+                if df[col].isna().any():
+                    df = df.assign(**{col: df[col].fillna(_NAN_SENTINEL)})
 
     # --- drop columns with > 60 % missing -----------------------------------
     n_rows = len(df)
