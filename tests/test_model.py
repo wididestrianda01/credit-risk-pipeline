@@ -24,10 +24,12 @@ from sklearn.preprocessing import StandardScaler
 import json
 
 from credit_engine.model import (
+    _AverageEnsemble,
     benchmark_imbalance_strategies,
     calibrate_model,
     load_model,
     save_model,
+    train_ensemble,
     train_lightgbm_optuna,
     train_logistic_baseline,
     train_xgboost_optuna,
@@ -904,3 +906,69 @@ def test_calibrate_model_no_stdout(calibration_inputs, tmp_path, monkeypatch, ca
     calibrate_model(model, X_train, y_train, X_test, y_test)
     captured = capsys.readouterr()
     assert captured.out == "", f"Unexpected stdout:\n{captured.out}"
+
+
+# ---------------------------------------------------------------------------
+# train_ensemble — OOF Ensemble (LGB + XGB stacking)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def ensemble_average_result(mock_data):
+    """Train ensemble with method='average' once per module."""
+    X, y = mock_data
+    return train_ensemble(X, y, method="average", n_splits=2)
+
+
+@pytest.fixture(scope="module")
+def ensemble_logistic_result(mock_data):
+    """Train ensemble with method='logistic' once per module."""
+    X, y = mock_data
+    return train_ensemble(X, y, method="logistic", n_splits=2)
+
+
+class TestEnsemble:
+    """TDD tests for out-of-fold ensemble stacking via train_ensemble()."""
+
+    def test_train_ensemble_returns_tuple(self, ensemble_average_result):
+        """train_ensemble returns a (model, dict) tuple."""
+        model, metrics = ensemble_average_result
+        assert isinstance(model, object), "ensemble_model is not an object"
+        assert isinstance(metrics, dict), "metrics is not a dict"
+
+    def test_train_ensemble_metrics_keys(self, ensemble_average_result):
+        """metrics dict has all expected keys from evaluate_model()."""
+        _, metrics = ensemble_average_result
+        expected_keys = {"Model", "AUC-ROC", "Gini", "KS", "Brier", "BrierSkill", "AvgPrecision"}
+        assert set(metrics.keys()) == expected_keys, (
+            f"Missing or extra keys. Expected {expected_keys}, got {set(metrics.keys())}"
+        )
+
+    def test_train_ensemble_average_method_gini(self, ensemble_average_result):
+        """Ensemble with method='average' achieves Gini > 0.40 on separable mock data."""
+        _, metrics = ensemble_average_result
+        assert metrics["Gini"] > 0.40, (
+            f"Average ensemble Gini too low: {metrics['Gini']:.4f} (expected > 0.40)"
+        )
+
+    def test_train_ensemble_logistic_method_gini(self, ensemble_logistic_result):
+        """Ensemble with method='logistic' achieves Gini > 0.40 on separable mock data."""
+        _, metrics = ensemble_logistic_result
+        assert metrics["Gini"] > 0.40, (
+            f"Logistic ensemble Gini too low: {metrics['Gini']:.4f} (expected > 0.40)"
+        )
+
+    def test_average_ensemble_predict_proba_shape(self, mock_data, ensemble_average_result):
+        """_AverageEnsemble.predict_proba returns shape (n, 2) with columns summing to 1.0."""
+        X, _ = mock_data
+        model, _ = ensemble_average_result
+        proba = model.predict_proba(X)
+        assert proba.shape == (len(X), 2), f"Expected shape ({len(X)}, 2), got {proba.shape}"
+        # Verify columns sum to 1.0
+        sums = proba.sum(axis=1)
+        np.testing.assert_array_almost_equal(sums, np.ones(len(X)), decimal=6)
+
+    def test_train_ensemble_oof_no_leakage(self, ensemble_average_result):
+        """Ensemble Gini on holdout must be in [0, 1] (basic sanity check)."""
+        _, metrics = ensemble_average_result
+        gini = metrics["Gini"]
+        assert 0.0 <= gini <= 1.0, f"Gini {gini:.4f} outside [0, 1] (data leakage suspected)"

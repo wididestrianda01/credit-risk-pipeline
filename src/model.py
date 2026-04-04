@@ -14,6 +14,7 @@ Supported estimators
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import joblib
 import numpy as np
@@ -140,6 +141,73 @@ _STRATEGY_SMOTE: str = "SMOTE"
 _STRATEGY_COST_SENSITIVE: str = "Cost-Sensitive"
 _STRATEGY_THRESHOLD_TUNED: str = "Threshold-Tuned"
 _STRATEGY_HYBRID: str = "SMOTE+Cost-Sensitive"
+
+# OOF Ensemble defaults — fast, sensible hyperparameters for blending
+# Reduced from 200 to 100 estimators for faster unit testing
+_ENSEMBLE_LGB_DEFAULTS: dict = {
+    "n_estimators": 100,
+    "num_leaves": 31,
+    "learning_rate": 0.1,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "random_state": 42,
+    "verbosity": -1,
+    "is_unbalance": True,
+}
+_ENSEMBLE_XGB_DEFAULTS: dict = {
+    "n_estimators": 100,
+    "max_depth": 5,
+    "learning_rate": 0.1,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "random_state": 42,
+    "eval_metric": "auc",
+}
+
+
+# ---------------------------------------------------------------------------
+# _AverageEnsemble — simple probability average of two base models
+# ---------------------------------------------------------------------------
+
+class _AverageEnsemble:
+    """
+    Simple probability average of two fitted estimators.
+
+    Used when method='average' in train_ensemble; takes the mean of
+    LightGBM and XGBoost predicted probabilities for the positive class.
+
+    Parameters
+    ----------
+    lgb_model : object
+        Fitted LightGBM model with predict_proba method.
+    xgb_model : object
+        Fitted XGBoost model with predict_proba method.
+    """
+
+    def __init__(self, lgb_model: object, xgb_model: object):
+        """Initialize with pre-fitted base models."""
+        self.lgb_model = lgb_model
+        self.xgb_model = xgb_model
+
+    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        """
+        Predict class probabilities via simple averaging.
+
+        Parameters
+        ----------
+        X : pd.DataFrame
+            Feature matrix.
+
+        Returns
+        -------
+        proba : np.ndarray
+            Shape (n_samples, 2) with columns [P(y=0), P(y=1)].
+            Each row sums to 1.0.
+        """
+        p_lgb = self.lgb_model.predict_proba(X)[:, 1]
+        p_xgb = self.xgb_model.predict_proba(X)[:, 1]
+        avg = (p_lgb + p_xgb) / 2.0
+        return np.column_stack([1 - avg, avg])
 
 
 # ---------------------------------------------------------------------------
@@ -1141,6 +1209,201 @@ def calibrate_model(
     save_model(calibrated_model, _CALIBRATED_MODEL_PATH)
 
     return calibrated_model, brier_uncal, brier_cal
+
+
+# ---------------------------------------------------------------------------
+# train_ensemble — OOF Stacking (LightGBM + XGBoost)
+# ---------------------------------------------------------------------------
+
+def train_ensemble(
+    X: pd.DataFrame,
+    y: pd.Series,
+    lgb_params: dict | None = None,
+    xgb_params: dict | None = None,
+    n_splits: int = 5,
+    method: Literal["average", "logistic"] = "average",
+    seed: int = _RANDOM_STATE,
+) -> tuple[object, dict]:
+    """
+    Blend LightGBM + XGBoost via out-of-fold (OOF) stacking.
+
+    Trains two base models (LightGBM, XGBoost) on stratified k-fold CV folds.
+    Out-of-fold predictions serve as features for a meta-learner (either
+    simple averaging or logistic regression). No data leakage: each base
+    model predicts only on rows it never trained on.
+
+    Parameters
+    ----------
+    X : pd.DataFrame
+        Feature matrix.
+    y : pd.Series
+        Binary target labels.
+    lgb_params : dict, optional
+        LightGBM hyperparameters. If None, uses _ENSEMBLE_LGB_DEFAULTS.
+    xgb_params : dict, optional
+        XGBoost hyperparameters. If None, uses _ENSEMBLE_XGB_DEFAULTS.
+        Note: scale_pos_weight is computed and added automatically.
+    n_splits : int, default=5
+        Number of stratified k-folds for OOF generation.
+    method : {'average', 'logistic'}, default='average'
+        Meta-learner type:
+        - 'average': simple probability average of the two base models
+        - 'logistic': logistic regression trained on OOF features [oof_lgb, oof_xgb]
+    seed : int, default=42
+        Random state for reproducibility.
+
+    Returns
+    -------
+    ensemble_model : object
+        - For method='average': _AverageEnsemble with lgb_final, xgb_final
+        - For method='logistic': _LogisticEnsemble wrapping lgb_final, xgb_final, meta_lr
+    metrics : dict
+        Evaluation dict from evaluate_model() on holdout (20% test set):
+        Keys: {'Model', 'AUC-ROC', 'Gini', 'KS', 'Brier', 'BrierSkill', 'AvgPrecision'}
+
+    Notes
+    -----
+    Algorithm:
+    1. Split X/y into 80% train (OOF) / 20% holdout via train_test_split with stratify=y
+    2. On the 80% train portion, run n_splits-fold stratified CV:
+       - Each fold: train LightGBM on fold training data, XGBoost on same training data
+       - Collect OOF predictions: oof_lgb[val_idx], oof_xgb[val_idx]
+    3a. If method='average': final models are lgb_final, xgb_final trained on full 80% train
+    3b. If method='logistic': fit LogisticRegression on np.column_stack([oof_lgb, oof_xgb]) → y_train
+    4. Evaluate on the 20% holdout set
+    5. Return (ensemble_model, metrics)
+
+    Data leakage prevention:
+    - Base models fit only on their training folds (never on validation)
+    - OOF predictions are withheld for fold validation folds
+    - Holdout set (20%) never seen by any model during training or meta-learning
+    - scale_pos_weight computed only on training data
+    """
+    import lightgbm as lgb
+    import xgboost as xgb
+
+    # --- Use defaults if params not provided ---
+    if lgb_params is None:
+        lgb_params = _ENSEMBLE_LGB_DEFAULTS.copy()
+    if xgb_params is None:
+        xgb_params = _ENSEMBLE_XGB_DEFAULTS.copy()
+
+    # --- Train / holdout split (80 / 20) ---
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y,
+        test_size=_TEST_SIZE,
+        stratify=y,
+        random_state=seed,
+    )
+
+    n_train = len(X_train)
+
+    # --- Initialize OOF arrays (for training set only) ---
+    oof_lgb = np.zeros(n_train)
+    oof_xgb = np.zeros(n_train)
+
+    # --- Stratified k-fold CV on the training set ---
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+
+    for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X_train, y_train)):
+        X_fold_train = X_train.iloc[train_idx]
+        y_fold_train = y_train.iloc[train_idx]
+        X_fold_val = X_train.iloc[val_idx]
+
+        # --- Fit LightGBM on fold training data ---
+        lgb_fold = lgb.LGBMClassifier(**lgb_params)
+        lgb_fold.fit(X_fold_train, y_fold_train)
+        oof_lgb[val_idx] = lgb_fold.predict_proba(X_fold_val)[:, 1]
+
+        # --- Fit XGBoost on fold training data ---
+        # Compute scale_pos_weight from fold training labels
+        n_neg = (y_fold_train == 0).sum()
+        n_pos = (y_fold_train == 1).sum()
+        scale_pos_weight = float(n_neg) / float(n_pos) if n_pos > 0 else 1.0
+
+        xgb_params_fold = xgb_params.copy()
+        xgb_params_fold["scale_pos_weight"] = scale_pos_weight
+
+        xgb_fold = xgb.XGBClassifier(**xgb_params_fold)
+        xgb_fold.fit(X_fold_train, y_fold_train)
+        oof_xgb[val_idx] = xgb_fold.predict_proba(X_fold_val)[:, 1]
+
+    # --- Train final base models on full training set ---
+    n_neg_train = (y_train == 0).sum()
+    n_pos_train = (y_train == 1).sum()
+    scale_pos_weight_train = float(n_neg_train) / float(n_pos_train) if n_pos_train > 0 else 1.0
+
+    lgb_final = lgb.LGBMClassifier(**lgb_params)
+    lgb_final.fit(X_train, y_train)
+
+    xgb_params_final = xgb_params.copy()
+    xgb_params_final["scale_pos_weight"] = scale_pos_weight_train
+    xgb_final = xgb.XGBClassifier(**xgb_params_final)
+    xgb_final.fit(X_train, y_train)
+
+    # --- Create ensemble model ---
+    if method == "average":
+        ensemble_model = _AverageEnsemble(lgb_final, xgb_final)
+    elif method == "logistic":
+        # Meta-learner: logistic regression on OOF features
+        X_meta = np.column_stack([oof_lgb, oof_xgb])
+        meta_lr = LogisticRegression(C=1.0, max_iter=1000, random_state=seed)
+        meta_lr.fit(X_meta, y_train)
+
+        # Wrap all three components (base models + meta) in a wrapper object
+        ensemble_model = _LogisticEnsemble(lgb_final, xgb_final, meta_lr)
+    else:
+        raise ValueError(f"method must be 'average' or 'logistic', got '{method}'")
+
+    # --- Evaluate on holdout set ---
+    metrics = evaluate_model(ensemble_model, X_test, y_test, f"Ensemble ({method})")
+
+    return ensemble_model, metrics
+
+
+class _LogisticEnsemble:
+    """
+    Stacked ensemble with logistic meta-learner.
+
+    Base models (LightGBM, XGBoost) generate OOF features that feed
+    a logistic regression meta-model. This allows the meta-model to
+    learn optimal weighting of base predictions.
+
+    Parameters
+    ----------
+    lgb_model : object
+        Fitted LightGBM model.
+    xgb_model : object
+        Fitted XGBoost model.
+    meta_lr : LogisticRegression
+        Fitted logistic regression on OOF features [oof_lgb, oof_xgb].
+    """
+
+    def __init__(self, lgb_model: object, xgb_model: object, meta_lr: LogisticRegression):
+        """Initialize with pre-fitted base models and meta-learner."""
+        self.lgb_model = lgb_model
+        self.xgb_model = xgb_model
+        self.meta_lr = meta_lr
+
+    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        """
+        Predict class probabilities via stacked logistic meta-learner.
+
+        Parameters
+        ----------
+        X : pd.DataFrame
+            Feature matrix.
+
+        Returns
+        -------
+        proba : np.ndarray
+            Shape (n_samples, 2) with columns [P(y=0), P(y=1)].
+            Each row sums to 1.0.
+        """
+        p_lgb = self.lgb_model.predict_proba(X)[:, 1]
+        p_xgb = self.xgb_model.predict_proba(X)[:, 1]
+        X_meta = np.column_stack([p_lgb, p_xgb])
+        return self.meta_lr.predict_proba(X_meta)
 
 
 # ---------------------------------------------------------------------------
