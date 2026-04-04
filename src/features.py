@@ -216,6 +216,114 @@ def _engineer_ext_source(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 
+def engineer_secondary_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Derive ratio and flag features from secondary table aggregates.
+
+    These features are computed from columns already aggregated by
+    data_loader.py (bureau_, prev_, pos_, inst_, cc_ prefixes).
+    They add interaction/ratio signal that univariate IV filtering misses.
+
+    All divisions are guarded: if the denominator is 0 the ratio is set to 0.
+    Residual inf values are replaced with 0. Remaining NaN is filled with
+    _NAN_SENTINEL.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame containing secondary table aggregate columns.
+
+    Returns
+    -------
+    pd.DataFrame
+        New DataFrame with all input columns plus derived secondary features.
+        No input columns are modified. NaN → _NAN_SENTINEL. inf → 0.
+
+    Features added (if input columns exist):
+    - prev_approval_rate: prev_approved_cnt / max(prev_cnt, 1)
+    - inst_pct_late: inst_late_cnt / max(inst_cnt, 1)
+    - bureau_debt_ratio: bureau_credit_debt_sum / max(bureau_credit_sum, 1e-6)
+    - cc_overdue_flag: (cc_sk_dpd_max > 0).astype(float) [0 if missing]
+    - pos_overdue_flag: (pos_sk_dpd_max > 0).astype(float)
+    - prev_credit_income_ratio: prev_amt_credit_mean / max(AMT_INCOME_TOTAL, 1), clipped to [0, 100]
+    """
+    out = df.copy()
+
+    # 1. prev_approval_rate: approval history
+    if "prev_cnt" in out.columns and "prev_approved_cnt" in out.columns:
+        prev_cnt = out["prev_cnt"].to_numpy(dtype=float)
+        prev_approved = out["prev_approved_cnt"].to_numpy(dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            out["prev_approval_rate"] = np.where(
+                prev_cnt > 0, prev_approved / prev_cnt, 0.0
+            )
+        out["prev_approval_rate"] = (
+            out["prev_approval_rate"]
+            .replace([np.inf, -np.inf], 0.0)
+            .fillna(_NAN_SENTINEL)
+        )
+
+    # 2. inst_pct_late: fraction of late payments
+    if "inst_cnt" in out.columns and "inst_late_cnt" in out.columns:
+        inst_cnt = out["inst_cnt"].to_numpy(dtype=float)
+        inst_late = out["inst_late_cnt"].to_numpy(dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            out["inst_pct_late"] = np.where(inst_cnt > 0, inst_late / inst_cnt, 0.0)
+        out["inst_pct_late"] = (
+            out["inst_pct_late"]
+            .replace([np.inf, -np.inf], 0.0)
+            .fillna(_NAN_SENTINEL)
+        )
+
+    # 3. bureau_debt_ratio: bureau leverage
+    if "bureau_credit_sum" in out.columns and "bureau_credit_debt_sum" in out.columns:
+        bureau_sum = out["bureau_credit_sum"].to_numpy(dtype=float)
+        bureau_debt = out["bureau_credit_debt_sum"].to_numpy(dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            out["bureau_debt_ratio"] = np.where(
+                bureau_sum > 1e-6, bureau_debt / bureau_sum, 0.0
+            )
+        out["bureau_debt_ratio"] = (
+            out["bureau_debt_ratio"]
+            .replace([np.inf, -np.inf], 0.0)
+            .fillna(_NAN_SENTINEL)
+        )
+
+    # 4. cc_overdue_flag: any credit card overdue
+    if "cc_sk_dpd_max" in out.columns:
+        cc_dpd = out["cc_sk_dpd_max"].fillna(_NAN_SENTINEL)
+        # If sentinel, treat as no overdue; otherwise check if > 0
+        out["cc_overdue_flag"] = (cc_dpd > 0).astype(np.float64)
+        out["cc_overdue_flag"] = out["cc_overdue_flag"].fillna(0.0)
+
+    # 5. pos_overdue_flag: any POS overdue
+    if "pos_sk_dpd_max" in out.columns:
+        pos_dpd = out["pos_sk_dpd_max"].fillna(_NAN_SENTINEL)
+        out["pos_overdue_flag"] = (pos_dpd > 0).astype(np.float64)
+        out["pos_overdue_flag"] = out["pos_overdue_flag"].fillna(0.0)
+
+    # 6. prev_credit_income_ratio: prior loan size vs current income
+    if (
+        "prev_amt_credit_mean" in out.columns
+        and "AMT_INCOME_TOTAL" in out.columns
+    ):
+        prev_credit = out["prev_amt_credit_mean"].to_numpy(dtype=float)
+        income = out["AMT_INCOME_TOTAL"].to_numpy(dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            out["prev_credit_income_ratio"] = np.where(
+                income > 0, prev_credit / income, 0.0
+            )
+        # Clip to [0, 100] to handle outliers
+        out["prev_credit_income_ratio"] = (
+            out["prev_credit_income_ratio"]
+            .replace([np.inf, -np.inf], 0.0)
+            .clip(lower=0, upper=100)
+            .fillna(_NAN_SENTINEL)
+        )
+
+    return out
+
+
 def engineer_application_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     Add domain-engineered features derived from the application table.
@@ -936,6 +1044,7 @@ def build_raw_feature_store(
     This is better for gradient boosting which benefits from continuous distributions.
     """
     X_eng = engineer_application_features(X) if "AMT_CREDIT" in X.columns else X.copy()
+    X_eng = engineer_secondary_features(X_eng)
     print(f"Raw features: {X_eng.shape[1]}")
 
     # Replace inf/nan sentinel
@@ -1028,6 +1137,7 @@ def apply_raw_feature_store(
     Feature selection is determined at training time only.
     """
     X_eng = engineer_application_features(X) if "AMT_CREDIT" in X.columns else X.copy()
+    X_eng = engineer_secondary_features(X_eng)
 
     # Replace inf/nan with sentinel
     X_filled = X_eng.copy()
