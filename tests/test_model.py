@@ -25,6 +25,7 @@ import json
 
 from credit_engine.model import (
     benchmark_imbalance_strategies,
+    calibrate_model,
     load_model,
     save_model,
     train_lightgbm_optuna,
@@ -752,5 +753,154 @@ def test_train_lightgbm_optuna_no_stdout(mock_data, capsys):
     """Library function must not write to stdout (no print() calls)."""
     X, y = mock_data
     train_lightgbm_optuna(X, y, n_trials=2)
+    captured = capsys.readouterr()
+    assert captured.out == "", f"Unexpected stdout:\n{captured.out}"
+
+
+# ---------------------------------------------------------------------------
+# calibrate_model — TDD tests (written RED before implementation)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def calibration_inputs(lgb_optuna_result) -> tuple:
+    """
+    Provide a fitted LightGBM model + matching train/test splits for calibration.
+
+    Module scope: calibration only runs once even though multiple tests consume
+    this fixture. The underlying lgb_optuna_result is also module-scoped, so no
+    extra model training occurs.
+    """
+    model, _, X_test, y_test, _ = lgb_optuna_result
+
+    # Reconstruct a small train split consistent with the mock data used in
+    # lgb_optuna_result (same RNG seed) so the feature columns align.
+    rng = np.random.default_rng(42)
+    n = 500
+    n_pos = int(n * 0.08)
+    y_arr = np.zeros(n, dtype=int)
+    y_arr[:n_pos] = 1
+    rng.shuffle(y_arr)
+    X_all = pd.DataFrame({
+        "f1": np.where(y_arr == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
+        "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
+    })
+    from sklearn.model_selection import train_test_split as tts
+    X_train, _, y_train, _ = tts(
+        X_all, pd.Series(y_arr, name="TARGET"),
+        test_size=0.2, stratify=y_arr, random_state=42
+    )
+    return model, X_train, y_train, X_test, y_test
+
+
+@pytest.fixture(scope="module")
+def calibration_result(calibration_inputs, tmp_path_factory):
+    """
+    Run calibrate_model once per module and return the 3-tuple result.
+
+    tmp_path_factory provides a module-scoped temp directory, unlike
+    tmp_path which is function-scoped and incompatible with module fixtures.
+    """
+    import credit_engine.model as model_module
+
+    tmp = tmp_path_factory.mktemp("calibration")
+    model_module._CALIBRATED_MODEL_PATH = str(tmp / "lgb_calibrated.pkl")
+    model_module._CALIBRATION_FIGURE_PATH = str(tmp / "calibration_reliability.png")
+
+    model, X_train, y_train, X_test, y_test = calibration_inputs
+    return calibrate_model(model, X_train, y_train, X_test, y_test)
+
+
+# --- Return structure ---
+
+def test_calibrate_model_returns_3_tuple(calibration_result):
+    """calibrate_model returns (calibrated_model, brier_uncal, brier_cal)."""
+    assert len(calibration_result) == 3
+
+
+def test_calibrate_model_return_types(calibration_result):
+    """Types: (object with predict_proba, float, float)."""
+    cal_model, brier_uncal, brier_cal = calibration_result
+    assert hasattr(cal_model, "predict_proba"), "calibrated model must support predict_proba"
+    assert isinstance(brier_uncal, float)
+    assert isinstance(brier_cal, float)
+
+
+def test_calibrate_model_brier_scores_finite(calibration_result):
+    """Both Brier scores are finite positive floats."""
+    _, brier_uncal, brier_cal = calibration_result
+    assert np.isfinite(brier_uncal) and brier_uncal >= 0.0
+    assert np.isfinite(brier_cal) and brier_cal >= 0.0
+
+
+def test_calibrate_model_brier_improves_or_neutral(calibration_result):
+    """Calibration should not meaningfully worsen the Brier score.
+
+    Platt scaling on linearly separable mock data may not produce
+    a large improvement, but it must not increase Brier by more than 0.05
+    (which would indicate a calibration bug, not just a hard dataset).
+    """
+    _, brier_uncal, brier_cal = calibration_result
+    assert brier_cal <= brier_uncal + 0.05, (
+        f"Calibration degraded Brier: {brier_uncal:.4f} → {brier_cal:.4f}"
+    )
+
+
+def test_calibrate_model_predict_proba_in_unit_interval(calibration_result, calibration_inputs):
+    """Calibrated probabilities are in [0, 1] for all test samples."""
+    cal_model, _, _ = calibration_result
+    _, _, _, X_test, _ = calibration_inputs
+    y_prob = cal_model.predict_proba(X_test)[:, 1]
+    assert np.all(y_prob >= 0.0) and np.all(y_prob <= 1.0)
+
+
+def test_calibrate_model_probabilities_sum_to_one(calibration_result, calibration_inputs):
+    """predict_proba columns sum to 1 for every sample."""
+    cal_model, _, _ = calibration_result
+    _, _, _, X_test, _ = calibration_inputs
+    proba = cal_model.predict_proba(X_test)
+    np.testing.assert_allclose(proba.sum(axis=1), 1.0, atol=1e-6)
+
+
+# --- Artifact persistence ---
+
+def test_calibrate_model_saves_file(calibration_inputs, tmp_path, monkeypatch):
+    """calibrate_model saves a pickle file at the configured path."""
+    import credit_engine.model as model_module
+
+    out_path = tmp_path / "cal.pkl"
+    monkeypatch.setattr(model_module, "_CALIBRATED_MODEL_PATH", str(out_path))
+    monkeypatch.setattr(model_module, "_CALIBRATION_FIGURE_PATH", str(tmp_path / "fig.png"))
+
+    model, X_train, y_train, X_test, y_test = calibration_inputs
+    calibrate_model(model, X_train, y_train, X_test, y_test)
+    assert out_path.exists(), "Calibrated model file not written"
+
+
+def test_calibrate_model_saved_file_is_loadable(calibration_inputs, tmp_path, monkeypatch):
+    """Saved calibrated model round-trips via joblib and predicts correctly."""
+    import credit_engine.model as model_module
+
+    out_path = tmp_path / "cal.pkl"
+    monkeypatch.setattr(model_module, "_CALIBRATED_MODEL_PATH", str(out_path))
+    monkeypatch.setattr(model_module, "_CALIBRATION_FIGURE_PATH", str(tmp_path / "fig.png"))
+
+    model, X_train, y_train, X_test, y_test = calibration_inputs
+    cal_model, _, _ = calibrate_model(model, X_train, y_train, X_test, y_test)
+    loaded = load_model(out_path)
+    np.testing.assert_array_almost_equal(
+        cal_model.predict_proba(X_test),
+        loaded.predict_proba(X_test),
+    )
+
+
+def test_calibrate_model_no_stdout(calibration_inputs, tmp_path, monkeypatch, capsys):
+    """calibrate_model must not write to stdout."""
+    import credit_engine.model as model_module
+
+    monkeypatch.setattr(model_module, "_CALIBRATED_MODEL_PATH", str(tmp_path / "cal.pkl"))
+    monkeypatch.setattr(model_module, "_CALIBRATION_FIGURE_PATH", str(tmp_path / "fig.png"))
+
+    model, X_train, y_train, X_test, y_test = calibration_inputs
+    calibrate_model(model, X_train, y_train, X_test, y_test)
     captured = capsys.readouterr()
     assert captured.out == "", f"Unexpected stdout:\n{captured.out}"

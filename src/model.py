@@ -126,6 +126,14 @@ _LGB_OPTUNA_FIGURE_PATH: str = "reports/figures/lightgbm_roc_pr.png"
 # Output path for the imbalance benchmark comparison table
 _BENCHMARK_REPORT_PATH: str = "reports/imbalance_benchmark.csv"
 
+# Probability calibration constants
+# 70/30 train/calibration split: enough calibration data to fit Platt sigmoid
+# without starving the base model of training signal.
+_CALIB_SPLIT: float = 0.3
+_CALIBRATED_MODEL_PATH: str = "models/lightgbm_calibrated.pkl"
+_CALIBRATION_FIGURE_PATH: str = "reports/figures/calibration_reliability.png"
+_CALIBRATION_N_BINS: int = 20
+
 # Strategy labels — kept as module constants so downstream tasks can reference
 # them by name (e.g., Task 3.4 picks the winner from this table).
 _STRATEGY_SMOTE: str = "SMOTE"
@@ -1006,6 +1014,133 @@ def train_lightgbm_optuna(
         _json.dump(best_params, fh, indent=2)
 
     return final_model, metrics_dict, X_test, y_test, best_params
+
+
+# ---------------------------------------------------------------------------
+# Probability calibration
+# ---------------------------------------------------------------------------
+
+def calibrate_model(
+    model: object,
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    X_test: pd.DataFrame,
+    y_test: pd.Series,
+    method: str = "sigmoid",
+) -> tuple[object, float, float]:
+    """
+    Calibrate probability predictions using Platt scaling or isotonic regression.
+
+    Tree ensembles (LightGBM, XGBoost) tend to output "compressed" probabilities
+    that cluster near 0.5 instead of spreading toward 0 and 1. This is because
+    each leaf reports the empirical default rate in that leaf, and ensembling
+    averages these rates — reducing extreme outputs. A miscalibrated PD directly
+    inflates or deflates EL = PD × LGD × EAD, causing systematic mispricing.
+
+    Calibration procedure:
+    1. Split X_train 70/30 → X_model (not re-used, model already fitted) /
+       X_calib (held out for fitting the calibrator only).
+    2. Wrap the pre-fitted model with CalibratedClassifierCV(cv="prefit").
+    3. Fit the calibrator on X_calib / y_calib.
+    4. Evaluate Brier score before and after on X_test.
+    5. Plot a reliability diagram: perfect calibration = diagonal.
+
+    ``cv="prefit"`` tells sklearn the base estimator is already fitted;
+    only the Platt sigmoid / isotonic layer trains on the calibration split.
+
+    Parameters
+    ----------
+    model : object
+        A fitted sklearn-compatible classifier with ``predict_proba``.
+        Typically the LightGBM model from ``train_lightgbm_optuna``.
+    X_train : pd.DataFrame
+        Training feature matrix. Split 70/30 internally — 70% is unused
+        (model already fitted), 30% trains the calibration layer.
+    y_train : pd.Series
+        Training labels aligned with X_train.
+    X_test : pd.DataFrame
+        Held-out test features for Brier score evaluation.
+    y_test : pd.Series
+        Held-out test labels.
+    method : str, optional
+        ``'sigmoid'`` (Platt scaling, default) or ``'isotonic'`` (nonparametric,
+        may overfit on small calibration sets).
+
+    Returns
+    -------
+    calibrated_model : CalibratedClassifierCV
+        Fitted calibrated wrapper. Supports ``predict_proba``.
+    brier_uncal : float
+        Brier score of the original (uncalibrated) model on X_test.
+    brier_cal : float
+        Brier score of the calibrated model on X_test. Lower is better.
+
+    Notes
+    -----
+    Artefacts written to disk:
+    - ``models/lightgbm_calibrated.pkl``               — joblib-serialised calibrated model
+    - ``reports/figures/calibration_reliability.png``  — reliability diagram
+    """
+    import matplotlib.pyplot as plt
+    from sklearn.calibration import CalibratedClassifierCV, calibration_curve
+    from sklearn.frozen import FrozenEstimator
+    from sklearn.metrics import brier_score_loss
+
+    # --- Calibration split (holdout for fitting the Platt layer) ---
+    _, X_calib, _, y_calib = train_test_split(
+        X_train, y_train,
+        test_size=_CALIB_SPLIT,
+        stratify=y_train,
+        random_state=_RANDOM_STATE,
+    )
+
+    # --- Wrap pre-fitted model and fit only the calibration layer ---
+    # FrozenEstimator signals that the base model must not be re-fitted;
+    # only the Platt sigmoid / isotonic layer trains on X_calib.
+    calibrated_model = CalibratedClassifierCV(FrozenEstimator(model), method=method)
+    calibrated_model.fit(X_calib, y_calib)
+
+    # --- Brier scores on held-out test set ---
+    y_prob_uncal = model.predict_proba(X_test)[:, 1]
+    y_prob_cal = calibrated_model.predict_proba(X_test)[:, 1]
+
+    brier_uncal = float(brier_score_loss(y_test, y_prob_uncal))
+    brier_cal = float(brier_score_loss(y_test, y_prob_cal))
+
+    # --- Reliability diagram ---
+    fig, ax = plt.subplots(figsize=(7, 6))
+
+    # Perfect calibration reference line
+    ax.plot([0, 1], [0, 1], linestyle="--", color="grey", label="Perfect calibration")
+
+    # Uncalibrated curve
+    prob_true_uncal, prob_pred_uncal = calibration_curve(
+        y_test, y_prob_uncal, n_bins=_CALIBRATION_N_BINS
+    )
+    ax.plot(prob_pred_uncal, prob_true_uncal, marker="o", label=f"Uncalibrated (Brier={brier_uncal:.4f})")
+
+    # Calibrated curve
+    prob_true_cal, prob_pred_cal = calibration_curve(
+        y_test, y_prob_cal, n_bins=_CALIBRATION_N_BINS
+    )
+    ax.plot(prob_pred_cal, prob_true_cal, marker="s", label=f"Calibrated ({method}) (Brier={brier_cal:.4f})")
+
+    ax.set_xlabel("Mean predicted probability")
+    ax.set_ylabel("Fraction of positives")
+    ax.set_title("Reliability Diagram — LightGBM Probability Calibration")
+    ax.legend(loc="upper left")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+
+    fig_path = Path(_CALIBRATION_FIGURE_PATH)
+    fig_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(fig_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    # --- Persist calibrated model ---
+    save_model(calibrated_model, _CALIBRATED_MODEL_PATH)
+
+    return calibrated_model, brier_uncal, brier_cal
 
 
 # ---------------------------------------------------------------------------
