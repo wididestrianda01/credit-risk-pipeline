@@ -14,8 +14,10 @@ import pytest
 
 from credit_engine.features import (
     apply_feature_store,
+    apply_raw_feature_store,
     build_feature_store,
     build_features,
+    build_raw_feature_store,
     compute_woe_iv,
     engineer_application_features,
     select_features_by_iv,
@@ -629,3 +631,122 @@ def test_apply_feature_store_matches_train(feature_store_data):
     assert not X_test_out.isna().any().any(), (
         "apply_feature_store must not produce NaN on held-out data"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase A — Raw feature store (TDD: RED phase)
+# ---------------------------------------------------------------------------
+
+
+def test_build_raw_feature_store_returns_correct_types(feature_store_data):
+    """build_raw_feature_store must return a tuple of (DataFrame, list)."""
+    X, y = feature_store_data
+    result = build_raw_feature_store(X, y)
+
+    assert isinstance(result, tuple), "Result must be a tuple"
+    assert len(result) == 2, "Result tuple must have exactly 2 elements"
+    X_out, feature_cols = result
+    assert isinstance(X_out, pd.DataFrame), "First element must be a DataFrame"
+    assert isinstance(feature_cols, list), "Second element must be a list"
+
+
+def test_build_raw_feature_store_no_woe_values(feature_store_data):
+    """
+    Output values must be raw floats (continuous), NOT discrete WoE integers.
+    Each column should have a standard deviation > 0, and include real float values.
+    """
+    X, y = feature_store_data
+    X_out, _ = build_raw_feature_store(X, y)
+
+    for col in X_out.columns:
+        std = X_out[col].std()
+        assert std > 0, f"Column {col} is constant (std={std}), should have variance"
+
+        # Check that values are NOT just a few discrete integers (WoE would be)
+        unique_count = X_out[col].nunique()
+        assert unique_count > 1, f"Column {col} has only {unique_count} unique value(s)"
+
+
+def test_build_raw_feature_store_sentinel_fills_nan(application_fixture):
+    """If input has NaN, output must replace with -999, not leave NaN."""
+    # Create a simple target with ~10% positives
+    y = pd.Series([0] * 60 + [1] * 10, dtype=int)
+    X = application_fixture.copy()
+
+    # Artificially add NaN to a feature column (use .loc to avoid SettingWithCopyWarning)
+    X.loc[0, 'AMT_CREDIT'] = np.nan
+
+    X_out, _ = build_raw_feature_store(X, y)
+
+    # Check that no NaN remains in the output
+    assert not X_out.isna().any().any(), (
+        "build_raw_feature_store must fill all NaN with -999 sentinel"
+    )
+
+
+def test_build_raw_feature_store_iv_filter_applied(feature_store_data):
+    """Output must have fewer columns than input due to IV filtering."""
+    X, y = feature_store_data
+
+    X_out, _ = build_raw_feature_store(X, y)
+
+    # IV filter should remove low-signal features (constant and noise)
+    assert X_out.shape[1] < X.shape[1], (
+        f"IV filter should reduce column count: got {X_out.shape[1]} from {X.shape[1]}"
+    )
+
+
+def test_build_raw_feature_store_no_inf_values(feature_store_data):
+    """Output must contain no inf or -inf values."""
+    X, y = feature_store_data
+    X_out, _ = build_raw_feature_store(X, y)
+
+    # Check for inf and -inf
+    assert not np.isinf(X_out.values).any(), (
+        "build_raw_feature_store must replace inf with -999 sentinel"
+    )
+
+
+def test_apply_raw_feature_store_selects_correct_columns(feature_store_data):
+    """Output must have exactly the columns from feature_columns, in the right order."""
+    X, y = feature_store_data
+    _, feature_cols = build_raw_feature_store(X, y)
+
+    # Create new test data
+    X_test = pd.DataFrame(
+        {col: np.random.randn(20) for col in feature_cols}
+    )
+
+    X_out = apply_raw_feature_store(X_test, feature_cols)
+
+    assert list(X_out.columns) == feature_cols, (
+        "apply_raw_feature_store must return columns in exact order"
+    )
+    assert X_out.shape[1] == len(feature_cols), (
+        "apply_raw_feature_store must have exactly the specified columns"
+    )
+
+
+def test_apply_raw_feature_store_handles_missing_columns(feature_store_data):
+    """If a column from feature_columns is missing in input, it must be filled with -999."""
+    X, y = feature_store_data
+    _, feature_cols = build_raw_feature_store(X, y)
+
+    # Create test data with only the first half of required columns
+    X_test = pd.DataFrame(
+        {col: np.random.randn(20) for col in feature_cols[:len(feature_cols)//2]}
+    )
+
+    X_out = apply_raw_feature_store(X_test, feature_cols)
+
+    # Check that all required columns are present
+    assert set(X_out.columns) == set(feature_cols), (
+        "apply_raw_feature_store must include all feature_columns"
+    )
+
+    # Check that missing columns are filled with -999
+    for col in feature_cols:
+        if col not in X_test.columns:
+            assert (X_out[col] == -999.0).all(), (
+                f"Missing column {col} must be filled with -999 sentinel"
+            )
