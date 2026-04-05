@@ -37,7 +37,7 @@ _AGG_PRIMITIVES = ["mean", "std", "min", "max", "count", "skew", "median"]
 _MAX_DEPTH = 1
 _IV_THRESHOLD = 0.02
 _CORR_THRESHOLD = 0.90
-_N_JOBS = -1
+_N_JOBS = 1
 
 
 def main() -> None:

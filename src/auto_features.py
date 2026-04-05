@@ -290,7 +290,7 @@ def build_featuretools_feature_store(
     iv_threshold: float = 0.02,
     corr_threshold: float = 0.90,
     n_jobs: int = 1,
-) -> tuple[pd.DataFrame, list, list[str]]:
+) -> tuple[pd.DataFrame, list[Any], list[str]]:
     """
     Build automated feature store via featuretools DFS.
 
@@ -304,7 +304,7 @@ def build_featuretools_feature_store(
     y_train : pd.Series
         Target series with index = SK_ID_CURR values (defines train set).
     output_path : Path | str | None, optional
-        If provided, save selected features to this parquet path.
+        If provided, save only the selected-column subset to this parquet path.
     agg_primitives : list[str] | None, optional
         Aggregate primitives passed to DFS (default: mean, std, min, max, count, skew, median).
     max_depth : int, optional
@@ -318,8 +318,8 @@ def build_featuretools_feature_store(
 
     Returns
     -------
-    tuple[pd.DataFrame, list, list[str]]
-        - feature_matrix: All DFS features (selected_cols subset is saved/returned)
+    tuple[pd.DataFrame, list[Any], list[str]]
+        - feature_matrix: Selected-column subset of DFS output (same as parquet)
         - feature_defs: Feature definitions from DFS (for apply function)
         - selected_cols: List of column names passing IV + correlation filters
 
@@ -368,7 +368,7 @@ def build_featuretools_feature_store(
     # Post-process: numeric only, inf -> 0, NaN -> sentinel
     numeric_cols = feature_matrix.select_dtypes(include=["number"]).columns.tolist()
     feature_matrix = feature_matrix[numeric_cols].copy()
-    feature_matrix = feature_matrix.replace([np.inf, -np.inf], 0.0)
+    feature_matrix = feature_matrix.replace([np.inf, -np.inf], _NAN_SENTINEL)
     feature_matrix = feature_matrix.fillna(_NAN_SENTINEL)
 
     # Ensure index name is SK_ID_CURR (DFS preserves application index)
@@ -416,7 +416,7 @@ def build_featuretools_feature_store(
 
 def apply_featuretools_feature_store(
     data_dir: Path | str,
-    feature_defs: list,
+    feature_defs: list[Any],
     selected_cols: list[str],
     mode: str = "test",
     n_jobs: int = 1,
@@ -514,7 +514,7 @@ def apply_featuretools_feature_store(
     # Post-process
     numeric_cols = feature_matrix.select_dtypes(include=["number"]).columns.tolist()
     feature_matrix = feature_matrix[numeric_cols].copy()
-    feature_matrix = feature_matrix.replace([np.inf, -np.inf], 0.0)
+    feature_matrix = feature_matrix.replace([np.inf, -np.inf], _NAN_SENTINEL)
     feature_matrix = feature_matrix.fillna(_NAN_SENTINEL)
 
     # Ensure index name
