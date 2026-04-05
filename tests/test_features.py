@@ -114,11 +114,19 @@ EXPECTED_COLUMNS = [
     "HIGH_RISK_DOC_MISSING",
     "EXT_SOURCE_MEAN",
     "EXT_SOURCE_MIN",
+    "EXT_SOURCE_MAX",
+    "EXT_SOURCE_MEDIAN",
+    "EXT_SOURCE_STD",
+    "EXT_SOURCE_RANGE",
+    "EXT_SOURCE_AVAILABLE_CNT",
+    "EXT_SOURCE_PROD_12",
+    "EXT_SOURCE_PROD_13",
+    "EXT_SOURCE_PROD_23",
 ]
 
 
 def test_engineer_application_features_creates_all_columns(application_fixture):
-    """All 11 expected feature columns must be present in the output."""
+    """All 19 expected feature columns must be present in the output."""
     result = engineer_application_features(application_fixture)
     missing = [c for c in EXPECTED_COLUMNS if c not in result.columns]
     assert missing == [], f"Missing columns: {missing}"
@@ -193,6 +201,60 @@ def test_ext_source_nan_handling(application_fixture):
     assert result.loc[5, "EXT_SOURCE_MIN"] == pytest.approx(0.6), (
         "Single-valid EXT_SOURCE row must return that value as min"
     )
+
+
+def test_ext_source_interactions_present(application_fixture):
+    """EXT_SOURCE interaction features must be present in the output."""
+    result = engineer_application_features(application_fixture)
+    interaction_cols = [
+        "EXT_SOURCE_MAX", "EXT_SOURCE_MEDIAN", "EXT_SOURCE_STD",
+        "EXT_SOURCE_RANGE", "EXT_SOURCE_AVAILABLE_CNT",
+        "EXT_SOURCE_PROD_12", "EXT_SOURCE_PROD_13", "EXT_SOURCE_PROD_23",
+    ]
+    missing = [c for c in interaction_cols if c not in result.columns]
+    assert missing == [], f"Missing EXT_SOURCE interaction columns: {missing}"
+
+
+def test_ext_source_products_correct(application_fixture):
+    """EXT_SOURCE_PROD_12 = EXT_SOURCE_1 * EXT_SOURCE_2 where both valid."""
+    result = engineer_application_features(application_fixture)
+
+    # Row 0: EXT_SOURCE_1=0.6, EXT_SOURCE_2=0.7 → product = 0.42
+    assert result.loc[0, "EXT_SOURCE_PROD_12"] == pytest.approx(0.6 * 0.7, rel=1e-5)
+    # Row 5: EXT_SOURCE_1 is NaN → product should be sentinel -999
+    assert result.loc[5, "EXT_SOURCE_PROD_12"] == pytest.approx(-999.0), (
+        "Product must be sentinel when either factor is NaN"
+    )
+
+
+def test_ext_source_std_all_nan_is_sentinel(application_fixture):
+    """Row where all EXT_SOURCE are NaN must have EXT_SOURCE_STD == -999."""
+    result = engineer_application_features(application_fixture)
+    # Row 4: all NaN
+    assert result.loc[4, "EXT_SOURCE_STD"] == pytest.approx(-999.0)
+
+
+def test_ext_source_available_cnt_no_nan(application_fixture):
+    """EXT_SOURCE_AVAILABLE_CNT must be an integer count in [0, 3] with no NaN."""
+    result = engineer_application_features(application_fixture)
+    col = result["EXT_SOURCE_AVAILABLE_CNT"]
+    assert not col.isna().any()
+    assert col.between(0, 3).all()
+    # Row 4: all three NaN → count = 0
+    assert result.loc[4, "EXT_SOURCE_AVAILABLE_CNT"] == 0.0
+    # Row 5: only EXT_SOURCE_2 valid → count = 1
+    assert result.loc[5, "EXT_SOURCE_AVAILABLE_CNT"] == 1.0
+    # Row 0: all three valid → count = 3
+    assert result.loc[0, "EXT_SOURCE_AVAILABLE_CNT"] == 3.0
+
+
+def test_ext_source_range_non_negative(application_fixture):
+    """EXT_SOURCE_RANGE = max - min must always be >= 0."""
+    result = engineer_application_features(application_fixture)
+    col = result["EXT_SOURCE_RANGE"]
+    # Filter to rows that are not sentinel
+    valid = col[col != -999.0]
+    assert (valid >= 0).all(), "EXT_SOURCE_RANGE must be non-negative"
 
 
 def test_documents_submitted_sum(application_fixture):
@@ -778,11 +840,16 @@ def secondary_fixture() -> pd.DataFrame:
             "bureau_cnt": [5, 3, 0, 2, 4],
             "bureau_credit_sum": [300_000, 150_000, 0, 200_000, 250_000],
             "bureau_credit_debt_sum": [90_000, 45_000, 0, 50_000, 100_000],
+            # Bureau aggregates (extended)
+            "bureau_active_cnt": [2, 1, 0, 1, 3],
+            "bureau_overdue_cnt": [1, 0, 0, 2, 4],
             # Installments aggregates
             "inst_cnt": [20, 15, 0, 30, 10],
             "inst_late_cnt": [2, 3, 0, 5, 0],
             "inst_amt_payment_sum": [21_000, 15_500, 0, 31_500, 10_100],
             "inst_payment_ratio_mean": [1.05, 1.03, 0.0, 1.05, 1.01],
+            "inst_days_past_due_max": [10.0, 0.0, 5.0, 30.0, 0.0],
+            "inst_days_past_due_mean": [2.0, 0.0, 1.0, 10.0, 0.0],
             # POS aggregates
             "pos_sk_dpd_max": [0, 45, 0, 0, 60],
             # Credit card aggregates
@@ -850,6 +917,81 @@ class TestEngineerSecondaryFeatures:
         assert result["cc_overdue_flag"].isin([0.0, 1.0]).all()
         assert not result["cc_overdue_flag"].isna().any()
 
+    def test_prev_refusal_rate_correct(self, secondary_fixture):
+        """prev_refusal_rate = prev_refused_cnt / max(prev_cnt, 1)."""
+        # secondary_fixture does not have prev_refused_cnt — add it
+        df = secondary_fixture.copy()
+        df["prev_refused_cnt"] = [1, 0, 5, 0, 0]
+        result = engineer_secondary_features(df)
+
+        # Row 0: 1/3 ≈ 0.333
+        assert result.loc[0, "prev_refusal_rate"] == pytest.approx(1.0 / 3.0)
+        # Row 2: 5/5 = 1.0
+        assert result.loc[2, "prev_refusal_rate"] == pytest.approx(1.0)
+        # Row 1: prev_cnt=0 → 0.0 (guard)
+        assert result.loc[1, "prev_refusal_rate"] == pytest.approx(0.0)
+        # No NaN
+        assert not result["prev_refusal_rate"].isna().any()
+
+    def test_bureau_overdue_rate_correct(self, secondary_fixture):
+        """bureau_overdue_rate = bureau_overdue_cnt / max(bureau_cnt, 1)."""
+        df = secondary_fixture.copy()
+        df["bureau_overdue_cnt"] = [1, 0, 0, 2, 4]
+        result = engineer_secondary_features(df)
+
+        # Row 0: 1/5 = 0.2
+        assert result.loc[0, "bureau_overdue_rate"] == pytest.approx(0.2)
+        # Row 4: 4/4 = 1.0
+        assert result.loc[4, "bureau_overdue_rate"] == pytest.approx(1.0)
+        # Row 2: bureau_cnt=0 → 0.0 (guard)
+        assert result.loc[2, "bureau_overdue_rate"] == pytest.approx(0.0)
+
+    def test_bureau_active_ratio_bounds(self, secondary_fixture):
+        """bureau_active_ratio must be in [0, 1] and contain no NaN."""
+        df = secondary_fixture.copy()
+        df["bureau_active_cnt"] = [2, 1, 0, 1, 3]
+        result = engineer_secondary_features(df)
+
+        ratio = result["bureau_active_ratio"]
+        assert not ratio.isna().any(), "bureau_active_ratio must not contain NaN"
+        assert (ratio >= 0).all() and (ratio <= 1.0 + 1e-9).all(), (
+            "bureau_active_ratio must be in [0, 1]"
+        )
+
+    def test_bureau_debt_to_income_clipped(self, secondary_fixture):
+        """bureau_debt_to_income must be clipped at 50 and never negative."""
+        df = secondary_fixture.copy()
+        # Row 2 has AMT_INCOME_TOTAL == 0 — clip(lower=1) prevents divide-by-zero
+        result = engineer_secondary_features(df)
+
+        col = result["bureau_debt_to_income"]
+        assert (col <= 50.0 + 1e-9).all(), "Must be clipped at 50"
+        assert not col.isna().any()
+
+    def test_debt_service_ratio_correct(self, secondary_fixture):
+        """debt_service_ratio = AMT_ANNUITY / (AMT_INCOME_TOTAL / 12)."""
+        df = secondary_fixture.copy()
+        df["AMT_ANNUITY"] = [2_000, 1_000, 500, 3_000, 1_500]
+        result = engineer_secondary_features(df)
+
+        # Row 0: 2000 / (100000/12) = 2000/8333.3 ≈ 0.24
+        expected = 2_000.0 / (100_000.0 / 12.0)
+        assert result.loc[0, "debt_service_ratio"] == pytest.approx(expected, rel=1e-3)
+        # Must be clipped at 10
+        assert (result["debt_service_ratio"] <= 10.0 + 1e-9).all()
+        assert not result["debt_service_ratio"].isna().any()
+
+    def test_inst_late_dpd_ratio_no_inf(self, secondary_fixture):
+        """inst_late_dpd_ratio must not contain inf or NaN."""
+        df = secondary_fixture.copy()
+        df["inst_days_past_due_max"] = [10.0, 0.0, 5.0, 30.0, 0.0]
+        df["inst_days_past_due_mean"] = [2.0, 0.0, 1.0, 10.0, 0.0]
+        result = engineer_secondary_features(df)
+
+        col = result["inst_late_dpd_ratio"]
+        assert not col.isin([np.inf, -np.inf]).any(), "inst_late_dpd_ratio must not be inf"
+        assert not col.isna().any(), "inst_late_dpd_ratio must not be NaN"
+
     def test_engineer_secondary_features_skips_missing_columns(self):
         """If required columns are missing, features depending on them are skipped."""
         # Create a minimal DataFrame without secondary columns
@@ -863,3 +1005,238 @@ class TestEngineerSecondaryFeatures:
         assert isinstance(result, pd.DataFrame)
         # Should have only the input column (no secondary features added)
         assert len(result.columns) == 1
+
+
+# ---------------------------------------------------------------------------
+# Priority 1 — Task 1.2: Cross-table interaction features (TDD: RED phase)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def interaction_fixture() -> pd.DataFrame:
+    """
+    DataFrame with all columns needed to test cross-table interaction features.
+
+    Rows:
+      Row 0: high-risk — low EXT scores, high leverage, late payments
+      Row 1: low-risk  — high EXT scores, low leverage, clean record
+      Row 2: zero-income guard — AMT_INCOME_TOTAL == 0
+      Row 3: no secondary records — all bureau/inst/cc columns are 0
+      Row 4: high DPD worsening — 6m DPD much worse than 12m average
+    """
+    return pd.DataFrame(
+        {
+            # Application columns
+            "AMT_INCOME_TOTAL": [60_000, 120_000, 0, 80_000, 90_000],
+            "AMT_ANNUITY": [8_000, 5_000, 3_000, 4_000, 6_000],
+            "CREDIT_INCOME_RATIO": [5.0, 1.0, 3.0, 2.0, 4.0],
+            "ANNUITY_INCOME_RATIO": [0.15, 0.04, 0.0, 0.05, 0.08],
+            # EXT_SOURCE composites (already computed by engineer_application_features)
+            "EXT_SOURCE_MEAN": [0.3, 0.7, 0.5, 0.6, 0.4],
+            "EXT_SOURCE_MIN": [0.2, 0.6, 0.4, 0.5, 0.3],
+            # Bureau aggregates
+            "bureau_cnt": [5, 3, 0, 0, 4],
+            "bureau_credit_sum": [300_000, 150_000, 0, 0, 250_000],
+            "bureau_credit_debt_sum": [90_000, 10_000, 0, 0, 60_000],
+            "bureau_active_cnt": [2, 1, 0, 0, 3],
+            "bureau_overdue_cnt": [3, 0, 0, 0, 1],
+            "bureau_annuity_mean": [5_000, 2_000, 0, 0, 4_000],
+            "bureau_bbal_dpd_rate_6m_mean": [0.3, 0.0, 0.0, 0.0, 0.5],
+            "bureau_bbal_dpd_rate_12m_mean": [0.1, 0.0, 0.0, 0.0, 0.2],
+            # Installments aggregates
+            "inst_cnt": [20, 15, 0, 0, 10],
+            "inst_late_cnt": [5, 0, 0, 0, 2],
+            "inst_pct_late": [0.25, 0.0, 0.0, 0.0, 0.2],
+            "inst_days_past_due_mean": [8.0, 0.0, 0.0, 0.0, 5.0],
+            "inst_days_past_due_max": [30.0, 0.0, 0.0, 0.0, 20.0],
+            # Credit card aggregates
+            "cc_bal_max": [50_000, 5_000, 0, 0, 20_000],
+            "cc_sk_dpd_max": [10, 0, 0, 0, 5],
+            "cc_dpd_rate": [0.2, 0.0, 0.0, 0.0, 0.15],
+            # Derived secondary features (already present after engineer_secondary_features)
+            "bureau_overdue_rate": [0.6, 0.0, 0.0, 0.0, 0.25],
+            "bureau_debt_to_income": [1.5, 0.08, 0.0, 0.0, 0.67],
+        }
+    )
+
+
+class TestCrossTableInteractions:
+    """Tests for cross-table interaction features added to engineer_secondary_features()."""
+
+    def test_ext_credit_risk_high_risk_row(self, interaction_fixture):
+        """ext_credit_risk = EXT_SOURCE_MEAN * CREDIT_INCOME_RATIO, clipped ≥ 0."""
+        result = engineer_secondary_features(interaction_fixture)
+        # Row 0: 0.3 * 5.0 = 1.5
+        assert result.loc[0, "ext_credit_risk"] == pytest.approx(0.3 * 5.0, rel=1e-3)
+        # Row 1: 0.7 * 1.0 = 0.7
+        assert result.loc[1, "ext_credit_risk"] == pytest.approx(0.7 * 1.0, rel=1e-3)
+
+    def test_ext_credit_risk_never_negative(self, interaction_fixture):
+        """ext_credit_risk is clipped to [0, ∞) — never negative."""
+        result = engineer_secondary_features(interaction_fixture)
+        assert (result["ext_credit_risk"] >= 0).all()
+        assert not result["ext_credit_risk"].isna().any()
+
+    def test_ext_annuity_risk_correct(self, interaction_fixture):
+        """ext_annuity_risk = EXT_SOURCE_MIN * ANNUITY_INCOME_RATIO, clipped ≥ 0."""
+        result = engineer_secondary_features(interaction_fixture)
+        # Row 0: 0.2 * 0.15 = 0.03
+        assert result.loc[0, "ext_annuity_risk"] == pytest.approx(0.2 * 0.15, rel=1e-3)
+
+    def test_multi_dpd_flag_both_late(self, interaction_fixture):
+        """multi_dpd_flag = 1 when inst_pct_late > 0.1 AND cc_dpd_rate > 0.1."""
+        result = engineer_secondary_features(interaction_fixture)
+        # Row 0: inst_pct_late=0.25 > 0.1, cc_dpd_rate=0.2 > 0.1 → flag=1
+        assert result.loc[0, "multi_dpd_flag"] == 1.0
+        # Row 4: inst_pct_late=0.2 > 0.1, cc_dpd_rate=0.15 > 0.1 → flag=1
+        assert result.loc[4, "multi_dpd_flag"] == 1.0
+
+    def test_multi_dpd_flag_neither_late(self, interaction_fixture):
+        """multi_dpd_flag = 0 when neither product has high DPD."""
+        result = engineer_secondary_features(interaction_fixture)
+        # Row 1: both rates = 0.0 → flag=0
+        assert result.loc[1, "multi_dpd_flag"] == 0.0
+        # Row 3: no records → 0.0
+        assert result.loc[3, "multi_dpd_flag"] == 0.0
+
+    def test_multi_dpd_flag_binary(self, interaction_fixture):
+        """multi_dpd_flag must only contain 0 or 1."""
+        result = engineer_secondary_features(interaction_fixture)
+        assert result["multi_dpd_flag"].isin([0.0, 1.0]).all()
+
+    def test_total_debt_exposure_zero_income_guard(self, interaction_fixture):
+        """When AMT_INCOME_TOTAL == 0, total_debt_exposure must not be inf/nan."""
+        result = engineer_secondary_features(interaction_fixture)
+        # Row 2: income=0 → clipped to 1.0 → valid ratio
+        assert np.isfinite(result.loc[2, "total_debt_exposure"])
+        assert result.loc[2, "total_debt_exposure"] >= 0
+
+    def test_total_debt_exposure_clipped(self, interaction_fixture):
+        """total_debt_exposure must be clipped to [0, 100]."""
+        result = engineer_secondary_features(interaction_fixture)
+        col = result["total_debt_exposure"]
+        assert (col >= 0).all()
+        assert (col <= 100.0 + 1e-9).all()
+        assert not col.isna().any()
+
+    def test_dpd_trajectory_positive_when_worsening(self, interaction_fixture):
+        """dpd_trajectory = dpd_rate_6m - dpd_rate_12m; positive = worsening."""
+        result = engineer_secondary_features(interaction_fixture)
+        # Row 0: 0.3 - 0.1 = 0.2 (worsening)
+        assert result.loc[0, "dpd_trajectory"] == pytest.approx(0.2, rel=1e-3)
+        # Row 4: 0.5 - 0.2 = 0.3 (worsening)
+        assert result.loc[4, "dpd_trajectory"] == pytest.approx(0.3, rel=1e-3)
+        # Row 1: 0.0 - 0.0 = 0.0 (stable)
+        assert result.loc[1, "dpd_trajectory"] == pytest.approx(0.0, rel=1e-3)
+
+    def test_debt_service_coverage_guard(self, interaction_fixture):
+        """debt_service_coverage must never be inf or nan."""
+        result = engineer_secondary_features(interaction_fixture)
+        col = result["debt_service_coverage"]
+        assert not col.isin([np.inf, -np.inf]).any()
+        assert not col.isna().any()
+        assert (col >= 0).all()
+
+    def test_leverage_vs_bureau_no_negative(self, interaction_fixture):
+        """leverage_vs_bureau is product of two clipped non-negative quantities."""
+        result = engineer_secondary_features(interaction_fixture)
+        col = result["leverage_vs_bureau"]
+        assert (col >= 0).all()
+        assert not col.isna().any()
+
+    def test_interactions_no_row_multiplication(self, interaction_fixture):
+        """engineer_secondary_features must not change the number of rows."""
+        result = engineer_secondary_features(interaction_fixture)
+        assert len(result) == len(interaction_fixture)
+
+    def test_interactions_input_not_mutated(self, interaction_fixture):
+        """Input DataFrame must not be modified."""
+        original = interaction_fixture.copy()
+        engineer_secondary_features(interaction_fixture)
+        pd.testing.assert_frame_equal(interaction_fixture, original)
+
+
+# ---------------------------------------------------------------------------
+# Priority 1 — Task 1.4: EXT_SOURCE polynomial interactions (TDD: RED phase)
+# ---------------------------------------------------------------------------
+
+
+class TestExtSourcePolynomials:
+    """Tests for EXT_SOURCE polynomial/ratio features in engineer_application_features()."""
+
+    def test_ext_source_sq_columns_present(self, application_fixture):
+        """EXT_SOURCE_1_SQ and EXT_SOURCE_2_SQ must be present after engineering."""
+        result = engineer_application_features(application_fixture)
+        assert "EXT_SOURCE_1_SQ" in result.columns
+        assert "EXT_SOURCE_2_SQ" in result.columns
+
+    def test_ext_source_ratio_columns_present(self, application_fixture):
+        """EXT_SOURCE_RATIO_12 and EXT_SOURCE_RATIO_23 must be present."""
+        result = engineer_application_features(application_fixture)
+        assert "EXT_SOURCE_RATIO_12" in result.columns
+        assert "EXT_SOURCE_RATIO_23" in result.columns
+
+    def test_ext_score_floor_column_present(self, application_fixture):
+        """EXT_SCORE_FLOOR must be present after engineering."""
+        result = engineer_application_features(application_fixture)
+        assert "EXT_SCORE_FLOOR" in result.columns
+
+    def test_ext_source_1_sq_nonnegative(self, application_fixture):
+        """EXT_SOURCE_1_SQ = EXT_SOURCE_1 ** 2 must be ≥ 0 (squares are non-negative)."""
+        result = engineer_application_features(application_fixture)
+        valid = result["EXT_SOURCE_1_SQ"][result["EXT_SOURCE_1_SQ"] != -999.0]
+        assert (valid >= 0).all(), "Squares must be non-negative"
+
+    def test_ext_source_sq_correct_value(self, application_fixture):
+        """EXT_SOURCE_1_SQ must equal EXT_SOURCE_1 ** 2 for non-missing rows."""
+        result = engineer_application_features(application_fixture)
+        # Row 0: EXT_SOURCE_1=0.6 → EXT_SOURCE_1_SQ ≈ 0.36
+        assert result.loc[0, "EXT_SOURCE_1_SQ"] == pytest.approx(0.6 ** 2, rel=1e-5)
+        # Row 2: EXT_SOURCE_1=0.7 → EXT_SOURCE_1_SQ ≈ 0.49
+        assert result.loc[2, "EXT_SOURCE_1_SQ"] == pytest.approx(0.7 ** 2, rel=1e-5)
+
+    def test_ext_source_sq_missing_filled_sentinel(self, application_fixture):
+        """When EXT_SOURCE_1 is NaN (rows 3,4,5), EXT_SOURCE_1_SQ must equal -999."""
+        result = engineer_application_features(application_fixture)
+        # Rows 3, 4 have EXT_SOURCE_1 = NaN
+        assert result.loc[3, "EXT_SOURCE_1_SQ"] == pytest.approx(-999.0)
+        assert result.loc[4, "EXT_SOURCE_1_SQ"] == pytest.approx(-999.0)
+
+    def test_ext_source_ratio_12_guard_near_zero(self):
+        """When EXT_SOURCE_2 ≈ 0, ratio must be 0.0 (no inf or nan)."""
+        df = pd.DataFrame(
+            {
+                "AMT_CREDIT": [100_000],
+                "AMT_INCOME_TOTAL": [50_000],
+                "AMT_ANNUITY": [5_000],
+                "AMT_GOODS_PRICE": [90_000],
+                "DAYS_BIRTH": [-12_000],
+                "DAYS_EMPLOYED": [-2_000],
+                "EXT_SOURCE_1": [0.5],
+                "EXT_SOURCE_2": [0.0],  # zero denominator
+                "EXT_SOURCE_3": [0.4],
+                "FLAG_DOCUMENT_2": [1],
+                "FLAG_DOCUMENT_3": [1],
+                "FLAG_DOCUMENT_4": [0],
+                "FLAG_DOCUMENT_5": [0],
+            }
+        )
+        result = engineer_application_features(df)
+        val = result.loc[0, "EXT_SOURCE_RATIO_12"]
+        assert np.isfinite(val), "Must be finite even when denominator is 0"
+        assert val == pytest.approx(0.0)
+
+    def test_ext_score_floor_is_product_of_min_and_mean(self, application_fixture):
+        """EXT_SCORE_FLOOR ≈ EXT_SOURCE_MIN * EXT_SOURCE_MEAN for non-sentinel rows."""
+        result = engineer_application_features(application_fixture)
+        # Row 0: EXT_SOURCE_1=0.6, EXT_SOURCE_2=0.7, EXT_SOURCE_3=0.5
+        #        mean = (0.6+0.7+0.5)/3 ≈ 0.6; min = 0.5; floor = 0.5 * 0.6 = 0.3
+        expected_floor = 0.5 * ((0.6 + 0.7 + 0.5) / 3.0)
+        assert result.loc[0, "EXT_SCORE_FLOOR"] == pytest.approx(expected_floor, rel=1e-3)
+
+    def test_ext_source_polynomials_no_nan(self, application_fixture):
+        """All polynomial columns must contain no actual NaN (only -999 sentinel)."""
+        result = engineer_application_features(application_fixture)
+        for col in ["EXT_SOURCE_1_SQ", "EXT_SOURCE_2_SQ",
+                    "EXT_SOURCE_RATIO_12", "EXT_SOURCE_RATIO_23", "EXT_SCORE_FLOOR"]:
+            assert not result[col].isna().any(), f"{col} must not contain NaN"

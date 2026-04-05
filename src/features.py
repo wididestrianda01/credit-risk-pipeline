@@ -180,6 +180,10 @@ def _engineer_ext_source(df: pd.DataFrame) -> pd.DataFrame:
     applicant — so nanmean and nanmin correctly aggregate across the
     available scores without introducing imputation bias.
 
+    Pairwise products let the tree detect "low AND low" joint risk that
+    additive terms miss.  EXT_SOURCE_STD measures score inconsistency across
+    bureaus — divergent opinions correlate with higher default risk.
+
     Parameters
     ----------
     df : pd.DataFrame
@@ -188,25 +192,77 @@ def _engineer_ext_source(df: pd.DataFrame) -> pd.DataFrame:
     Returns
     -------
     pd.DataFrame
-        Copy of df with EXT_SOURCE_MEAN and EXT_SOURCE_MIN.
+        Copy of df with EXT_SOURCE_{MEAN,MIN,MAX,MEDIAN,STD,RANGE,
+        AVAILABLE_CNT,12,13,23}.
     """
     out = df.copy()
 
-    ext = np.column_stack([
-        out["EXT_SOURCE_1"].to_numpy(dtype=float),
-        out["EXT_SOURCE_2"].to_numpy(dtype=float),
-        out["EXT_SOURCE_3"].to_numpy(dtype=float),
-    ])
+    e1 = out["EXT_SOURCE_1"].to_numpy(dtype=float)
+    e2 = out["EXT_SOURCE_2"].to_numpy(dtype=float)
+    e3 = out["EXT_SOURCE_3"].to_numpy(dtype=float)
+    ext = np.column_stack([e1, e2, e3])
 
-    # Suppress numpy's "All-NaN slice" warning — we handle that case with fillna.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
-        ext_mean = np.nanmean(ext, axis=1)
-        ext_min = np.nanmin(ext, axis=1)
+        ext_mean   = np.nanmean(ext, axis=1)
+        ext_min    = np.nanmin(ext, axis=1)
+        ext_max    = np.nanmax(ext, axis=1)
+        ext_median = np.nanmedian(ext, axis=1)
+        ext_std    = np.nanstd(ext, axis=1)
 
-    # Rows where all three sources are NaN produce NaN from nanmean/nanmin.
-    out["EXT_SOURCE_MEAN"] = pd.Series(ext_mean, index=out.index).fillna(_NAN_SENTINEL)
-    out["EXT_SOURCE_MIN"] = pd.Series(ext_min, index=out.index).fillna(_NAN_SENTINEL)
+    ext_range     = ext_max - ext_min          # score spread across bureaus
+    avail_cnt     = (~np.isnan(ext)).sum(axis=1).astype(float)
+
+    # Pairwise products — NaN if either factor is missing
+    prod_12 = np.where(~np.isnan(e1) & ~np.isnan(e2), e1 * e2, np.nan)
+    prod_13 = np.where(~np.isnan(e1) & ~np.isnan(e3), e1 * e3, np.nan)
+    prod_23 = np.where(~np.isnan(e2) & ~np.isnan(e3), e2 * e3, np.nan)
+
+    def _s(arr: np.ndarray) -> pd.Series:
+        return pd.Series(arr, index=out.index)
+
+    out["EXT_SOURCE_MEAN"]          = _s(ext_mean).fillna(_NAN_SENTINEL)
+    out["EXT_SOURCE_MIN"]           = _s(ext_min).fillna(_NAN_SENTINEL)
+    out["EXT_SOURCE_MAX"]           = _s(ext_max).fillna(_NAN_SENTINEL)
+    out["EXT_SOURCE_MEDIAN"]        = _s(ext_median).fillna(_NAN_SENTINEL)
+    out["EXT_SOURCE_STD"]           = _s(ext_std).fillna(_NAN_SENTINEL)
+    out["EXT_SOURCE_RANGE"]         = _s(ext_range).fillna(_NAN_SENTINEL)
+    out["EXT_SOURCE_AVAILABLE_CNT"] = _s(avail_cnt)  # always 0–3, no NaN
+    out["EXT_SOURCE_PROD_12"]       = _s(prod_12).fillna(_NAN_SENTINEL)
+    out["EXT_SOURCE_PROD_13"]       = _s(prod_13).fillna(_NAN_SENTINEL)
+    out["EXT_SOURCE_PROD_23"]       = _s(prod_23).fillna(_NAN_SENTINEL)
+
+    # Polynomial and ratio terms (Task 1.4)
+    # Quadratic self-terms capture non-linear risk thresholds — a score of 0.3
+    # is not twice as risky as 0.6; the squared term encodes the curvature.
+    sq_1 = np.where(~np.isnan(e1), e1 ** 2, np.nan)
+    sq_2 = np.where(~np.isnan(e2), e2 ** 2, np.nan)
+    # Ratios expose divergence between bureaus — a ratio far from 1 signals
+    # that one bureau has very different information about this applicant.
+    # Guard: denominator near zero → 0.0 (not a huge number); NaN source → NaN.
+    _RATIO_DENOM_FLOOR: float = 1e-4
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio_12 = np.where(
+            np.isnan(e1) | np.isnan(e2), np.nan,
+            np.where(np.abs(e2) > _RATIO_DENOM_FLOOR, e1 / e2, 0.0),
+        )
+        ratio_23 = np.where(
+            np.isnan(e2) | np.isnan(e3), np.nan,
+            np.where(np.abs(e3) > _RATIO_DENOM_FLOOR, e2 / e3, 0.0),
+        )
+    # Joint floor: min × mean — a composite "worst-case average" signal.
+    # All-NaN rows produce NaN here; nanmin/nanmean return nan for all-nan input.
+    ext_floor = np.where(
+        ~np.isnan(ext_min) & ~np.isnan(ext_mean),
+        ext_min * ext_mean,
+        np.nan,
+    )
+
+    out["EXT_SOURCE_1_SQ"]       = _s(sq_1).fillna(_NAN_SENTINEL)
+    out["EXT_SOURCE_2_SQ"]       = _s(sq_2).fillna(_NAN_SENTINEL)
+    out["EXT_SOURCE_RATIO_12"]   = _s(ratio_12).fillna(_NAN_SENTINEL)
+    out["EXT_SOURCE_RATIO_23"]   = _s(ratio_23).fillna(_NAN_SENTINEL)
+    out["EXT_SCORE_FLOOR"]       = _s(ext_floor).fillna(_NAN_SENTINEL)
 
     return out
 
@@ -241,11 +297,17 @@ def engineer_secondary_features(df: pd.DataFrame) -> pd.DataFrame:
 
     Features added (if input columns exist):
     - prev_approval_rate: prev_approved_cnt / max(prev_cnt, 1)
+    - prev_refusal_rate: prev_refused_cnt / max(prev_cnt, 1)
     - inst_pct_late: inst_late_cnt / max(inst_cnt, 1)
+    - inst_late_dpd_ratio: inst_days_past_due_max / (|inst_days_past_due_mean| + 1)
     - bureau_debt_ratio: bureau_credit_debt_sum / max(bureau_credit_sum, 1e-6)
+    - bureau_overdue_rate: bureau_overdue_cnt / max(bureau_cnt, 1)
+    - bureau_active_ratio: bureau_active_cnt / max(bureau_cnt, 1)
+    - bureau_debt_to_income: bureau_credit_debt_sum / max(AMT_INCOME_TOTAL, 1)
     - cc_overdue_flag: (cc_sk_dpd_max > 0).astype(float) [0 if missing]
     - pos_overdue_flag: (pos_sk_dpd_max > 0).astype(float)
     - prev_credit_income_ratio: prev_amt_credit_mean / max(AMT_INCOME_TOTAL, 1), clipped to [0, 100]
+    - debt_service_ratio: AMT_ANNUITY / (AMT_INCOME_TOTAL / 12), monthly debt burden
     """
     out = df.copy()
 
@@ -321,6 +383,165 @@ def engineer_secondary_features(df: pd.DataFrame) -> pd.DataFrame:
             .fillna(_NAN_SENTINEL)
         )
 
+    # 7. prev_refusal_rate: proportion of previous applications refused
+    if "prev_cnt" in out.columns and "prev_refused_cnt" in out.columns:
+        prev_cnt = out["prev_cnt"].to_numpy(dtype=float)
+        prev_refused = out["prev_refused_cnt"].to_numpy(dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            out["prev_refusal_rate"] = np.where(
+                prev_cnt > 0, prev_refused / np.maximum(prev_cnt, 1e-10), 0.0
+            )
+        out["prev_refusal_rate"] = (
+            out["prev_refusal_rate"].replace([np.inf, -np.inf], 0.0).fillna(_NAN_SENTINEL)
+        )
+
+    # 8. inst_late_dpd_ratio: max DPD scaled by mean DPD (escalation signal)
+    if (
+        "inst_days_past_due_max" in out.columns
+        and "inst_days_past_due_mean" in out.columns
+    ):
+        denom = (out["inst_days_past_due_mean"].abs() + 1.0).clip(lower=1.0)
+        out["inst_late_dpd_ratio"] = (
+            out["inst_days_past_due_max"] / denom
+        ).replace([np.inf, -np.inf], 0.0).fillna(_NAN_SENTINEL)
+
+    # 9. bureau_overdue_rate: fraction of bureau accounts ever overdue
+    if "bureau_cnt" in out.columns and "bureau_overdue_cnt" in out.columns:
+        bureau_cnt = out["bureau_cnt"].to_numpy(dtype=float)
+        overdue_cnt = out["bureau_overdue_cnt"].to_numpy(dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            out["bureau_overdue_rate"] = np.where(
+                bureau_cnt > 0, overdue_cnt / np.maximum(bureau_cnt, 1e-10), 0.0
+            )
+        out["bureau_overdue_rate"] = (
+            out["bureau_overdue_rate"].replace([np.inf, -np.inf], 0.0).fillna(_NAN_SENTINEL)
+        )
+
+    # 10. bureau_active_ratio: share of bureau accounts currently active
+    if "bureau_cnt" in out.columns and "bureau_active_cnt" in out.columns:
+        bureau_cnt = out["bureau_cnt"].to_numpy(dtype=float)
+        active_cnt = out["bureau_active_cnt"].to_numpy(dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            out["bureau_active_ratio"] = np.where(
+                bureau_cnt > 0, active_cnt / np.maximum(bureau_cnt, 1e-10), 0.0
+            )
+        out["bureau_active_ratio"] = (
+            out["bureau_active_ratio"].replace([np.inf, -np.inf], 0.0).fillna(_NAN_SENTINEL)
+        )
+
+    # 11. bureau_debt_to_income: total outstanding debt relative to declared income
+    if "bureau_credit_debt_sum" in out.columns and "AMT_INCOME_TOTAL" in out.columns:
+        income = out["AMT_INCOME_TOTAL"].clip(lower=1.0).to_numpy(dtype=float)
+        debt = out["bureau_credit_debt_sum"].clip(lower=0.0).to_numpy(dtype=float)
+        out["bureau_debt_to_income"] = pd.Series(
+            debt / income, index=out.index
+        ).clip(upper=50.0).fillna(_NAN_SENTINEL)
+
+    # 12. debt_service_ratio: monthly instalment as fraction of monthly income
+    if "AMT_ANNUITY" in out.columns and "AMT_INCOME_TOTAL" in out.columns:
+        monthly_income = out["AMT_INCOME_TOTAL"].clip(lower=1.0) / 12.0
+        with np.errstate(divide="ignore", invalid="ignore"):
+            out["debt_service_ratio"] = (
+                out["AMT_ANNUITY"] / monthly_income
+            ).replace([np.inf, -np.inf], 0.0).clip(upper=10.0).fillna(_NAN_SENTINEL)
+
+    # -----------------------------------------------------------------------
+    # Cross-table interaction features (Task 1.2)
+    # -----------------------------------------------------------------------
+
+    # 13. ext_credit_risk: low bureau score × high credit leverage
+    # Multiplicative cross-feature: the most cited single interaction in
+    # competition solutions — captures the double-risk of a bad external
+    # score combined with an already-stretched debt-to-income ratio.
+    if "EXT_SOURCE_MEAN" in out.columns and "CREDIT_INCOME_RATIO" in out.columns:
+        out["ext_credit_risk"] = (
+            out["EXT_SOURCE_MEAN"].clip(lower=0.0)
+            * out["CREDIT_INCOME_RATIO"].clip(lower=0.0)
+        ).fillna(_NAN_SENTINEL)
+
+    # 14. ext_annuity_risk: worst bureau score × annuity repayment strain
+    if "EXT_SOURCE_MIN" in out.columns and "ANNUITY_INCOME_RATIO" in out.columns:
+        out["ext_annuity_risk"] = (
+            out["EXT_SOURCE_MIN"].clip(lower=0.0)
+            * out["ANNUITY_INCOME_RATIO"].clip(lower=0.0)
+        ).fillna(_NAN_SENTINEL)
+
+    # 15. multi_dpd_flag: late on 2+ credit products simultaneously
+    # Boolean AND across installments and credit card delinquency channels —
+    # cross-product defaults are a strong predictor of imminent default.
+    if "inst_pct_late" in out.columns and "cc_dpd_rate" in out.columns:
+        out["multi_dpd_flag"] = (
+            (out["inst_pct_late"] > 0.1) & (out["cc_dpd_rate"] > 0.1)
+        ).astype(np.float32).fillna(0.0)
+    elif "bureau_overdue_rate" in out.columns and "inst_days_past_due_mean" in out.columns:
+        # Fallback when cc_dpd_rate is absent: bureau × installments
+        out["multi_dpd_flag"] = (
+            (out["bureau_overdue_rate"] > 0.1) & (out["inst_days_past_due_mean"] > 0.0)
+        ).astype(np.float32).fillna(0.0)
+
+    # 16. bureau_inst_dpd: bureau overdue rate × mean days past due on instalments
+    # Severity (mean DPD days) weighted by frequency (overdue rate) — a single
+    # number that summarises how bad AND how often the borrower misses payments.
+    if "bureau_overdue_rate" in out.columns and "inst_days_past_due_mean" in out.columns:
+        out["bureau_inst_dpd"] = (
+            out["bureau_overdue_rate"].clip(lower=0.0)
+            * out["inst_days_past_due_mean"].clip(lower=0.0)
+        ).fillna(_NAN_SENTINEL)
+
+    # 17. total_debt_exposure: all outstanding debt relative to income
+    _has_debt = "bureau_credit_debt_sum" in out.columns and "cc_bal_max" in out.columns
+    _has_income = "AMT_INCOME_TOTAL" in out.columns
+    if _has_debt and _has_income:
+        debt = (
+            out["bureau_credit_debt_sum"].clip(lower=0.0)
+            + out["cc_bal_max"].clip(lower=0.0)
+        )
+        income = out["AMT_INCOME_TOTAL"].clip(lower=1.0)
+        out["total_debt_exposure"] = (debt / income).clip(lower=0.0, upper=100.0).fillna(_NAN_SENTINEL)
+
+    # 18. leverage_vs_bureau: application leverage amplified by existing bureau debt
+    # bureau_debt_to_income must be present (computed in feature 11 above).
+    if "bureau_debt_to_income" in out.columns and "CREDIT_INCOME_RATIO" in out.columns:
+        out["leverage_vs_bureau"] = (
+            out["bureau_debt_to_income"].clip(lower=0.0)
+            * out["CREDIT_INCOME_RATIO"].clip(lower=0.0)
+        ).clip(lower=0.0).fillna(_NAN_SENTINEL)
+
+    # 19. dpd_trajectory: recent DPD rate minus historical rate — positive = worsening
+    _has_6m = "bureau_bbal_dpd_rate_6m_mean" in out.columns
+    _has_12m = "bureau_bbal_dpd_rate_12m_mean" in out.columns
+    if _has_6m and _has_12m:
+        out["dpd_trajectory"] = (
+            out["bureau_bbal_dpd_rate_6m_mean"].fillna(0.0)
+            - out["bureau_bbal_dpd_rate_12m_mean"].fillna(0.0)
+        ).fillna(_NAN_SENTINEL)
+
+    # 20. dpd_escalation: trajectory severity weighted by maximum DPD ever seen
+    # Combines direction of delinquency trend with peak severity.
+    if "dpd_trajectory" in out.columns and "inst_days_past_due_max" in out.columns:
+        out["dpd_escalation"] = (
+            out["dpd_trajectory"].clip(lower=0.0)
+            * out["inst_days_past_due_max"].clip(lower=0.0)
+        ).fillna(_NAN_SENTINEL)
+
+    # 21. debt_service_coverage: income divided by total annuity obligations
+    # Higher = more breathing room; low coverage (<1) signals affordability stress.
+    _has_annuity = "AMT_ANNUITY" in out.columns
+    _has_bureau_annuity = "bureau_annuity_mean" in out.columns
+    if _has_income and _has_annuity and _has_bureau_annuity:
+        total_annuity = (
+            out["AMT_ANNUITY"].clip(lower=0.0)
+            + out["bureau_annuity_mean"].clip(lower=0.0)
+            + 1.0
+        )
+        out["debt_service_coverage"] = (
+            out["AMT_INCOME_TOTAL"].clip(lower=0.0) / total_annuity
+        ).replace([np.inf, -np.inf], 0.0).clip(lower=0.0).fillna(_NAN_SENTINEL)
+    elif _has_income and _has_annuity:
+        out["debt_service_coverage"] = (
+            out["AMT_INCOME_TOTAL"].clip(lower=0.0) / (out["AMT_ANNUITY"].clip(lower=0.0) + 1.0)
+        ).replace([np.inf, -np.inf], 0.0).clip(lower=0.0).fillna(_NAN_SENTINEL)
+
     return out
 
 
@@ -342,11 +563,12 @@ def engineer_application_features(df: pd.DataFrame) -> pd.DataFrame:
     Returns
     -------
     pd.DataFrame
-        Copy of df with 11 additional engineered columns:
+        Copy of df with 19 additional engineered columns:
         CREDIT_INCOME_RATIO, ANNUITY_INCOME_RATIO, CREDIT_TERM,
         GOODS_CREDIT_RATIO, AGE_YEARS, YEARS_EMPLOYED,
         EMPLOYED_TO_AGE_RATIO, DOCUMENTS_SUBMITTED,
-        HIGH_RISK_DOC_MISSING, EXT_SOURCE_MEAN, EXT_SOURCE_MIN.
+        HIGH_RISK_DOC_MISSING, EXT_SOURCE_{MEAN,MIN,MAX,MEDIAN,STD,RANGE,
+        AVAILABLE_CNT,PROD_12,PROD_13,PROD_23}.
 
     Notes
     -----

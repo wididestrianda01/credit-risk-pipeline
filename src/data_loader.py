@@ -97,7 +97,9 @@ _CATEGORICAL_APP_COLS = [
 
 _MISSING_DROP_THRESHOLD = 0.60  # drop columns with > 60% missing values
 _NAN_SENTINEL = -999  # sentinel fill for tree models (LightGBM/XGBoost)
-_SECONDARY_COL_PREFIXES = ("bureau_bbal_", "cc_")  # secondary table column prefixes
+_SECONDARY_COL_PREFIXES = (  # prefixes of secondary-table columns to sentinel-fill
+    "bureau_", "prev_", "pos_", "inst_", "cc_"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -211,11 +213,23 @@ def build_training_frame(
         df = df.assign(bureau_has_bbal=np.int8(0))
 
     # --- fill secondary table NaN columns with sentinel BEFORE drop ---------
-    # This prevents high-missingness secondary table columns from being dropped
+    # Applicants with no records in a secondary table have NaN for all that
+    # table's aggregate columns.  Fill with sentinel so these columns survive
+    # the 60% missingness filter — absence itself is predictive signal.
+    _COUNT_FLAG_COLS = frozenset(
+        [
+            "bureau_cnt", "bureau_active_cnt", "bureau_closed_cnt",
+            "bureau_overdue_cnt", "bureau_prolong_sum",
+            "prev_cnt", "prev_approved_cnt", "prev_refused_cnt", "prev_cancelled_cnt",
+            "pos_cnt", "pos_overdue_cnt",
+            "inst_cnt", "inst_late_cnt",
+            "cc_cnt",
+            "cc_has_records", "bureau_has_bbal",
+        ]
+    )
     for col in df.columns:
         if any(col.startswith(p) for p in _SECONDARY_COL_PREFIXES):
-            # Skip count/flag columns (cc_cnt, cc_has_records, bureau_has_bbal)
-            if col not in ("cc_cnt", "cc_has_records", "bureau_has_bbal"):
+            if col not in _COUNT_FLAG_COLS:
                 if df[col].isna().any():
                     df = df.assign(**{col: df[col].fillna(_NAN_SENTINEL)})
 
@@ -333,10 +347,15 @@ def _load_application(data_dir: Path, mode: str) -> pd.DataFrame:
 
 
 def _aggregate_bureau_balance(data_dir: Path) -> pd.DataFrame:
-    """Aggregate bureau_balance to SK_ID_BUREAU level.
+    """Aggregate bureau_balance to SK_ID_BUREAU level with time-windowed features.
 
     STATUS codes: C = closed, X = unknown, 0 = no DPD, 1-5 = DPD buckets.
     DPD status is any STATUS not in {'C', 'X', '0'}.
+    MONTHS_BALANCE: 0 = most recent, negative integers = older months.
+
+    Time windows:
+    - Recent (last 6 months): MONTHS_BALANCE >= -6
+    - Historical (months 7-12): MONTHS_BALANCE in [-12, -7]
 
     Parameters
     ----------
@@ -345,22 +364,84 @@ def _aggregate_bureau_balance(data_dir: Path) -> pd.DataFrame:
     Returns
     -------
     pd.DataFrame
-        Columns: SK_ID_BUREAU, bbal_cnt, bbal_dpd_rate.
+        Columns: SK_ID_BUREAU, bbal_cnt, bbal_dpd_rate, bbal_dpd_rate_6m,
+        bbal_dpd_rate_12m, bbal_dpd_trend, bbal_max_severity,
+        bbal_recent_max_severity, bbal_active_months.
     """
     bbal = pd.read_csv(data_dir / _FILE_BUREAU_BAL)
 
+    # DPD indicator: STATUS in {'1', '2', '3', '4', '5'}
     bbal = bbal.assign(
         is_dpd=bbal["STATUS"].isin({"1", "2", "3", "4", "5"}).astype(np.float32)
     )
 
-    agg = (
-        bbal.groupby("SK_ID_BUREAU", sort=False)
-        .agg(
-            bbal_cnt=("MONTHS_BALANCE", "count"),
-            bbal_dpd_rate=("is_dpd", "mean"),
-        )
-        .reset_index()
+    # Status severity: map status codes to numeric severity (0-5)
+    # C, X, 0 → 0; '1' → 1, '2' → 2, etc.
+    status_map = {"C": 0, "X": 0, "0": 0, "1": 1, "2": 2, "3": 3, "4": 4, "5": 5}
+    bbal = bbal.assign(
+        status_severity=bbal["STATUS"].map(status_map).astype(np.float32)
     )
+
+    # Active indicator: STATUS not in {'C', 'X'} (loan was active)
+    bbal = bbal.assign(
+        is_active=(~bbal["STATUS"].isin({"C", "X"})).astype(np.float32)
+    )
+
+    # Time window flags
+    bbal = bbal.assign(
+        in_recent_6m=(bbal["MONTHS_BALANCE"] >= -6).astype(bool),
+        in_historical_12m=(bbal["MONTHS_BALANCE"].between(-12, -7)).astype(bool),
+    )
+
+    # Helper: compute windowed mean for a series
+    def _windowed_mean(series, mask_col_name, bbal_df):
+        """Compute mean of series for rows where mask_col is True."""
+        mask = bbal_df.loc[series.index, mask_col_name]
+        result = series[mask].mean()
+        return result
+
+    def _windowed_max(series, mask_col_name, bbal_df):
+        """Compute max of series for rows where mask_col is True."""
+        mask = bbal_df.loc[series.index, mask_col_name]
+        result = series[mask].max()
+        return result
+
+    # Aggregate to SK_ID_BUREAU level
+    # Use transform-style aggregation to preserve group context for windowed computations
+    groups = bbal.groupby("SK_ID_BUREAU", sort=False)
+
+    agg_dict = {
+        "bbal_cnt": ("MONTHS_BALANCE", "count"),
+        "bbal_dpd_rate": ("is_dpd", "mean"),
+        "bbal_dpd_rate_std": ("is_dpd", "std"),
+        "bbal_max_severity": ("status_severity", "max"),
+        "bbal_active_months": ("is_active", "sum"),
+    }
+
+    agg = groups.agg(**agg_dict).reset_index()
+
+    # Compute windowed metrics separately for each group
+    windowed_data = []
+    for bureau_id, group in groups:
+        dpd_6m = group.loc[group["in_recent_6m"], "is_dpd"].mean()
+        dpd_12m = group.loc[group["in_historical_12m"], "is_dpd"].mean()
+        severity_recent = group.loc[group["in_recent_6m"], "status_severity"].max()
+
+        windowed_data.append({
+            "SK_ID_BUREAU": bureau_id,
+            "bbal_dpd_rate_6m": dpd_6m,
+            "bbal_dpd_rate_12m": dpd_12m,
+            "bbal_recent_max_severity": severity_recent,
+        })
+
+    windowed_df = pd.DataFrame(windowed_data)
+    agg = agg.merge(windowed_df, on="SK_ID_BUREAU", how="left")
+
+    # Compute trend: dpd_rate_6m - dpd_rate_12m (positive = worsening)
+    agg = agg.assign(
+        bbal_dpd_trend=agg["bbal_dpd_rate_6m"] - agg["bbal_dpd_rate_12m"]
+    )
+
     return agg
 
 
@@ -369,16 +450,22 @@ def _join_bureau(app: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
 
     Aggregate columns added (prefix ``bureau_``):
 
-    - ``bureau_cnt``            : number of bureau entries
-    - ``bureau_active_cnt``     : entries with CREDIT_ACTIVE == 'Active'
-    - ``bureau_days_credit_mean``: mean days since credit opened
-    - ``bureau_days_credit_min`` : most recent bureau credit opened
-    - ``bureau_credit_sum``     : total credit amount across bureau entries
-    - ``bureau_credit_debt_sum``: total outstanding debt
-    - ``bureau_overdue_max``    : maximum days overdue across bureau entries
-    - ``bureau_prolong_sum``    : total number of credit prolongations
-    - ``bureau_bbal_cnt_mean``  : mean monthly balance record count
-    - ``bureau_bbal_dpd_rate_mean``: mean DPD rate across bureau entries
+    - ``bureau_cnt``                   : number of bureau entries
+    - ``bureau_active_cnt``            : entries with CREDIT_ACTIVE == 'Active'
+    - ``bureau_days_credit_mean``      : mean days since credit opened
+    - ``bureau_days_credit_min``       : most recent bureau credit opened
+    - ``bureau_credit_sum``            : total credit amount across bureau entries
+    - ``bureau_credit_debt_sum``       : total outstanding debt
+    - ``bureau_overdue_max``           : maximum days overdue across bureau entries
+    - ``bureau_prolong_sum``           : total number of credit prolongations
+    - ``bureau_bbal_cnt_mean``         : mean monthly balance record count
+    - ``bureau_bbal_dpd_rate_mean``    : mean DPD rate across bureau entries
+    - ``bureau_bbal_dpd_rate_6m_mean`` : mean DPD rate (last 6 months)
+    - ``bureau_bbal_dpd_rate_12m_mean``: mean DPD rate (months 7-12 ago)
+    - ``bureau_bbal_dpd_trend_mean``   : mean trend (6m - 12m)
+    - ``bureau_bbal_max_severity_mean``: mean max severity across bureau entries
+    - ``bureau_bbal_recent_max_severity_mean``: mean recent max severity
+    - ``bureau_bbal_active_months_mean``: mean active months per bureau entry
 
     Parameters
     ----------
@@ -398,7 +485,9 @@ def _join_bureau(app: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
     bureau = bureau.merge(bbal_agg, on="SK_ID_BUREAU", how="left")
 
     bureau = bureau.assign(
-        is_active=(bureau["CREDIT_ACTIVE"] == "Active").astype(np.float32)
+        is_active=(bureau["CREDIT_ACTIVE"] == "Active").astype(np.float32),
+        is_closed=(bureau["CREDIT_ACTIVE"] == "Closed").astype(np.float32),
+        is_overdue=(bureau["CREDIT_DAY_OVERDUE"] > 0).astype(np.float32),
     )
 
     bureau_agg = (
@@ -406,14 +495,30 @@ def _join_bureau(app: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
         .agg(
             bureau_cnt=("SK_ID_BUREAU", "count"),
             bureau_active_cnt=("is_active", "sum"),
+            bureau_closed_cnt=("is_closed", "sum"),
+            bureau_overdue_cnt=("is_overdue", "sum"),
             bureau_days_credit_mean=("DAYS_CREDIT", "mean"),
             bureau_days_credit_min=("DAYS_CREDIT", "min"),
+            bureau_days_credit_max=("DAYS_CREDIT", "max"),
+            bureau_days_credit_std=("DAYS_CREDIT", "std"),
             bureau_credit_sum=("AMT_CREDIT_SUM", "sum"),
             bureau_credit_debt_sum=("AMT_CREDIT_SUM_DEBT", "sum"),
+            bureau_credit_debt_std=("AMT_CREDIT_SUM_DEBT", "std"),
+            bureau_credit_debt_max=("AMT_CREDIT_SUM_DEBT", "max"),
+            bureau_credit_overdue_sum=("AMT_CREDIT_SUM_OVERDUE", "sum"),
+            bureau_max_overdue_amt=("AMT_CREDIT_MAX_OVERDUE", "max"),
+            bureau_annuity_mean=("AMT_ANNUITY", "mean"),
             bureau_overdue_max=("CREDIT_DAY_OVERDUE", "max"),
             bureau_prolong_sum=("CNT_CREDIT_PROLONG", "sum"),
             bureau_bbal_cnt_mean=("bbal_cnt", "mean"),
             bureau_bbal_dpd_rate_mean=("bbal_dpd_rate", "mean"),
+            bureau_bbal_dpd_rate_std_mean=("bbal_dpd_rate_std", "mean"),
+            bureau_bbal_dpd_rate_6m_mean=("bbal_dpd_rate_6m", "mean"),
+            bureau_bbal_dpd_rate_12m_mean=("bbal_dpd_rate_12m", "mean"),
+            bureau_bbal_dpd_trend_mean=("bbal_dpd_trend", "mean"),
+            bureau_bbal_max_severity_mean=("bbal_max_severity", "mean"),
+            bureau_bbal_recent_max_severity_mean=("bbal_recent_max_severity", "mean"),
+            bureau_bbal_active_months_mean=("bbal_active_months", "mean"),
         )
         .reset_index()
     )
@@ -423,6 +528,8 @@ def _join_bureau(app: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
     # Applicants with no bureau history → count = 0, not NaN
     result["bureau_cnt"] = result["bureau_cnt"].fillna(0).astype(np.int32)
     result["bureau_active_cnt"] = result["bureau_active_cnt"].fillna(0).astype(np.int32)
+    result["bureau_closed_cnt"] = result["bureau_closed_cnt"].fillna(0).astype(np.int32)
+    result["bureau_overdue_cnt"] = result["bureau_overdue_cnt"].fillna(0).astype(np.int32)
     result["bureau_prolong_sum"] = (
         result["bureau_prolong_sum"].fillna(0).astype(np.int32)
     )
@@ -463,6 +570,12 @@ def _join_previous_application(app: pd.DataFrame, data_dir: Path) -> pd.DataFram
     prev = prev.assign(
         is_approved=(prev["NAME_CONTRACT_STATUS"] == "Approved").astype(np.float32),
         is_refused=(prev["NAME_CONTRACT_STATUS"] == "Refused").astype(np.float32),
+        is_cancelled=(prev["NAME_CONTRACT_STATUS"] == "Canceled").astype(np.float32),
+        credit_to_app_ratio=np.where(
+            prev["AMT_APPLICATION"] > 0,
+            prev["AMT_CREDIT"] / prev["AMT_APPLICATION"],
+            np.nan,
+        ),
     )
 
     prev_agg = (
@@ -471,9 +584,18 @@ def _join_previous_application(app: pd.DataFrame, data_dir: Path) -> pd.DataFram
             prev_cnt=("SK_ID_PREV", "count"),
             prev_approved_cnt=("is_approved", "sum"),
             prev_refused_cnt=("is_refused", "sum"),
+            prev_cancelled_cnt=("is_cancelled", "sum"),
             prev_amt_credit_mean=("AMT_CREDIT", "mean"),
             prev_amt_credit_sum=("AMT_CREDIT", "sum"),
+            prev_amt_credit_std=("AMT_CREDIT", "std"),
+            prev_amt_credit_max=("AMT_CREDIT", "max"),
+            prev_amt_application_mean=("AMT_APPLICATION", "mean"),
+            prev_annuity_mean=("AMT_ANNUITY", "mean"),
+            prev_credit_to_app_ratio_mean=("credit_to_app_ratio", "mean"),
             prev_days_decision_min=("DAYS_DECISION", "min"),
+            prev_days_decision_mean=("DAYS_DECISION", "mean"),
+            prev_days_decision_max=("DAYS_DECISION", "max"),
+            prev_cnt_payment_mean=("CNT_PAYMENT", "mean"),
             prev_rate_down_payment_mean=("RATE_DOWN_PAYMENT", "mean"),
         )
         .reset_index()
@@ -484,6 +606,7 @@ def _join_previous_application(app: pd.DataFrame, data_dir: Path) -> pd.DataFram
     result["prev_cnt"] = result["prev_cnt"].fillna(0).astype(np.int32)
     result["prev_approved_cnt"] = result["prev_approved_cnt"].fillna(0).astype(np.int32)
     result["prev_refused_cnt"] = result["prev_refused_cnt"].fillna(0).astype(np.int32)
+    result["prev_cancelled_cnt"] = result["prev_cancelled_cnt"].fillna(0).astype(np.int32)
 
     _assert_no_row_multiplication(app, result, "previous_application join")
     return result
@@ -516,14 +639,27 @@ def _join_pos_cash(app: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
     """
     pos = pd.read_csv(data_dir / _FILE_POS_CASH)
 
+    pos = pos.assign(
+        is_overdue=(pos["SK_DPD"] > 0).astype(np.float32),
+        is_active=(pos["NAME_CONTRACT_STATUS"] == "Active").astype(np.float32),
+        is_completed=(pos["NAME_CONTRACT_STATUS"] == "Completed").astype(np.float32),
+    )
+
     pos_agg = (
         pos.groupby("SK_ID_CURR", sort=False)
         .agg(
             pos_cnt=("MONTHS_BALANCE", "count"),
             pos_months_balance_mean=("MONTHS_BALANCE", "mean"),
             pos_cnt_instalment_mean=("CNT_INSTALMENT", "mean"),
+            pos_cnt_instalment_std=("CNT_INSTALMENT", "std"),
             pos_sk_dpd_max=("SK_DPD", "max"),
+            pos_sk_dpd_std=("SK_DPD", "std"),
+            pos_sk_dpd_mean=("SK_DPD", "mean"),
             pos_sk_dpd_def_max=("SK_DPD_DEF", "max"),
+            pos_overdue_cnt=("is_overdue", "sum"),
+            pos_overdue_rate=("is_overdue", "mean"),
+            pos_active_cnt=("is_active", "sum"),
+            pos_completed_cnt=("is_completed", "sum"),
         )
         .reset_index()
     )
@@ -531,6 +667,7 @@ def _join_pos_cash(app: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
     result = app.merge(pos_agg, on="SK_ID_CURR", how="left")
 
     result["pos_cnt"] = result["pos_cnt"].fillna(0).astype(np.int32)
+    result["pos_overdue_cnt"] = result["pos_overdue_cnt"].fillna(0).astype(np.int32)
 
     _assert_no_row_multiplication(app, result, "POS_CASH join")
     return result
@@ -579,14 +716,28 @@ def _join_installments(app: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
         days_past_due=inst["DAYS_ENTRY_PAYMENT"] - inst["DAYS_INSTALMENT"],
     )
 
+    inst = inst.assign(
+        **{k: v for k, v in [
+            ("payment_diff", inst["AMT_INSTALMENT"] - inst["AMT_PAYMENT"]),
+        ]}
+    )
+
     inst_agg = (
         inst.groupby("SK_ID_CURR", sort=False)
         .agg(
             inst_cnt=("DAYS_INSTALMENT", "count"),
             inst_late_cnt=("is_late", "sum"),
             inst_amt_payment_sum=("AMT_PAYMENT", "sum"),
+            inst_amt_instalment_mean=("AMT_INSTALMENT", "mean"),
             inst_payment_ratio_mean=("payment_ratio", "mean"),
+            inst_payment_ratio_std=("payment_ratio", "std"),
+            inst_payment_ratio_min=("payment_ratio", "min"),
+            inst_payment_ratio_max=("payment_ratio", "max"),
+            inst_payment_diff_mean=("payment_diff", "mean"),
+            inst_payment_diff_std=("payment_diff", "std"),
             inst_days_past_due_mean=("days_past_due", "mean"),
+            inst_days_past_due_max=("days_past_due", "max"),
+            inst_days_past_due_std=("days_past_due", "std"),
         )
         .reset_index()
     )
@@ -636,7 +787,13 @@ def _join_credit_card(app: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
             cc["AMT_CREDIT_LIMIT_ACTUAL"] > 0,
             cc["AMT_BALANCE"] / cc["AMT_CREDIT_LIMIT_ACTUAL"],
             np.nan,
-        )
+        ),
+        is_overdue=(cc["SK_DPD"] > 0).astype(np.float32),
+        min_payment_ratio=np.where(
+            cc["AMT_INST_MIN_REGULARITY"] > 0,
+            cc["AMT_PAYMENT_CURRENT"] / cc["AMT_INST_MIN_REGULARITY"],
+            np.nan,
+        ),
     )
 
     cc_agg = (
@@ -645,9 +802,19 @@ def _join_credit_card(app: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
             cc_cnt=("MONTHS_BALANCE", "count"),
             cc_bal_mean=("AMT_BALANCE", "mean"),
             cc_bal_max=("AMT_BALANCE", "max"),
+            cc_bal_std=("AMT_BALANCE", "std"),
+            cc_bal_min=("AMT_BALANCE", "min"),
             cc_drawing_mean=("AMT_DRAWINGS_CURRENT", "mean"),
+            cc_drawing_std=("AMT_DRAWINGS_CURRENT", "std"),
+            cc_atm_drawing_mean=("AMT_DRAWINGS_ATM_CURRENT", "mean"),
             cc_utilization_mean=("utilization", "mean"),
+            cc_utilization_max=("utilization", "max"),
+            cc_utilization_std=("utilization", "std"),
+            cc_limit_mean=("AMT_CREDIT_LIMIT_ACTUAL", "mean"),
             cc_sk_dpd_max=("SK_DPD", "max"),
+            cc_sk_dpd_mean=("SK_DPD", "mean"),
+            cc_dpd_rate=("is_overdue", "mean"),
+            cc_min_payment_ratio_mean=("min_payment_ratio", "mean"),
         )
         .reset_index()
     )

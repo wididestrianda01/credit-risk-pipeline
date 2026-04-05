@@ -46,7 +46,12 @@ _CV_N_SPLITS: int = 10
 # 1% is a conservative value for cross-sectional credit data where labels
 # do not overlap; it suffices to signal temporal awareness without
 # discarding meaningful training signal.
-_CV_EMBARGO_FRAC: float = 0.01
+_CV_EMBARGO_FRAC: float = 0.02
+
+# Column used to auto-detect temporal ordering when groups is not supplied.
+# prev_days_decision_mean is the mean number of days before application that
+# previous applications were decided — a robust proxy for applicant vintage.
+_TEMPORAL_SORT_COL: str = "prev_days_decision_mean"
 
 # Logistic regression baseline hyperparameters (IRB scorecard config)
 # C=0.1 (strong L2 regularisation) keeps coefficients stable across vintages —
@@ -415,6 +420,9 @@ def train_logistic_baseline(
     # When groups (temporal index) is provided, use walk-forward folds that
     # keep training data strictly older than validation data (OOT discipline).
     # Scaler is fit inside each fold to prevent test-fold statistics leaking.
+    # Auto-detect temporal groups from _TEMPORAL_SORT_COL if not supplied.
+    if groups is None and _TEMPORAL_SORT_COL in X.columns:
+        groups = X[_TEMPORAL_SORT_COL]
     groups_train = (
         groups.loc[X_train.index].to_numpy() if groups is not None else None
     )
@@ -927,6 +935,9 @@ def train_xgboost_optuna(
     # Suppress INFO/DEBUG trial logs — keeps library stdout clean.
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
+    # Auto-detect temporal groups from _TEMPORAL_SORT_COL if not supplied.
+    if groups is None and _TEMPORAL_SORT_COL in X.columns:
+        groups = X[_TEMPORAL_SORT_COL]
     groups_train = (
         groups.loc[X_train.index].to_numpy() if groups is not None else None
     )
@@ -1043,6 +1054,7 @@ def _lightgbm_optuna_objective(
             "reg_lambda", _LGB_REG_LAMBDA_MIN, _LGB_REG_LAMBDA_MAX
         ),
         "is_unbalance": True,
+        "metric": "auc",      # CRITICAL: binary_logloss early-stop fires at iter 1 with is_unbalance=True
         "verbosity": -1,
         "random_state": _RANDOM_STATE,
     }
@@ -1144,6 +1156,9 @@ def train_lightgbm_optuna(
     # --- Optuna study ---
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
+    # Auto-detect temporal groups from _TEMPORAL_SORT_COL if not supplied.
+    if groups is None and _TEMPORAL_SORT_COL in X.columns:
+        groups = X[_TEMPORAL_SORT_COL]
     groups_train = (
         groups.loc[X_train.index].to_numpy() if groups is not None else None
     )
