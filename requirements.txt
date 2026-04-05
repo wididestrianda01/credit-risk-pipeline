@@ -10,6 +10,7 @@ imbalanced-learn>=0.12       # SMOTE, RandomUnderSampler, ImbPipeline
 # Models
 lightgbm>=4.3
 xgboost>=2.0
+catboost>=1.2
 
 # Hyperparameter optimisation
 optuna>=3.6

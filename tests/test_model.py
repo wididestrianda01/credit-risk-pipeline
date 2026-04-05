@@ -30,6 +30,7 @@ from credit_engine.model import (
     benchmark_imbalance_strategies,
     calibrate_model,
     load_model,
+    run_ensemble_workflow,
     save_model,
     train_ensemble,
     train_lightgbm_optuna,
@@ -1141,3 +1142,403 @@ def test_temporal_cv_groups_alignment_after_train_test_split():
     # Verify every aligned group value corresponds to a valid X_train row
     assert set(groups_aligned.index) == set(X_train.index)
 
+
+# ---------------------------------------------------------------------------
+# Priority 2.4 — XGBoost extended search space (gamma, max_delta_step, wider MCW)
+# ---------------------------------------------------------------------------
+
+class TestXGBoostExtendedSearchSpace:
+    """TDD tests for the expanded XGBoost Optuna search space (Priority 2.4).
+
+    Written RED before implementation: gamma and max_delta_step are absent from
+    _xgboost_optuna_objective() as of commit e2e101a.
+    """
+
+    @pytest.fixture(scope="class")
+    def xgb_best_params(self, tmp_path_factory):
+        """Run train_xgboost_optuna once and return best_params dict."""
+        import credit_engine.model as model_module
+        tmp = tmp_path_factory.mktemp("xgb_ext")
+        mp = pytest.MonkeyPatch()
+        mp.setattr(model_module, "_XGB_OPTUNA_MODEL_PATH", str(tmp / "xgb.pkl"))
+        mp.setattr(model_module, "_XGB_OPTUNA_PARAMS_PATH", str(tmp / "xgb.json"))
+        mp.setattr(model_module, "_XGB_OPTUNA_FIGURE_PATH", str(tmp / "xgb.png"))
+        rng = np.random.default_rng(42)
+        n = 500
+        y_arr = np.zeros(n, dtype=int)
+        y_arr[:40] = 1
+        rng.shuffle(y_arr)
+        X = pd.DataFrame({
+            "f1": np.where(y_arr == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
+            "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
+        })
+        y = pd.Series(y_arr, name="TARGET")
+        _, _, _, _, best_params = train_xgboost_optuna(X, y, n_trials=3)
+        return best_params
+
+    def test_best_params_includes_gamma(self, xgb_best_params):
+        """best_params must contain 'gamma' after search space extension."""
+        assert "gamma" in xgb_best_params, (
+            f"'gamma' missing from best_params keys: {sorted(xgb_best_params.keys())}"
+        )
+
+    def test_best_params_includes_max_delta_step(self, xgb_best_params):
+        """best_params must contain 'max_delta_step' after search space extension."""
+        assert "max_delta_step" in xgb_best_params, (
+            f"'max_delta_step' missing from best_params keys: {sorted(xgb_best_params.keys())}"
+        )
+
+    def test_gamma_within_validated_range(self, xgb_best_params):
+        """Sampled gamma must lie in [0.0, 2.0] — subagent-validated bound."""
+        assert 0.0 <= xgb_best_params["gamma"] <= 2.0, (
+            f"gamma={xgb_best_params['gamma']:.4f} outside [0.0, 2.0]"
+        )
+
+    def test_min_child_weight_constant_extended_to_15(self):
+        """_XGB_MIN_CHILD_WEIGHT_MAX must be extended to at least 15."""
+        from credit_engine.model import _XGB_MIN_CHILD_WEIGHT_MAX
+        assert _XGB_MIN_CHILD_WEIGHT_MAX >= 15, (
+            f"_XGB_MIN_CHILD_WEIGHT_MAX={_XGB_MIN_CHILD_WEIGHT_MAX} — "
+            "must be >= 15 per subagent recommendation (100-sample leaf rule)"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Priority 2.1 prep — Temporal CV wiring in train_ensemble()
+# ---------------------------------------------------------------------------
+
+def _make_ensemble_mock(with_sort_col: bool, n: int = 200) -> tuple[pd.DataFrame, pd.Series]:
+    """200-row mock with or without prev_days_decision_mean column."""
+    rng = np.random.default_rng(99)
+    y_arr = np.zeros(n, dtype=int)
+    y_arr[:16] = 1
+    rng.shuffle(y_arr)
+    data = {
+        "f1": np.where(y_arr == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
+        "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
+    }
+    if with_sort_col:
+        data["prev_days_decision_mean"] = np.sort(
+            rng.integers(-7000, 0, n)
+        ).astype(float)
+    return pd.DataFrame(data), pd.Series(y_arr, name="TARGET")
+
+
+class TestEnsembleTemporalCV:
+    """TDD tests for temporal CV wiring in train_ensemble() (Priority 2.1 prep).
+
+    Written RED before implementation: train_ensemble() currently hard-codes
+    StratifiedKFold and never calls _make_cv.
+    """
+
+    def test_ensemble_uses_temporal_cv_when_sort_col_present(self, monkeypatch):
+        """_make_cv must receive non-None groups_train when prev_days_decision_mean is in X."""
+        import credit_engine.model as model_module
+
+        received_groups: list = []
+        original_make_cv = model_module._make_cv
+
+        def tracking_make_cv(groups_train, n_splits):
+            received_groups.append(groups_train)
+            return original_make_cv(groups_train, n_splits)
+
+        monkeypatch.setattr(model_module, "_make_cv", tracking_make_cv)
+
+        X, y = _make_ensemble_mock(with_sort_col=True)
+        train_ensemble(X, y, n_splits=2)
+
+        assert len(received_groups) > 0, "_make_cv was never called"
+        assert any(g is not None for g in received_groups), (
+            "train_ensemble passed groups=None to _make_cv despite "
+            f"'{model_module._TEMPORAL_SORT_COL}' being present in X"
+        )
+
+    def test_ensemble_falls_back_to_stratified_when_no_sort_col(self, monkeypatch):
+        """_make_cv must receive groups_train=None when prev_days_decision_mean is absent."""
+        import credit_engine.model as model_module
+
+        received_groups: list = []
+        original_make_cv = model_module._make_cv
+
+        def tracking_make_cv(groups_train, n_splits):
+            received_groups.append(groups_train)
+            return original_make_cv(groups_train, n_splits)
+
+        monkeypatch.setattr(model_module, "_make_cv", tracking_make_cv)
+
+        X, y = _make_ensemble_mock(with_sort_col=False)
+        train_ensemble(X, y, n_splits=2)
+
+        assert len(received_groups) > 0, "_make_cv was never called"
+        assert all(g is None for g in received_groups), (
+            "train_ensemble passed non-None groups to _make_cv despite "
+            "sort column being absent from X"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Priority 2.1 — run_ensemble_workflow() (activate + gate ensemble)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def ensemble_workflow_result(tmp_path_factory):
+    """Run run_ensemble_workflow once per module using default (non-HPO) params."""
+    import credit_engine.model as model_module
+    tmp = tmp_path_factory.mktemp("ensemble_wf")
+    mp = pytest.MonkeyPatch()
+    mp.setattr(model_module, "_ENSEMBLE_WORKFLOW_MODEL_PATH", str(tmp / "ens.pkl"))
+    mp.setattr(model_module, "_ENSEMBLE_WORKFLOW_WEIGHTS_PATH", str(tmp / "weights.json"))
+    rng = np.random.default_rng(42)
+    n = 500
+    y_arr = np.zeros(n, dtype=int)
+    y_arr[:40] = 1
+    rng.shuffle(y_arr)
+    X = pd.DataFrame({
+        "f1": np.where(y_arr == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
+        "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
+    })
+    y = pd.Series(y_arr, name="TARGET")
+    return run_ensemble_workflow(X, y)
+
+
+class TestRunEnsembleWorkflow:
+    """TDD tests for run_ensemble_workflow() (Priority 2.1).
+
+    Written RED before implementation: run_ensemble_workflow() does not yet exist.
+    """
+
+    def test_returns_dict(self, ensemble_workflow_result):
+        """run_ensemble_workflow must return a dict."""
+        assert isinstance(ensemble_workflow_result, dict)
+
+    def test_returns_required_keys(self, ensemble_workflow_result):
+        """Return dict must contain all four required metric keys."""
+        required = {"lgb_gini", "xgb_gini", "ensemble_gini", "improvement", "persisted"}
+        assert required.issubset(ensemble_workflow_result.keys()), (
+            f"Missing keys: {required - set(ensemble_workflow_result.keys())}"
+        )
+
+    def test_improvement_is_gini_delta(self, ensemble_workflow_result):
+        """improvement = ensemble_gini - max(lgb_gini, xgb_gini)."""
+        r = ensemble_workflow_result
+        expected = r["ensemble_gini"] - max(r["lgb_gini"], r["xgb_gini"])
+        assert abs(r["improvement"] - expected) < 1e-9, (
+            f"improvement={r['improvement']:.6f} != ensemble - best_single={expected:.6f}"
+        )
+
+    def test_gini_values_in_unit_interval(self, ensemble_workflow_result):
+        """All Gini values must be in [0, 1]."""
+        r = ensemble_workflow_result
+        for key in ("lgb_gini", "xgb_gini", "ensemble_gini"):
+            assert 0.0 <= r[key] <= 1.0, f"{key}={r[key]:.4f} outside [0, 1]"
+
+    def test_ensemble_persists_when_improvement_exceeds_threshold(
+        self, tmp_path, monkeypatch
+    ):
+        """Ensemble model file is written when improvement >= _ENSEMBLE_PERSIST_THRESHOLD."""
+        import credit_engine.model as model_module
+        out_path = tmp_path / "ens.pkl"
+        weights_path = tmp_path / "weights.json"
+        monkeypatch.setattr(model_module, "_ENSEMBLE_WORKFLOW_MODEL_PATH", str(out_path))
+        monkeypatch.setattr(model_module, "_ENSEMBLE_WORKFLOW_WEIGHTS_PATH", str(weights_path))
+        # Force threshold to 0.0 so any positive improvement triggers persist
+        monkeypatch.setattr(model_module, "_ENSEMBLE_PERSIST_THRESHOLD", 0.0)
+
+        rng = np.random.default_rng(42)
+        n, n_pos = 500, 40
+        y_arr = np.zeros(n, dtype=int)
+        y_arr[:n_pos] = 1
+        rng.shuffle(y_arr)
+        X = pd.DataFrame({
+            "f1": np.where(y_arr == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
+            "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
+        })
+        y = pd.Series(y_arr, name="TARGET")
+        result = run_ensemble_workflow(X, y)
+
+        if result["improvement"] >= 0.0:
+            assert out_path.exists(), (
+                "Ensemble model not persisted despite improvement >= threshold (0.0)"
+            )
+
+    def test_ensemble_skips_persist_when_below_threshold(
+        self, tmp_path, monkeypatch
+    ):
+        """Ensemble model file is NOT written when improvement < threshold."""
+        import credit_engine.model as model_module
+        out_path = tmp_path / "ens_skip.pkl"
+        weights_path = tmp_path / "weights_skip.json"
+        monkeypatch.setattr(model_module, "_ENSEMBLE_WORKFLOW_MODEL_PATH", str(out_path))
+        monkeypatch.setattr(model_module, "_ENSEMBLE_WORKFLOW_WEIGHTS_PATH", str(weights_path))
+        # Threshold so high that no ensemble can ever beat it
+        monkeypatch.setattr(model_module, "_ENSEMBLE_PERSIST_THRESHOLD", 999.0)
+
+        rng = np.random.default_rng(42)
+        n, n_pos = 500, 40
+        y_arr = np.zeros(n, dtype=int)
+        y_arr[:n_pos] = 1
+        rng.shuffle(y_arr)
+        X = pd.DataFrame({
+            "f1": np.where(y_arr == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
+            "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
+        })
+        y = pd.Series(y_arr, name="TARGET")
+        result = run_ensemble_workflow(X, y)
+
+        assert not out_path.exists(), "Ensemble model persisted despite improvement < threshold"
+        assert not result["persisted"], "result['persisted'] should be False"
+
+    def test_weights_json_written_when_persisted(self, tmp_path, monkeypatch):
+        """Ensemble weights JSON is written alongside the model when persisted."""
+        import credit_engine.model as model_module
+        out_path = tmp_path / "ens_w.pkl"
+        weights_path = tmp_path / "weights_w.json"
+        monkeypatch.setattr(model_module, "_ENSEMBLE_WORKFLOW_MODEL_PATH", str(out_path))
+        monkeypatch.setattr(model_module, "_ENSEMBLE_WORKFLOW_WEIGHTS_PATH", str(weights_path))
+        monkeypatch.setattr(model_module, "_ENSEMBLE_PERSIST_THRESHOLD", 0.0)
+
+        rng = np.random.default_rng(42)
+        n, n_pos = 500, 40
+        y_arr = np.zeros(n, dtype=int)
+        y_arr[:n_pos] = 1
+        rng.shuffle(y_arr)
+        X = pd.DataFrame({
+            "f1": np.where(y_arr == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
+            "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
+        })
+        y = pd.Series(y_arr, name="TARGET")
+        result = run_ensemble_workflow(X, y)
+
+        if result["improvement"] >= 0.0:
+            assert weights_path.exists(), "Ensemble weights JSON not written"
+            weights = json.loads(weights_path.read_text())
+            assert "lgb_gini" in weights and "xgb_gini" in weights and "ensemble_gini" in weights
+
+
+
+# ---------------------------------------------------------------------------
+# Priority 2.2 — train_catboost_optuna() + prepare_catboost_features()
+# ---------------------------------------------------------------------------
+
+from credit_engine.model import train_catboost_optuna, prepare_catboost_features  # noqa: E402
+
+
+@pytest.fixture(scope="module")
+def catboost_result(tmp_path_factory):
+    """Run train_catboost_optuna once per module (n_trials=2 for speed)."""
+    import credit_engine.model as model_module
+    tmp = tmp_path_factory.mktemp("catboost")
+    mp = pytest.MonkeyPatch()
+    mp.setattr(model_module, "_CAT_MODEL_PATH", str(tmp / "cat.pkl"))
+    mp.setattr(model_module, "_CAT_PARAMS_PATH", str(tmp / "cat.json"))
+    mp.setattr(model_module, "_CAT_FIGURE_PATH", str(tmp / "cat.png"))
+    rng = np.random.default_rng(42)
+    n = 500
+    y_arr = np.zeros(n, dtype=int)
+    y_arr[:40] = 1
+    rng.shuffle(y_arr)
+    X = pd.DataFrame({
+        "f1": np.where(y_arr == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
+        "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
+    })
+    y = pd.Series(y_arr, name="TARGET")
+    return train_catboost_optuna(X, y, n_trials=2)
+
+
+class TestCatBoostOptuna:
+    """TDD tests for train_catboost_optuna() (Priority 2.2)."""
+
+    def test_returns_5_tuple(self, catboost_result):
+        """train_catboost_optuna returns (model, metrics, X_test, y_test, best_params)."""
+        assert len(catboost_result) == 5
+
+    def test_metrics_keys(self, catboost_result):
+        """metrics dict has all expected keys from evaluate_model()."""
+        _, metrics, _, _, _ = catboost_result
+        expected = {"Model", "AUC-ROC", "Gini", "KS", "Brier", "BrierSkill", "AvgPrecision"}
+        assert expected.issubset(set(metrics.keys()))
+
+    def test_gini_above_threshold(self, catboost_result):
+        """CatBoost achieves Gini > 0.40 on linearly-separable mock data."""
+        _, metrics, _, _, _ = catboost_result
+        assert metrics["Gini"] > 0.40, (
+            f"CatBoost Gini={metrics['Gini']:.4f} too low on separable mock data"
+        )
+
+    def test_best_params_within_search_space(self, catboost_result):
+        """Sampled depth ≤ 8 and l2_leaf_reg ≤ 20 per subagent recommendations."""
+        _, _, _, _, best_params = catboost_result
+        assert best_params["depth"] <= 8, (
+            f"depth={best_params['depth']} exceeds upper bound 8"
+        )
+        assert best_params["l2_leaf_reg"] <= 20.0, (
+            f"l2_leaf_reg={best_params['l2_leaf_reg']:.2f} exceeds upper bound 20"
+        )
+
+    def test_model_artifact_saved(self, catboost_result, tmp_path, monkeypatch):
+        """CatBoost model file is persisted to disk."""
+        import credit_engine.model as model_module
+        out = tmp_path / "cat.pkl"
+        monkeypatch.setattr(model_module, "_CAT_MODEL_PATH", str(out))
+        monkeypatch.setattr(model_module, "_CAT_PARAMS_PATH", str(tmp_path / "p.json"))
+        monkeypatch.setattr(model_module, "_CAT_FIGURE_PATH", str(tmp_path / "f.png"))
+        rng = np.random.default_rng(7)
+        n = 300
+        y_arr = np.zeros(n, dtype=int); y_arr[:24] = 1; rng.shuffle(y_arr)
+        X = pd.DataFrame({"f1": rng.normal(0, 1, n), "f2": rng.normal(0, 1, n)})
+        train_catboost_optuna(X, pd.Series(y_arr, name="TARGET"), n_trials=1)
+        assert out.exists(), "CatBoost model file not written"
+
+    def test_params_artifact_saved(self, catboost_result, tmp_path, monkeypatch):
+        """CatBoost params JSON is persisted to disk."""
+        import credit_engine.model as model_module
+        params_path = tmp_path / "cat_p.json"
+        monkeypatch.setattr(model_module, "_CAT_MODEL_PATH", str(tmp_path / "cat.pkl"))
+        monkeypatch.setattr(model_module, "_CAT_PARAMS_PATH", str(params_path))
+        monkeypatch.setattr(model_module, "_CAT_FIGURE_PATH", str(tmp_path / "f.png"))
+        rng = np.random.default_rng(8)
+        n = 300
+        y_arr = np.zeros(n, dtype=int); y_arr[:24] = 1; rng.shuffle(y_arr)
+        X = pd.DataFrame({"f1": rng.normal(0, 1, n), "f2": rng.normal(0, 1, n)})
+        train_catboost_optuna(X, pd.Series(y_arr, name="TARGET"), n_trials=1)
+        assert params_path.exists(), "CatBoost params JSON not written"
+
+    def test_no_stdout(self, tmp_path, monkeypatch, capsys):
+        """train_catboost_optuna must not write to stdout."""
+        import credit_engine.model as model_module
+        monkeypatch.setattr(model_module, "_CAT_MODEL_PATH", str(tmp_path / "cat.pkl"))
+        monkeypatch.setattr(model_module, "_CAT_PARAMS_PATH", str(tmp_path / "p.json"))
+        monkeypatch.setattr(model_module, "_CAT_FIGURE_PATH", str(tmp_path / "f.png"))
+        rng = np.random.default_rng(9)
+        n = 300
+        y_arr = np.zeros(n, dtype=int); y_arr[:24] = 1; rng.shuffle(y_arr)
+        X = pd.DataFrame({"f1": rng.normal(0, 1, n), "f2": rng.normal(0, 1, n)})
+        train_catboost_optuna(X, pd.Series(y_arr, name="TARGET"), n_trials=1)
+        assert capsys.readouterr().out == "", "train_catboost_optuna wrote to stdout"
+
+
+class TestPrepareCatBoostFeatures:
+    """TDD tests for prepare_catboost_features() helper."""
+
+    def test_swaps_woe_cols_for_raw_when_present(self):
+        """Raw categorical columns replace WoE-encoded ones when df_raw is supplied."""
+        X_woe = pd.DataFrame({
+            "CODE_GENDER": [0.3, -0.5, 0.1],
+            "EXT_SOURCE_MEAN": [0.6, 0.3, 0.8],
+            "CREDIT_INCOME_RATIO": [2.1, 3.5, 1.2],
+        })
+        df_raw = pd.DataFrame({
+            "CODE_GENDER": ["M", "F", "XNA"],
+            "AMT_INCOME_TOTAL": [45000, 67000, 90000],
+        })
+        X_out, cat_cols = prepare_catboost_features(X_woe, df_raw)
+        # CODE_GENDER should now hold the raw string values
+        assert X_out["CODE_GENDER"].dtype == "category" or X_out["CODE_GENDER"].dtype == object
+        assert "CODE_GENDER" in cat_cols
+
+    def test_returns_woe_only_when_no_raw(self):
+        """When df_raw=None, returns X unchanged with empty cat_cols list."""
+        X_woe = pd.DataFrame({"f1": [1.0, 2.0], "f2": [3.0, 4.0]})
+        X_out, cat_cols = prepare_catboost_features(X_woe, df_raw=None)
+        pd.testing.assert_frame_equal(X_out, X_woe)
+        assert cat_cols == []

@@ -19,6 +19,7 @@ from typing import Literal
 import joblib
 import numpy as np
 import pandas as pd
+from catboost import CatBoostClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     f1_score,
@@ -89,7 +90,11 @@ _XGB_SUBSAMPLE_MAX: float = 1.0
 _XGB_COLSAMPLE_BYTREE_MIN: float = 0.6
 _XGB_COLSAMPLE_BYTREE_MAX: float = 1.0
 _XGB_MIN_CHILD_WEIGHT_MIN: int = 1
-_XGB_MIN_CHILD_WEIGHT_MAX: int = 10
+_XGB_MIN_CHILD_WEIGHT_MAX: int = 15       # extended from 10; 100-sample leaf rule for 24.6K positives
+_XGB_GAMMA_MIN: float = 0.0
+_XGB_GAMMA_MAX: float = 2.0               # validated range: top-5% Home Credit solutions use ≤ 1.5
+_XGB_MAX_DELTA_STEP_MIN: int = 0
+_XGB_MAX_DELTA_STEP_MAX: int = 5          # complements scale_pos_weight; 5 sufficient for 11:1 ratio
 _XGB_REG_ALPHA_MIN: float = 0.0
 _XGB_REG_ALPHA_MAX: float = 5.0
 _XGB_REG_LAMBDA_MIN: float = 1.0
@@ -138,6 +143,46 @@ _LGB_OPTUNA_FIGURE_PATH: str = "reports/figures/lightgbm_roc_pr.png"
 
 # Output path for the imbalance benchmark comparison table
 _BENCHMARK_REPORT_PATH: str = "reports/imbalance_benchmark.csv"
+
+# Ensemble workflow constants
+# _ENSEMBLE_PERSIST_THRESHOLD: minimum Gini improvement over the best single model
+# required to save the ensemble artefact.  0.005 = half a Gini point — a meaningful
+# improvement that exceeds model variance noise on held-out credit data.
+_ENSEMBLE_PERSIST_THRESHOLD: float = 0.005
+_ENSEMBLE_WORKFLOW_MODEL_PATH: str = "models/ensemble_best.pkl"
+_ENSEMBLE_WORKFLOW_WEIGHTS_PATH: str = "reports/ensemble_weights.json"
+
+# CatBoost Optuna HPO — search space bounds (validated by subagent analysis)
+# depth 4–8: CatBoost uses symmetric (oblivious) trees; depth>8 rarely helps
+#   and drastically increases memory on 300K rows.
+# l2_leaf_reg 1–20: wider than XGBoost's lambda because oblivious trees
+#   share regularisation across the full depth-level, not per-leaf.
+# bagging_temperature/random_strength: CatBoost's native stochastic gradient
+#   boosting — equivalent to subsample/colsample_bytree in LGB/XGB.
+_CAT_DEPTH_MIN: int = 4
+_CAT_DEPTH_MAX: int = 8
+_CAT_LEARNING_RATE_MIN: float = 0.02
+_CAT_LEARNING_RATE_MAX: float = 0.2
+_CAT_L2_LEAF_REG_MIN: float = 1.0
+_CAT_L2_LEAF_REG_MAX: float = 20.0
+_CAT_BAGGING_TEMP_MIN: float = 0.0
+_CAT_BAGGING_TEMP_MAX: float = 1.0
+_CAT_RANDOM_STRENGTH_MIN: float = 0.0
+_CAT_RANDOM_STRENGTH_MAX: float = 1.0
+_CAT_BOOTSTRAP_TYPE: str = "Bayesian"   # bagging_temperature only valid with Bayesian bootstrap
+_CAT_OPTUNA_N_TRIALS: int = 50
+_CAT_MODEL_PATH: str = "models/catboost_best.pkl"
+_CAT_PARAMS_PATH: str = "models/catboost_params.json"
+_CAT_FIGURE_PATH: str = "reports/figures/catboost_roc_pr.png"
+# Raw categorical column names that CatBoost can consume natively.
+# These columns are WoE-encoded in X_woe; prepare_catboost_features()
+# swaps them back to raw strings when df_raw is supplied.
+_CATBOOST_RAW_CATS: list[str] = [
+    "CODE_GENDER",
+    "NAME_EDUCATION_TYPE",
+    "NAME_INCOME_TYPE",
+    "ORGANIZATION_TYPE",
+]
 
 # Probability calibration constants
 # 70/30 train/calibration split: enough calibration data to fit Platt sigmoid
@@ -822,6 +867,12 @@ def _xgboost_optuna_objective(
         "min_child_weight": trial.suggest_int(
             "min_child_weight", _XGB_MIN_CHILD_WEIGHT_MIN, _XGB_MIN_CHILD_WEIGHT_MAX
         ),
+        "gamma": trial.suggest_float(
+            "gamma", _XGB_GAMMA_MIN, _XGB_GAMMA_MAX
+        ),
+        "max_delta_step": trial.suggest_int(
+            "max_delta_step", _XGB_MAX_DELTA_STEP_MIN, _XGB_MAX_DELTA_STEP_MAX
+        ),
         "reg_alpha": trial.suggest_float(
             "reg_alpha", _XGB_REG_ALPHA_MIN, _XGB_REG_ALPHA_MAX
         ),
@@ -1418,7 +1469,9 @@ def train_ensemble(
     -----
     Algorithm:
     1. Split X/y into 80% train (OOF) / 20% holdout via train_test_split with stratify=y
-    2. On the 80% train portion, run n_splits-fold stratified CV:
+    2. On the 80% train portion, run n_splits-fold CV:
+       - Uses _TemporalCV (walk-forward with embargo) when _TEMPORAL_SORT_COL is present in X
+       - Falls back to StratifiedKFold when temporal column is absent
        - Each fold: train LightGBM on fold training data, XGBoost on same training data
        - Collect OOF predictions: oof_lgb[val_idx], oof_xgb[val_idx]
     3a. If method='average': final models are lgb_final, xgb_final trained on full 80% train
@@ -1431,6 +1484,7 @@ def train_ensemble(
     - OOF predictions are withheld for fold validation folds
     - Holdout set (20%) never seen by any model during training or meta-learning
     - scale_pos_weight computed only on training data
+    - Temporal CV prevents double leakage: base model OOF ordering must match meta-learner CV
     """
     import lightgbm as lgb
     import xgboost as xgb
@@ -1455,10 +1509,17 @@ def train_ensemble(
     oof_lgb = np.zeros(n_train)
     oof_xgb = np.zeros(n_train)
 
-    # --- Stratified k-fold CV on the training set ---
-    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    # --- Auto-detect temporal groups (same pattern as train_lightgbm_optuna) ---
+    # Using _TemporalCV prevents double temporal leakage: base model OOF predictions
+    # are already temporally ordered; a StratifiedKFold meta-layer would amplify any
+    # residual time-structure signal in the OOF stack (López de Prado, Ch. 7).
+    if _TEMPORAL_SORT_COL in X_train.columns:
+        groups_train = X_train[_TEMPORAL_SORT_COL].to_numpy()
+    else:
+        groups_train = None
+    cv = _make_cv(groups_train, n_splits=n_splits)
 
-    for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X_train, y_train)):
+    for fold_idx, (train_idx, val_idx) in enumerate(cv.split(X_train, y_train)):
         X_fold_train = X_train.iloc[train_idx]
         y_fold_train = y_train.iloc[train_idx]
         X_fold_val = X_train.iloc[val_idx]
@@ -1514,6 +1575,105 @@ def train_ensemble(
     return ensemble_model, metrics
 
 
+def run_ensemble_workflow(
+    X: pd.DataFrame,
+    y: pd.Series,
+    lgb_params: dict | None = None,
+    xgb_params: dict | None = None,
+    method: Literal["average", "logistic"] = "logistic",
+) -> dict:
+    """
+    Train LGB + XGB base models and a stacked ensemble; persist if Gini improves.
+
+    Uses pre-supplied hyperparameters (or _ENSEMBLE_LGB/XGB_DEFAULTS when None)
+    so that callers can pass Optuna best_params without re-running HPO.  All three
+    models are evaluated on the same held-out test set (identical train_test_split
+    seed), making the Gini comparison statistically fair.
+
+    Parameters
+    ----------
+    X : pd.DataFrame
+        Feature matrix.
+    y : pd.Series
+        Binary target labels.
+    lgb_params : dict, optional
+        LightGBM hyperparameters. Defaults to _ENSEMBLE_LGB_DEFAULTS.
+    xgb_params : dict, optional
+        XGBoost hyperparameters. Defaults to _ENSEMBLE_XGB_DEFAULTS.
+    method : {'average', 'logistic'}, default='logistic'
+        Meta-learner type passed to train_ensemble().
+
+    Returns
+    -------
+    result : dict
+        Keys: lgb_gini, xgb_gini, ensemble_gini, improvement, persisted.
+        ``improvement`` = ensemble_gini − max(lgb_gini, xgb_gini).
+        ``persisted`` is True when the ensemble was written to disk.
+    """
+    import json as _json
+    import lightgbm as lgb
+    import xgboost as xgb
+
+    if lgb_params is None:
+        lgb_params = _ENSEMBLE_LGB_DEFAULTS.copy()
+    if xgb_params is None:
+        xgb_params = _ENSEMBLE_XGB_DEFAULTS.copy()
+
+    # Shared 80/20 split — identical seed guarantees all three use the same X_test.
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=_TEST_SIZE, stratify=y, random_state=_RANDOM_STATE
+    )
+
+    # --- Train LightGBM base model ---
+    lgb_model = lgb.LGBMClassifier(**lgb_params)
+    lgb_model.fit(X_train, y_train)
+    lgb_metrics = evaluate_model(lgb_model, X_test, y_test, "LightGBM")
+    lgb_gini: float = float(lgb_metrics["Gini"])
+
+    # --- Train XGBoost base model ---
+    n_neg = int((y_train == 0).sum())
+    n_pos = int((y_train == 1).sum())
+    scale_pos_weight = float(n_neg) / float(n_pos) if n_pos > 0 else 1.0
+    xgb_params_final = {**xgb_params, "scale_pos_weight": scale_pos_weight}
+    xgb_model = xgb.XGBClassifier(**xgb_params_final)
+    xgb_model.fit(X_train, y_train)
+    xgb_metrics = evaluate_model(xgb_model, X_test, y_test, "XGBoost")
+    xgb_gini: float = float(xgb_metrics["Gini"])
+
+    # --- Train stacked ensemble on same X/y (train_ensemble does its own internal split) ---
+    ensemble_model, ensemble_metrics = train_ensemble(
+        X, y, lgb_params=lgb_params, xgb_params=xgb_params, method=method
+    )
+    ensemble_gini: float = float(ensemble_metrics["Gini"])
+
+    best_single_gini = max(lgb_gini, xgb_gini)
+    improvement = ensemble_gini - best_single_gini
+    persisted = improvement >= _ENSEMBLE_PERSIST_THRESHOLD
+
+    if persisted:
+        save_model(ensemble_model, _ENSEMBLE_WORKFLOW_MODEL_PATH)
+
+        weights_payload = {
+            "lgb_gini": lgb_gini,
+            "xgb_gini": xgb_gini,
+            "ensemble_gini": ensemble_gini,
+            "improvement": improvement,
+            "method": method,
+        }
+        weights_path = Path(_ENSEMBLE_WORKFLOW_WEIGHTS_PATH)
+        weights_path.parent.mkdir(parents=True, exist_ok=True)
+        with weights_path.open("w") as fh:
+            _json.dump(weights_payload, fh, indent=2)
+
+    return {
+        "lgb_gini": lgb_gini,
+        "xgb_gini": xgb_gini,
+        "ensemble_gini": ensemble_gini,
+        "improvement": improvement,
+        "persisted": persisted,
+    }
+
+
 class _LogisticEnsemble:
     """
     Stacked ensemble with logistic meta-learner.
@@ -1557,6 +1717,185 @@ class _LogisticEnsemble:
         p_xgb = self.xgb_model.predict_proba(X)[:, 1]
         X_meta = np.column_stack([p_lgb, p_xgb])
         return self.meta_lr.predict_proba(X_meta)
+
+
+# ---------------------------------------------------------------------------
+# Priority 2.2 — CatBoost Optuna HPO + feature preparation helper
+# ---------------------------------------------------------------------------
+
+
+def prepare_catboost_features(
+    X_woe: pd.DataFrame,
+    df_raw: pd.DataFrame | None,
+) -> tuple[pd.DataFrame, list[str]]:
+    """
+    Prepare feature matrix for CatBoost by optionally substituting raw
+    categorical columns for their WoE-encoded counterparts.
+
+    CatBoost can exploit raw categorical strings natively (ordered target
+    encoding internally), but the WoE feature matrix encodes them as floats.
+    When ``df_raw`` is supplied, each column in ``_CATBOOST_RAW_CATS`` that
+    exists in both ``X_woe`` and ``df_raw`` is replaced with the raw string
+    series cast to ``category`` dtype.
+
+    Parameters
+    ----------
+    X_woe : pd.DataFrame
+        WoE-encoded feature matrix (all-numeric, shape n × p).
+    df_raw : pd.DataFrame or None
+        Raw application DataFrame from data_loader.  If None, X_woe is
+        returned unchanged with an empty cat_cols list.
+
+    Returns
+    -------
+    X_out : pd.DataFrame
+        Feature matrix with raw categoricals substituted (or X_woe unchanged).
+    cat_cols : list[str]
+        Column names that are categorical in X_out (for CatBoost's
+        ``cat_features`` argument).
+    """
+    if df_raw is None:
+        return X_woe, []
+
+    X_out = X_woe.copy()
+    cat_cols: list[str] = []
+    for col in _CATBOOST_RAW_CATS:
+        if col in X_out.columns and col in df_raw.columns:
+            X_out[col] = df_raw[col].values.astype(str)
+            X_out[col] = X_out[col].astype("category")
+            cat_cols.append(col)
+
+    return X_out, cat_cols
+
+
+def train_catboost_optuna(
+    X: pd.DataFrame,
+    y: pd.Series,
+    n_trials: int = _CAT_OPTUNA_N_TRIALS,
+    n_splits: int = _XGB_CV_N_SPLITS,
+    seed: int = _RANDOM_STATE,
+) -> tuple[CatBoostClassifier, dict, pd.DataFrame, pd.DataFrame, dict]:
+    """
+    Train CatBoost with Optuna Bayesian HPO and stratified k-fold CV.
+
+    Search space (validated by literature subagent):
+    - ``depth``         : int   [4, 8]      symmetric-tree depth
+    - ``learning_rate`` : float [0.02, 0.2] log-uniform
+    - ``l2_leaf_reg``   : float [1, 20]     L2 regularisation on leaf weights
+    - ``bagging_temperature`` : float [0, 1] Bayesian bootstrap temperature
+    - ``random_strength``     : float [0, 1] feature-split randomisation
+
+    Class imbalance is handled via ``scale_pos_weight = n_neg / n_pos``
+    (same convention as XGBoost), which adjusts leaf values for the minority
+    class without distorting predicted probabilities.
+
+    Parameters
+    ----------
+    X : pd.DataFrame
+        Feature matrix (WoE-encoded or prepared via prepare_catboost_features).
+    y : pd.Series
+        Binary target (0 = non-default, 1 = default).
+    n_trials : int
+        Optuna trials.  Default: 50 (fast mock runs use 1–2).
+    n_splits : int
+        CV folds for Optuna objective AUC.
+    seed : int
+        Random seed for reproducibility.
+
+    Returns
+    -------
+    model : CatBoostClassifier
+        Fitted final model (best params, full X_train).
+    metrics : dict
+        Output of ``evaluate_model()`` on the held-out test split.
+    X_test : pd.DataFrame
+        Held-out feature matrix.
+    y_test : pd.Series
+        Held-out labels.
+    best_params : dict
+        Best hyperparameters found by Optuna.
+    """
+    import json as _json
+    import optuna
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=_TEST_SIZE, random_state=seed, stratify=y
+    )
+
+    n_neg = int((y_train == 0).sum())
+    n_pos = int((y_train == 1).sum())
+    scale_pos_weight = n_neg / max(n_pos, 1)
+
+    # Auto-detect temporal ordering — same pattern as LGB/XGB trainers
+    if _TEMPORAL_SORT_COL in X_train.columns:
+        groups_train = X_train[_TEMPORAL_SORT_COL].to_numpy()
+    else:
+        groups_train = None
+    cv = _make_cv(groups_train, n_splits=n_splits)
+
+    def _objective(trial: optuna.Trial) -> float:
+        params = {
+            "depth": trial.suggest_int("depth", _CAT_DEPTH_MIN, _CAT_DEPTH_MAX),
+            "learning_rate": trial.suggest_float(
+                "learning_rate", _CAT_LEARNING_RATE_MIN, _CAT_LEARNING_RATE_MAX, log=True
+            ),
+            "l2_leaf_reg": trial.suggest_float(
+                "l2_leaf_reg", _CAT_L2_LEAF_REG_MIN, _CAT_L2_LEAF_REG_MAX
+            ),
+            "bagging_temperature": trial.suggest_float(
+                "bagging_temperature", _CAT_BAGGING_TEMP_MIN, _CAT_BAGGING_TEMP_MAX
+            ),
+            "random_strength": trial.suggest_float(
+                "random_strength", _CAT_RANDOM_STRENGTH_MIN, _CAT_RANDOM_STRENGTH_MAX
+            ),
+            "bootstrap_type": _CAT_BOOTSTRAP_TYPE,
+            "scale_pos_weight": scale_pos_weight,
+            "random_seed": seed,
+            "verbose": 0,
+            "allow_writing_files": False,
+        }
+
+        fold_aucs: list[float] = []
+        X_arr = X_train.to_numpy()
+        y_arr = y_train.to_numpy()
+        for train_idx, val_idx in cv.split(X_train, y_train):
+            model_fold = CatBoostClassifier(**params)
+            model_fold.fit(X_arr[train_idx], y_arr[train_idx], verbose=False)
+            val_prob = model_fold.predict_proba(X_arr[val_idx])[:, 1]
+            fold_aucs.append(roc_auc_score(y_arr[val_idx], val_prob))
+
+        return float(np.mean(fold_aucs))
+
+    study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=seed))
+    study.optimize(_objective, n_trials=n_trials, show_progress_bar=False)
+    best_params = study.best_params
+
+    # Final model — refit on full X_train with best params
+    final_params = {
+        **best_params,
+        "bootstrap_type": _CAT_BOOTSTRAP_TYPE,
+        "scale_pos_weight": scale_pos_weight,
+        "random_seed": seed,
+        "verbose": 0,
+        "allow_writing_files": False,
+    }
+    model = CatBoostClassifier(**final_params)
+    model.fit(X_train.to_numpy(), y_train.to_numpy(), verbose=False)
+
+    metrics = evaluate_model(model, X_test, y_test, model_name="CatBoost")
+    fig = plot_roc_and_pr(model, X_test, y_test, model_name="CatBoost", save_path=_CAT_FIGURE_PATH)
+    fig.clf()
+
+    # Persist artefacts
+    save_model(model, _CAT_MODEL_PATH)
+    params_path = Path(_CAT_PARAMS_PATH)
+    params_path.parent.mkdir(parents=True, exist_ok=True)
+    with params_path.open("w") as fh:
+        _json.dump(best_params, fh, indent=2)
+
+    return model, metrics, X_test, y_test, best_params
 
 
 # ---------------------------------------------------------------------------
