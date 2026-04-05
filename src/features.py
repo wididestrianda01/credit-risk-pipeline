@@ -1267,10 +1267,14 @@ def build_raw_feature_store(
     """
     X_eng = engineer_application_features(X) if "AMT_CREDIT" in X.columns else X.copy()
     X_eng = engineer_secondary_features(X_eng)
-    print(f"Raw features: {X_eng.shape[1]}")
+
+    # Keep only numeric columns — categorical columns (dtype 'category' or 'object')
+    # cannot be passed to gradient boosting without encoding.
+    numeric_cols = X_eng.select_dtypes(include=[np.number]).columns.tolist()
+    X_numeric = X_eng[numeric_cols].copy()
 
     # Replace inf/nan sentinel
-    X_filled = X_eng.copy()
+    X_filled = X_numeric.copy()
     X_filled = X_filled.replace([np.inf, -np.inf], np.nan)
     X_filled = X_filled.fillna(_NAN_SENTINEL)
 
