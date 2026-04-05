@@ -1375,3 +1375,178 @@ def apply_raw_feature_store(
             X_out[col] = _NAN_SENTINEL
 
     return X_out
+
+
+def compute_knn_target_encoding(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    X_test: pd.DataFrame,
+    features: list[str],
+    k: int = 500,
+    n_folds: int = 5,
+    random_state: int = 42,
+) -> tuple[pd.Series, pd.Series]:
+    """
+    OOF KNN mean target encoding.
+
+    For the training set, uses out-of-fold predictions to prevent leakage:
+    each fold is predicted by a KNN fitted on the remaining folds only.
+    For the test set, a single KNN is fitted on the full training set.
+
+    Parameters
+    ----------
+    X_train : pd.DataFrame
+        Training feature matrix. Must contain all columns in `features`.
+    y_train : pd.Series
+        Binary target (0/1), indexed as X_train.
+    X_test : pd.DataFrame
+        Test feature matrix. Must contain all columns in `features`.
+    features : list[str]
+        Column names defining the KNN neighbourhood space.
+        Recommended: ['EXT_SOURCE_MEAN', 'EXT_SOURCE_MIN',
+                      'CREDIT_INCOME_RATIO', 'ANNUITY_INCOME_RATIO']
+    k : int, optional
+        Number of neighbours. Default 500.
+    n_folds : int, optional
+        Number of OOF folds. Default 5.
+    random_state : int, optional
+        Reproducibility seed for StratifiedKFold. Default 42.
+
+    Returns
+    -------
+    train_enc : pd.Series
+        OOF soft-label encoding for training set, indexed as X_train.
+    test_enc : pd.Series
+        Soft-label encoding for test set, indexed as X_test.
+
+    Raises
+    ------
+    ValueError
+        If any column in `features` is absent from X_train or X_test.
+
+    Notes
+    -----
+    **Data leakage prevention:**
+      - OOF: Each fold's KNN is fit on (n_train - n_fold_size) rows only.
+      - Test: KNN is fit on full training set (len(X_train) rows).
+      - NaN handling: Any NaN or -999 sentinel is imputed with column median
+        (fit on each training fold separately, applied to val/test).
+      - Scaling: StandardScaler fit on each training fold separately.
+    """
+    from sklearn.model_selection import StratifiedKFold
+    from sklearn.neighbors import KNeighborsClassifier
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.impute import SimpleImputer
+
+    # ---------------------
+    # Input validation
+    # ---------------------
+    for feat in features:
+        if feat not in X_train.columns:
+            raise ValueError(f"Feature '{feat}' not found in X_train columns")
+        if feat not in X_test.columns:
+            raise ValueError(f"Feature '{feat}' not found in X_test columns")
+
+    # ---------------------
+    # Prepare feature subsets
+    # ---------------------
+    X_train_features = X_train[features].copy()
+    X_test_features = X_test[features].copy()
+
+    # ---------------------
+    # OOF loop: prevent leakage with StratifiedKFold
+    # ---------------------
+    skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=random_state)
+    train_enc = pd.Series(index=X_train.index, dtype=float)
+
+    for train_idx, val_idx in skf.split(X_train_features, y_train):
+        # Split indices
+        X_train_fold = X_train_features.iloc[train_idx].copy()
+        y_train_fold = y_train.iloc[train_idx].copy()
+        X_val_fold = X_train_features.iloc[val_idx].copy()
+
+        # Impute NaN and sentinel on training fold, fit on training fold
+        imputer = SimpleImputer(strategy="median")
+        X_train_fold_imputed = pd.DataFrame(
+            imputer.fit_transform(X_train_fold.replace(_NAN_SENTINEL, np.nan)),
+            columns=features,
+            index=X_train_fold.index,
+        )
+
+        # Transform validation fold using the fitted imputer
+        X_val_fold_imputed = pd.DataFrame(
+            imputer.transform(X_val_fold.replace(_NAN_SENTINEL, np.nan)),
+            columns=features,
+            index=X_val_fold.index,
+        )
+
+        # Fit scaler on training fold
+        scaler = StandardScaler()
+        X_train_fold_scaled = pd.DataFrame(
+            scaler.fit_transform(X_train_fold_imputed),
+            columns=features,
+            index=X_train_fold_imputed.index,
+        )
+
+        # Transform validation fold
+        X_val_fold_scaled = pd.DataFrame(
+            scaler.transform(X_val_fold_imputed),
+            columns=features,
+            index=X_val_fold_imputed.index,
+        )
+
+        # Fit KNN on training fold, predict on validation fold
+        knn = KNeighborsClassifier(n_neighbors=k, metric="minkowski", n_jobs=-1)
+        knn.fit(X_train_fold_scaled, y_train_fold)
+        val_proba = knn.predict_proba(X_val_fold_scaled)[:, 1]
+
+        # Store soft labels (probability of default)
+        train_enc.iloc[val_idx] = val_proba
+
+    # ---------------------
+    # Test encoding: fit on FULL training set
+    # ---------------------
+    # Impute NaN and sentinel, fit on full training set
+    imputer_full = SimpleImputer(strategy="median")
+    X_train_features_imputed = pd.DataFrame(
+        imputer_full.fit_transform(X_train_features.replace(_NAN_SENTINEL, np.nan)),
+        columns=features,
+        index=X_train_features.index,
+    )
+
+    # Transform test using the fitted imputer
+    X_test_features_imputed = pd.DataFrame(
+        imputer_full.transform(X_test_features.replace(_NAN_SENTINEL, np.nan)),
+        columns=features,
+        index=X_test_features.index,
+    )
+
+    # Fit scaler on full training set
+    scaler_full = StandardScaler()
+    X_train_features_scaled = pd.DataFrame(
+        scaler_full.fit_transform(X_train_features_imputed),
+        columns=features,
+        index=X_train_features_imputed.index,
+    )
+
+    # Transform test set
+    X_test_features_scaled = pd.DataFrame(
+        scaler_full.transform(X_test_features_imputed),
+        columns=features,
+        index=X_test_features_imputed.index,
+    )
+
+    # Fit KNN on full training set, predict on test
+    knn_full = KNeighborsClassifier(n_neighbors=k, metric="minkowski", n_jobs=-1)
+    knn_full.fit(X_train_features_scaled, y_train)
+    test_proba = knn_full.predict_proba(X_test_features_scaled)[:, 1]
+
+    test_enc = pd.Series(test_proba, index=X_test.index, dtype=float)
+
+    # ---------------------
+    # Return
+    # ---------------------
+    train_enc.name = "knn_target_enc"
+    test_enc.name = "knn_target_enc"
+
+    return train_enc, test_enc

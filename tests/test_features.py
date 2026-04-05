@@ -18,6 +18,7 @@ from credit_engine.features import (
     build_feature_store,
     build_features,
     build_raw_feature_store,
+    compute_knn_target_encoding,
     compute_woe_iv,
     engineer_application_features,
     engineer_secondary_features,
@@ -1240,3 +1241,212 @@ class TestExtSourcePolynomials:
         for col in ["EXT_SOURCE_1_SQ", "EXT_SOURCE_2_SQ",
                     "EXT_SOURCE_RATIO_12", "EXT_SOURCE_RATIO_23", "EXT_SCORE_FLOOR"]:
             assert not result[col].isna().any(), f"{col} must not contain NaN"
+
+
+# ---------------------------------------------------------------------------
+# KNN target encoding tests (TDD: RED phase)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def knn_encoding_data() -> tuple[pd.DataFrame, pd.Series, pd.DataFrame, pd.Series]:
+    """
+    Synthetic data for KNN encoding tests.
+
+    Creates 100 training samples and 20 test samples with 4 features
+    and a binary target (15% event rate).
+    """
+    rng = np.random.default_rng(42)
+    n_train = 100
+    n_test = 20
+
+    # Feature space: 2D for simplicity
+    X_train = pd.DataFrame({
+        "EXT_SOURCE_MEAN": rng.uniform(0, 1, n_train),
+        "EXT_SOURCE_MIN": rng.uniform(0, 0.8, n_train),
+        "CREDIT_INCOME_RATIO": rng.uniform(0, 5, n_train),
+        "ANNUITY_INCOME_RATIO": rng.uniform(0, 1, n_train),
+    })
+    y_train = pd.Series(rng.binomial(1, 0.15, n_train), index=X_train.index)
+
+    X_test = pd.DataFrame({
+        "EXT_SOURCE_MEAN": rng.uniform(0, 1, n_test),
+        "EXT_SOURCE_MIN": rng.uniform(0, 0.8, n_test),
+        "CREDIT_INCOME_RATIO": rng.uniform(0, 5, n_test),
+        "ANNUITY_INCOME_RATIO": rng.uniform(0, 1, n_test),
+    })
+    y_test = pd.Series(rng.binomial(1, 0.15, n_test), index=X_test.index)
+
+    return X_train, y_train, X_test, y_test
+
+
+class TestKnnTargetEncoding:
+    """Tests for compute_knn_target_encoding()."""
+
+    def test_train_output_range_valid(self, knn_encoding_data):
+        """train_enc values are in [0, 1] — they are probabilities."""
+        X_train, y_train, X_test, y_test = knn_encoding_data
+        features = ["EXT_SOURCE_MEAN", "EXT_SOURCE_MIN", "CREDIT_INCOME_RATIO", "ANNUITY_INCOME_RATIO"]
+
+        train_enc, _ = compute_knn_target_encoding(X_train, y_train, X_test, features, k=10)
+
+        assert (train_enc >= 0.0).all(), "All train_enc values must be >= 0.0"
+        assert (train_enc <= 1.0).all(), "All train_enc values must be <= 1.0"
+
+    def test_test_output_range_valid(self, knn_encoding_data):
+        """test_enc values are in [0, 1]."""
+        X_train, y_train, X_test, y_test = knn_encoding_data
+        features = ["EXT_SOURCE_MEAN", "EXT_SOURCE_MIN", "CREDIT_INCOME_RATIO", "ANNUITY_INCOME_RATIO"]
+
+        _, test_enc = compute_knn_target_encoding(X_train, y_train, X_test, features, k=10)
+
+        assert (test_enc >= 0.0).all(), "All test_enc values must be >= 0.0"
+        assert (test_enc <= 1.0).all(), "All test_enc values must be <= 1.0"
+
+    def test_output_length_matches_input(self, knn_encoding_data):
+        """len(train_enc) == len(X_train), len(test_enc) == len(X_test)."""
+        X_train, y_train, X_test, y_test = knn_encoding_data
+        features = ["EXT_SOURCE_MEAN", "EXT_SOURCE_MIN", "CREDIT_INCOME_RATIO", "ANNUITY_INCOME_RATIO"]
+
+        train_enc, test_enc = compute_knn_target_encoding(X_train, y_train, X_test, features, k=10)
+
+        assert len(train_enc) == len(X_train), "train_enc length must match X_train"
+        assert len(test_enc) == len(X_test), "test_enc length must match X_test"
+
+    def test_output_indexed_as_input(self, knn_encoding_data):
+        """train_enc index matches X_train index; test_enc index matches X_test."""
+        X_train, y_train, X_test, y_test = knn_encoding_data
+        features = ["EXT_SOURCE_MEAN", "EXT_SOURCE_MIN", "CREDIT_INCOME_RATIO", "ANNUITY_INCOME_RATIO"]
+
+        train_enc, test_enc = compute_knn_target_encoding(X_train, y_train, X_test, features, k=10)
+
+        pd.testing.assert_index_equal(train_enc.index, X_train.index)
+        pd.testing.assert_index_equal(test_enc.index, X_test.index)
+
+    def test_no_leakage_train_knn_size(self, knn_encoding_data, monkeypatch):
+        """Each OOF fold's KNN is trained on < len(X_train) rows.
+        Patch KNeighborsClassifier.fit to capture call argument sizes."""
+        X_train, y_train, X_test, y_test = knn_encoding_data
+        features = ["EXT_SOURCE_MEAN", "EXT_SOURCE_MIN", "CREDIT_INCOME_RATIO", "ANNUITY_INCOME_RATIO"]
+
+        from sklearn.neighbors import KNeighborsClassifier
+
+        fit_sizes = []
+        original_fit = KNeighborsClassifier.fit
+
+        def tracked_fit(self, X, y):
+            fit_sizes.append(len(X))
+            return original_fit(self, X, y)
+
+        monkeypatch.setattr(KNeighborsClassifier, "fit", tracked_fit)
+
+        train_enc, _ = compute_knn_target_encoding(X_train, y_train, X_test, features, k=10, n_folds=5)
+
+        # First 5 calls are OOF folds, each should be < len(X_train)
+        oof_sizes = fit_sizes[:5]
+        for fold_idx, size in enumerate(oof_sizes):
+            assert size < len(X_train), (
+                f"Fold {fold_idx}: KNN trained on {size} rows, must be < {len(X_train)} to prevent leakage"
+            )
+
+    def test_test_uses_full_train_fit(self, knn_encoding_data, monkeypatch):
+        """KNN for test set is fit once on len(X_train) rows (not folds).
+        Patch KNeighborsClassifier.fit and assert the largest fit = len(X_train)."""
+        X_train, y_train, X_test, y_test = knn_encoding_data
+        features = ["EXT_SOURCE_MEAN", "EXT_SOURCE_MIN", "CREDIT_INCOME_RATIO", "ANNUITY_INCOME_RATIO"]
+
+        from sklearn.neighbors import KNeighborsClassifier
+
+        fit_sizes = []
+        original_fit = KNeighborsClassifier.fit
+
+        def tracked_fit(self, X, y):
+            fit_sizes.append(len(X))
+            return original_fit(self, X, y)
+
+        monkeypatch.setattr(KNeighborsClassifier, "fit", tracked_fit)
+
+        train_enc, test_enc = compute_knn_target_encoding(X_train, y_train, X_test, features, k=10, n_folds=5)
+
+        # The last fit call should be on full training set
+        assert max(fit_sizes) == len(X_train), (
+            f"Max fit size {max(fit_sizes)} must equal len(X_train) {len(X_train)}"
+        )
+
+    def test_handles_nan_in_features(self):
+        """Features with NaN (EXT_SOURCE missing) don't raise errors.
+        NaN must be replaced with -999 sentinel before KNN computation."""
+        rng = np.random.default_rng(42)
+        n_train = 50
+        n_test = 10
+
+        X_train = pd.DataFrame({
+            "EXT_SOURCE_MEAN": np.where(rng.random(n_train) < 0.3, np.nan, rng.uniform(0, 1, n_train)),
+            "EXT_SOURCE_MIN": rng.uniform(0, 0.8, n_train),
+            "CREDIT_INCOME_RATIO": rng.uniform(0, 5, n_train),
+            "ANNUITY_INCOME_RATIO": rng.uniform(0, 1, n_train),
+        })
+        y_train = pd.Series(rng.binomial(1, 0.15, n_train), index=X_train.index)
+
+        X_test = pd.DataFrame({
+            "EXT_SOURCE_MEAN": np.where(rng.random(n_test) < 0.3, np.nan, rng.uniform(0, 1, n_test)),
+            "EXT_SOURCE_MIN": rng.uniform(0, 0.8, n_test),
+            "CREDIT_INCOME_RATIO": rng.uniform(0, 5, n_test),
+            "ANNUITY_INCOME_RATIO": rng.uniform(0, 1, n_test),
+        })
+
+        features = ["EXT_SOURCE_MEAN", "EXT_SOURCE_MIN", "CREDIT_INCOME_RATIO", "ANNUITY_INCOME_RATIO"]
+
+        # Should not raise; NaN handling is internal
+        train_enc, test_enc = compute_knn_target_encoding(X_train, y_train, X_test, features, k=10)
+
+        assert len(train_enc) == n_train
+        assert len(test_enc) == n_test
+        assert not train_enc.isna().any(), "train_enc must not contain NaN"
+        assert not test_enc.isna().any(), "test_enc must not contain NaN"
+
+    def test_missing_feature_col_raises_valueerror(self, knn_encoding_data):
+        """If a feature in `features` list is absent from X_train, raise ValueError."""
+        X_train, y_train, X_test, y_test = knn_encoding_data
+        features = ["EXT_SOURCE_MEAN", "NONEXISTENT_FEATURE"]
+
+        with pytest.raises(ValueError):
+            compute_knn_target_encoding(X_train, y_train, X_test, features, k=10)
+
+    def test_k_neighbours_respected(self, knn_encoding_data, monkeypatch):
+        """With k=3 and 10 training rows, the KNN uses n_neighbors=3."""
+        from credit_engine.features import _NAN_SENTINEL
+        from sklearn.neighbors import KNeighborsClassifier
+
+        # Create smaller dataset
+        X_train = pd.DataFrame({
+            "EXT_SOURCE_MEAN": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95],
+            "EXT_SOURCE_MIN": [0.05, 0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 0.9],
+            "CREDIT_INCOME_RATIO": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+            "ANNUITY_INCOME_RATIO": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95],
+        })
+        y_train = pd.Series([0, 1, 0, 0, 1, 0, 1, 0, 0, 1], index=X_train.index)
+
+        X_test = pd.DataFrame({
+            "EXT_SOURCE_MEAN": [0.5],
+            "EXT_SOURCE_MIN": [0.45],
+            "CREDIT_INCOME_RATIO": [5],
+            "ANNUITY_INCOME_RATIO": [0.5],
+        })
+
+        features = ["EXT_SOURCE_MEAN", "EXT_SOURCE_MIN", "CREDIT_INCOME_RATIO", "ANNUITY_INCOME_RATIO"]
+
+        n_neighbors_used = []
+        original_init = KNeighborsClassifier.__init__
+
+        def tracked_init(self, n_neighbors=5, **kwargs):
+            n_neighbors_used.append(n_neighbors)
+            return original_init(self, n_neighbors=n_neighbors, **kwargs)
+
+        monkeypatch.setattr(KNeighborsClassifier, "__init__", tracked_init)
+
+        train_enc, test_enc = compute_knn_target_encoding(X_train, y_train, X_test, features, k=3, n_folds=2)
+
+        # All KNN instances should use k=3
+        for k_used in n_neighbors_used:
+            assert k_used == 3, f"Expected k=3, got k={k_used}"
