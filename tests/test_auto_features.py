@@ -1,0 +1,830 @@
+"""
+test_auto_features.py
+---------------------
+Unit and integration tests for credit_engine/auto_features.py.
+
+Tests cover featuretools-based automated feature engineering:
+  - Entity table loading from CSVs
+  - EntitySet construction
+  - DFS feature generation with cardinality constraints
+  - Feature selection (IV/correlation filtering)
+  - Feature store application to test data
+
+Tests use synthetic CSVs written to a temporary directory so they run
+without the real dataset and without network access.
+
+Run with
+--------
+    pytest tests/test_auto_features.py -v
+    pytest tests/test_auto_features.py -v -m slow  # include featuretools DFS
+"""
+
+import json
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from credit_engine.auto_features import (
+    _build_entity_set,
+    _load_entity_tables,
+    apply_featuretools_feature_store,
+    build_featuretools_feature_store,
+)
+
+# ---------------------------------------------------------------------------
+# Synthetic data helpers
+# ---------------------------------------------------------------------------
+
+
+def _write_synthetic_auto_features_csvs(data_dir: Path) -> None:
+    """Write minimal synthetic CSVs for featuretools feature store tests.
+
+    Creates 5 unique SK_ID_CURR (applicants) with varying amounts of
+    secondary table data to exercise edge cases (0, 1, >1 rows per customer).
+    """
+
+    # application_train — 5 applicants
+    app_train = pd.DataFrame(
+        {
+            "SK_ID_CURR": [100001, 100002, 100003, 100004, 100005],
+            "TARGET": [0, 1, 0, 1, 0],
+            "AMT_CREDIT": [500_000, 300_000, 200_000, 400_000, 250_000],
+            "AMT_INCOME_TOTAL": [100_000, 80_000, 120_000, 90_000, 110_000],
+            "AMT_ANNUITY": [25_000, 15_000, 20_000, 18_000, 30_000],
+            "DAYS_BIRTH": [-9461, -16765, -19046, -12000, -14500],
+            "DAYS_EMPLOYED": [-637, -1188, -3039, -2000, -1500],
+            "EXT_SOURCE_1": [0.6, 0.4, 0.7, np.nan, 0.5],
+            "EXT_SOURCE_2": [0.7, 0.5, 0.8, 0.6, 0.6],
+            "EXT_SOURCE_3": [0.5, 0.3, 0.6, np.nan, 0.7],
+        }
+    )
+    app_train.to_csv(data_dir / "application_train.csv", index=False)
+
+    # application_test — same IDs, no TARGET; plus 2 new test-only IDs
+    app_test = pd.DataFrame(
+        {
+            "SK_ID_CURR": [100001, 100002, 100003, 100004, 100005, 100006, 100007],
+            "AMT_CREDIT": [500_000, 300_000, 200_000, 400_000, 250_000, 350_000, 280_000],
+            "AMT_INCOME_TOTAL": [100_000, 80_000, 120_000, 90_000, 110_000, 95_000, 105_000],
+            "AMT_ANNUITY": [25_000, 15_000, 20_000, 18_000, 30_000, 22_000, 28_000],
+            "DAYS_BIRTH": [-9461, -16765, -19046, -12000, -14500, -15000, -13000],
+            "DAYS_EMPLOYED": [-637, -1188, -3039, -2000, -1500, -2500, -3500],
+            "EXT_SOURCE_1": [0.6, 0.4, 0.7, np.nan, 0.5, 0.55, 0.65],
+            "EXT_SOURCE_2": [0.7, 0.5, 0.8, 0.6, 0.6, 0.62, 0.58],
+            "EXT_SOURCE_3": [0.5, 0.3, 0.6, np.nan, 0.7, 0.68, 0.52],
+        }
+    )
+    app_test.to_csv(data_dir / "application_test.csv", index=False)
+
+    # bureau — secondary table: 2 entries for 100001, 1 for 100002, 0 for 100003/100004, 2 for 100005
+    bureau = pd.DataFrame(
+        {
+            "SK_ID_CURR": [100001, 100001, 100002, 100005, 100005],
+            "SK_ID_BUREAU": [200001, 200002, 200003, 200004, 200005],
+            "CREDIT_ACTIVE": ["Active", "Closed", "Active", "Active", "Closed"],
+            "DAYS_CREDIT": [-497, -1570, -246, -300, -800],
+            "AMT_CREDIT_SUM": [225_000.0, 464_323.5, 808_650.0, 300_000.0, 150_000.0],
+            "AMT_CREDIT_SUM_DEBT": [0.0, np.nan, np.nan, 50_000.0, 10_000.0],
+        }
+    )
+    bureau.to_csv(data_dir / "bureau.csv", index=False)
+
+    # bureau_balance — monthly history for bureau entries
+    bureau_balance = pd.DataFrame(
+        {
+            "SK_ID_BUREAU": [200001, 200001, 200001, 200002, 200002, 200003, 200004, 200005],
+            "MONTHS_BALANCE": [-1, -2, -3, -1, -2, -1, -1, -2],
+            "STATUS": ["0", "0", "C", "1", "0", "C", "0", "1"],
+        }
+    )
+    bureau_balance.to_csv(data_dir / "bureau_balance.csv", index=False)
+
+    # previous_application — 2 entries for 100001, 1 for 100003, 0 for 100002/100004/100005
+    previous_application = pd.DataFrame(
+        {
+            "SK_ID_PREV": [300001, 300002, 300003],
+            "SK_ID_CURR": [100001, 100001, 100003],
+            "NAME_CONTRACT_STATUS": ["Approved", "Refused", "Approved"],
+            "AMT_APPLICATION": [24_835.5, 44_946.0, 4_500.0],
+            "AMT_CREDIT": [20_250.0, 56_970.0, 4_500.0],
+            "DAYS_DECISION": [-73, -164, -128],
+        }
+    )
+    previous_application.to_csv(data_dir / "previous_application.csv", index=False)
+
+    # POS_CASH_balance — 2 entries for SK_ID_PREV=300001 (customer 100001), 1 for 300003 (customer 100003)
+    pos_cash = pd.DataFrame(
+        {
+            "SK_ID_PREV": [300001, 300001, 300003],
+            "SK_ID_CURR": [100001, 100001, 100003],
+            "MONTHS_BALANCE": [-1, -2, -1],
+            "CNT_INSTALMENT": [24.0, 24.0, 12.0],
+            "SK_DPD": [0, 0, 0],
+        }
+    )
+    pos_cash.to_csv(data_dir / "POS_CASH_balance.csv", index=False)
+
+    # installments_payments — 3 entries for SK_ID_PREV=300001, 1 for 300002
+    installments = pd.DataFrame(
+        {
+            "SK_ID_PREV": [300001, 300001, 300001, 300003],
+            "SK_ID_CURR": [100001, 100001, 100001, 100003],
+            "NUM_INSTALMENT_NUMBER": [1, 2, 3, 1],
+            "DAYS_INSTALMENT": [-319.0, -289.0, -259.0, -128.0],
+            "DAYS_ENTRY_PAYMENT": [-321.0, -291.0, -261.0, -130.0],
+            "AMT_INSTALMENT": [2_160.585, 2_160.585, 2_160.585, 375.0],
+            "AMT_PAYMENT": [2_160.585, 2_160.585, 2_160.585, 375.0],
+        }
+    )
+    installments.to_csv(data_dir / "installments_payments.csv", index=False)
+
+    # credit_card_balance — 2 entries for SK_ID_PREV=300001, 1 for 300003
+    cc_balance = pd.DataFrame(
+        {
+            "SK_ID_PREV": [300001, 300001, 300003],
+            "SK_ID_CURR": [100001, 100001, 100003],
+            "MONTHS_BALANCE": [-1, -2, -1],
+            "AMT_BALANCE": [0.0, 0.0, 100.0],
+            "AMT_CREDIT_LIMIT_ACTUAL": [135_000, 135_000, 50_000],
+        }
+    )
+    cc_balance.to_csv(data_dir / "credit_card_balance.csv", index=False)
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def data_dir(tmp_path) -> Path:
+    """Temporary directory with synthetic CSVs for auto_features tests."""
+    _write_synthetic_auto_features_csvs(tmp_path)
+    return tmp_path
+
+
+@pytest.fixture
+def y_train() -> pd.Series:
+    """Target series for the 5 training applicants."""
+    return pd.Series(
+        [0, 1, 0, 1, 0],
+        index=[100001, 100002, 100003, 100004, 100005],
+        name="TARGET",
+    )
+
+
+@pytest.fixture(scope="module")
+def mock_tables(tmp_path_factory) -> dict[str, pd.DataFrame]:
+    """Pre-built entity tables for low-level unit tests."""
+    tmpdir = tmp_path_factory.mktemp("tables")
+    _write_synthetic_auto_features_csvs(tmpdir)
+    train_ids = [100001, 100002, 100003, 100004, 100005]
+    return _load_entity_tables(tmpdir, train_ids)
+
+
+# ---------------------------------------------------------------------------
+# Tests: _load_entity_tables
+# ---------------------------------------------------------------------------
+
+
+class TestLoadEntityTables:
+    """Unit tests for _load_entity_tables helper."""
+
+    def test_returns_dict_with_expected_keys(self, data_dir):
+        """Should return dict with all 7 entity table keys."""
+        train_ids = [100001, 100002, 100003, 100004, 100005]
+        tables = _load_entity_tables(data_dir, train_ids)
+
+        expected_keys = {
+            "application",
+            "bureau",
+            "bureau_balance",
+            "previous_application",
+            "pos_cash",
+            "installments",
+            "credit_card",
+        }
+        assert set(tables.keys()) == expected_keys
+
+    def test_returns_dataframes(self, data_dir):
+        """All returned values should be DataFrames."""
+        train_ids = [100001, 100002, 100003, 100004, 100005]
+        tables = _load_entity_tables(data_dir, train_ids)
+
+        for key, table in tables.items():
+            assert isinstance(table, pd.DataFrame), f"tables['{key}'] is not a DataFrame"
+
+    def test_application_has_sk_id_curr(self, data_dir):
+        """Application table must have SK_ID_CURR column."""
+        train_ids = [100001, 100002, 100003, 100004, 100005]
+        tables = _load_entity_tables(data_dir, train_ids)
+
+        assert "SK_ID_CURR" in tables["application"].columns
+
+    def test_application_has_target(self, data_dir):
+        """Application table must have TARGET column in train mode."""
+        train_ids = [100001, 100002, 100003, 100004, 100005]
+        tables = _load_entity_tables(data_dir, train_ids)
+
+        assert "TARGET" in tables["application"].columns
+
+    def test_application_train_ids_only(self, data_dir):
+        """Application table should contain only train_ids."""
+        train_ids = [100001, 100002, 100003]
+        tables = _load_entity_tables(data_dir, train_ids)
+
+        assert set(tables["application"]["SK_ID_CURR"]) == set(train_ids)
+
+    def test_bureau_filtered_to_train_ids(self, data_dir):
+        """Bureau table should only contain rows matching train_ids."""
+        train_ids = [100001, 100002]
+        tables = _load_entity_tables(data_dir, train_ids)
+
+        bureau = tables["bureau"]
+        assert set(bureau["SK_ID_CURR"]).issubset(set(train_ids))
+
+    def test_previous_application_filtered_to_train_ids(self, data_dir):
+        """Previous application table should only contain rows matching train_ids."""
+        train_ids = [100001, 100003]
+        tables = _load_entity_tables(data_dir, train_ids)
+
+        prev = tables["previous_application"]
+        assert set(prev["SK_ID_CURR"]).issubset(set(train_ids))
+
+    def test_pos_cash_filtered_to_train_ids(self, data_dir):
+        """POS_CASH table should only contain rows matching train_ids."""
+        train_ids = [100001, 100003]
+        tables = _load_entity_tables(data_dir, train_ids)
+
+        pos = tables["pos_cash"]
+        assert set(pos["SK_ID_CURR"]).issubset(set(train_ids))
+
+    def test_installments_filtered_to_train_ids(self, data_dir):
+        """Installments table should only contain rows matching train_ids."""
+        train_ids = [100001, 100003]
+        tables = _load_entity_tables(data_dir, train_ids)
+
+        inst = tables["installments"]
+        assert set(inst["SK_ID_CURR"]).issubset(set(train_ids))
+
+    def test_credit_card_filtered_to_train_ids(self, data_dir):
+        """Credit card table should only contain rows matching train_ids."""
+        train_ids = [100001, 100003]
+        tables = _load_entity_tables(data_dir, train_ids)
+
+        cc = tables["credit_card"]
+        assert set(cc["SK_ID_CURR"]).issubset(set(train_ids))
+
+    def test_bureau_balance_preserves_hierarchy(self, data_dir):
+        """Bureau balance should only include SK_ID_BUREAU from filtered bureau."""
+        train_ids = [100001, 100002]
+        tables = _load_entity_tables(data_dir, train_ids)
+
+        bureau = tables["bureau"]
+        bureau_balance = tables["bureau_balance"]
+
+        # All SK_ID_BUREAU in bureau_balance should exist in bureau
+        valid_bureaus = set(bureau["SK_ID_BUREAU"])
+        actual_bureaus = set(bureau_balance["SK_ID_BUREAU"])
+        assert actual_bureaus.issubset(valid_bureaus)
+
+
+# ---------------------------------------------------------------------------
+# Tests: _build_entity_set
+# ---------------------------------------------------------------------------
+
+
+class TestBuildEntitySet:
+    """Unit tests for _build_entity_set helper."""
+
+    def test_returns_entity_set(self, mock_tables):
+        """Should return a featuretools EntitySet."""
+        try:
+            import featuretools as ft
+        except ImportError:
+            pytest.skip("featuretools not installed")
+
+        entity_set = _build_entity_set(mock_tables)
+        assert isinstance(entity_set, ft.EntitySet)
+
+    def test_entity_set_has_all_tables(self, mock_tables):
+        """EntitySet should contain all 7 entity tables (featuretools 1.x API)."""
+        try:
+            import featuretools as ft
+        except ImportError:
+            pytest.skip("featuretools not installed")
+
+        entity_set = _build_entity_set(mock_tables)
+        # featuretools 1.x uses dataframe_dict (not entities)
+        entity_names = set(entity_set.dataframe_dict.keys())
+
+        expected = {
+            "application",
+            "bureau",
+            "bureau_balance",
+            "previous_application",
+            "pos_cash",
+            "installments",
+            "credit_card",
+        }
+        assert expected.issubset(entity_names)
+
+    def test_application_has_sk_id_curr_column(self, mock_tables):
+        """Application entity should have SK_ID_CURR as a column."""
+        try:
+            import featuretools as ft
+        except ImportError:
+            pytest.skip("featuretools not installed")
+
+        entity_set = _build_entity_set(mock_tables)
+        # featuretools 1.x: es['name'] returns the DataFrame directly
+        app_df = entity_set["application"]
+        assert "SK_ID_CURR" in app_df.columns
+
+    def test_application_index_is_unique(self, mock_tables):
+        """Application SK_ID_CURR should be unique."""
+        try:
+            import featuretools as ft
+        except ImportError:
+            pytest.skip("featuretools not installed")
+
+        entity_set = _build_entity_set(mock_tables)
+        # featuretools 1.x: es['name'] returns the DataFrame directly
+        app_df = entity_set["application"]
+        assert app_df["SK_ID_CURR"].is_unique
+
+    def test_relationships_defined_bureau(self, mock_tables):
+        """Should define a relationship from bureau to application."""
+        try:
+            import featuretools as ft
+        except ImportError:
+            pytest.skip("featuretools not installed")
+
+        entity_set = _build_entity_set(mock_tables)
+        # Relationships should exist
+        assert len(entity_set.relationships) > 0
+
+
+# ---------------------------------------------------------------------------
+# Tests: build_featuretools_feature_store (main API)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildFeaturetoolsFeatureStore:
+    """Integration tests for build_featuretools_feature_store."""
+
+    def test_returns_tuple_of_three(self, data_dir, y_train):
+        """Should return (DataFrame, list, list[str]) tuple."""
+        result = build_featuretools_feature_store(
+            data_dir,
+            y_train,
+            agg_primitives=["sum", "mean"],
+            max_depth=1,
+            iv_threshold=0.0,
+            corr_threshold=0.99,
+            n_jobs=1,
+        )
+
+        assert isinstance(result, tuple)
+        assert len(result) == 3
+
+    def test_returns_feature_matrix_dataframe(self, data_dir, y_train):
+        """First return value should be a DataFrame."""
+        result = build_featuretools_feature_store(
+            data_dir,
+            y_train,
+            agg_primitives=["sum", "mean"],
+            max_depth=1,
+            iv_threshold=0.0,
+            corr_threshold=0.99,
+        )
+
+        feature_matrix, _, _ = result
+        assert isinstance(feature_matrix, pd.DataFrame)
+
+    def test_returns_feature_defs_list(self, data_dir, y_train):
+        """Second return value should be a list (feature definitions)."""
+        result = build_featuretools_feature_store(
+            data_dir,
+            y_train,
+            agg_primitives=["sum", "mean"],
+            max_depth=1,
+            iv_threshold=0.0,
+            corr_threshold=0.99,
+        )
+
+        _, feature_defs, _ = result
+        assert isinstance(feature_defs, list)
+
+    def test_returns_selected_cols_list_of_strings(self, data_dir, y_train):
+        """Third return value should be a list of column names."""
+        result = build_featuretools_feature_store(
+            data_dir,
+            y_train,
+            agg_primitives=["sum", "mean"],
+            max_depth=1,
+            iv_threshold=0.0,
+            corr_threshold=0.99,
+        )
+
+        _, _, selected_cols = result
+        assert isinstance(selected_cols, list)
+        assert all(isinstance(col, str) for col in selected_cols)
+
+    def test_feature_matrix_index_matches_y_train(self, data_dir, y_train):
+        """Feature matrix index should match y_train index (train IDs only)."""
+        result = build_featuretools_feature_store(
+            data_dir,
+            y_train,
+            agg_primitives=["sum", "mean"],
+            max_depth=1,
+            iv_threshold=0.0,
+            corr_threshold=0.99,
+        )
+
+        feature_matrix, _, _ = result
+        assert set(feature_matrix.index) == set(y_train.index)
+
+    def test_feature_matrix_rows_match_y_train(self, data_dir, y_train):
+        """Feature matrix should have same number of rows as y_train."""
+        result = build_featuretools_feature_store(
+            data_dir,
+            y_train,
+            agg_primitives=["sum", "mean"],
+            max_depth=1,
+            iv_threshold=0.0,
+            corr_threshold=0.99,
+        )
+
+        feature_matrix, _, _ = result
+        assert len(feature_matrix) == len(y_train)
+
+    def test_no_inf_values_in_feature_matrix(self, data_dir, y_train):
+        """Feature matrix should not contain np.inf values."""
+        result = build_featuretools_feature_store(
+            data_dir,
+            y_train,
+            agg_primitives=["sum", "mean"],
+            max_depth=1,
+            iv_threshold=0.0,
+            corr_threshold=0.99,
+        )
+
+        feature_matrix, _, _ = result
+        assert not np.isinf(feature_matrix.values).any()
+
+    def test_nan_filled_with_sentinel(self, data_dir, y_train):
+        """Feature matrix should not contain NaN (should be filled with -999 sentinel)."""
+        result = build_featuretools_feature_store(
+            data_dir,
+            y_train,
+            agg_primitives=["sum", "mean"],
+            max_depth=1,
+            iv_threshold=0.0,
+            corr_threshold=0.99,
+        )
+
+        feature_matrix, _, _ = result
+        assert not feature_matrix.isna().any().any()
+
+    def test_selected_cols_is_subset_of_columns(self, data_dir, y_train):
+        """All selected columns should exist in feature matrix."""
+        result = build_featuretools_feature_store(
+            data_dir,
+            y_train,
+            agg_primitives=["sum", "mean"],
+            max_depth=1,
+            iv_threshold=0.0,
+            corr_threshold=0.99,
+        )
+
+        feature_matrix, _, selected_cols = result
+        assert set(selected_cols).issubset(set(feature_matrix.columns))
+
+    def test_feature_defs_is_nonempty(self, data_dir, y_train):
+        """Feature definitions should not be empty."""
+        result = build_featuretools_feature_store(
+            data_dir,
+            y_train,
+            agg_primitives=["sum", "mean"],
+            max_depth=1,
+            iv_threshold=0.0,
+            corr_threshold=0.99,
+        )
+
+        _, feature_defs, _ = result
+        assert len(feature_defs) > 0
+
+    def test_iv_threshold_filters_features(self, data_dir, y_train):
+        """Increasing IV threshold should reduce selected columns."""
+        result_low = build_featuretools_feature_store(
+            data_dir,
+            y_train,
+            agg_primitives=["sum", "mean"],
+            max_depth=1,
+            iv_threshold=0.0,
+            corr_threshold=0.99,
+        )
+
+        result_high = build_featuretools_feature_store(
+            data_dir,
+            y_train,
+            agg_primitives=["sum", "mean"],
+            max_depth=1,
+            iv_threshold=0.5,  # very high threshold
+            corr_threshold=0.99,
+        )
+
+        _, _, cols_low = result_low
+        _, _, cols_high = result_high
+
+        # High IV threshold should result in fewer or equal columns
+        assert len(cols_high) <= len(cols_low)
+
+    def test_corr_threshold_filters_features(self, data_dir, y_train):
+        """Lower correlation threshold should reduce selected columns."""
+        result_low_corr = build_featuretools_feature_store(
+            data_dir,
+            y_train,
+            agg_primitives=["sum", "mean"],
+            max_depth=1,
+            iv_threshold=0.0,
+            corr_threshold=0.50,  # low correlation threshold
+        )
+
+        result_high_corr = build_featuretools_feature_store(
+            data_dir,
+            y_train,
+            agg_primitives=["sum", "mean"],
+            max_depth=1,
+            iv_threshold=0.0,
+            corr_threshold=0.99,  # high correlation threshold
+        )
+
+        _, _, cols_low_corr = result_low_corr
+        _, _, cols_high_corr = result_high_corr
+
+        # Low correlation threshold should result in fewer features (more aggressive dedup)
+        assert len(cols_low_corr) <= len(cols_high_corr)
+
+    def test_output_path_saves_parquet(self, data_dir, y_train, tmp_path):
+        """When output_path is provided, should save feature matrix as parquet."""
+        output_file = tmp_path / "features.parquet"
+
+        build_featuretools_feature_store(
+            data_dir,
+            y_train,
+            output_path=output_file,
+            agg_primitives=["sum", "mean"],
+            max_depth=1,
+            iv_threshold=0.0,
+            corr_threshold=0.99,
+        )
+
+        assert output_file.exists()
+        assert output_file.suffix == ".parquet"
+
+    def test_output_path_parquet_readable(self, data_dir, y_train, tmp_path):
+        """Saved parquet file should be readable and match feature matrix."""
+        output_file = tmp_path / "features.parquet"
+
+        result = build_featuretools_feature_store(
+            data_dir,
+            y_train,
+            output_path=output_file,
+            agg_primitives=["sum", "mean"],
+            max_depth=1,
+            iv_threshold=0.0,
+            corr_threshold=0.99,
+        )
+
+        feature_matrix, _, _ = result
+        saved_matrix = pd.read_parquet(output_file)
+
+        pd.testing.assert_frame_equal(feature_matrix, saved_matrix)
+
+    @pytest.mark.slow
+    def test_default_agg_primitives_used(self, data_dir, y_train):
+        """When agg_primitives is None, default set should be used."""
+        result = build_featuretools_feature_store(
+            data_dir,
+            y_train,
+            agg_primitives=None,  # use defaults
+            max_depth=1,
+            iv_threshold=0.0,
+            corr_threshold=0.99,
+        )
+
+        feature_matrix, _, _ = result
+        # Should still produce valid features
+        assert len(feature_matrix) == len(y_train)
+        assert len(feature_matrix.columns) > 0
+
+    @pytest.mark.slow
+    def test_feature_matrix_numeric_dtypes(self, data_dir, y_train):
+        """All feature matrix columns should be numeric."""
+        result = build_featuretools_feature_store(
+            data_dir,
+            y_train,
+            agg_primitives=["sum", "mean"],
+            max_depth=1,
+            iv_threshold=0.0,
+            corr_threshold=0.99,
+        )
+
+        feature_matrix, _, _ = result
+        assert all(pd.api.types.is_numeric_dtype(feature_matrix[col]) for col in feature_matrix.columns)
+
+
+# ---------------------------------------------------------------------------
+# Tests: apply_featuretools_feature_store
+# ---------------------------------------------------------------------------
+
+
+class TestApplyFeaturetoolsFeatureStore:
+    """Integration tests for apply_featuretools_feature_store."""
+
+    @pytest.fixture
+    def built_store(self, data_dir, y_train):
+        """Build a feature store once, then apply it to test data."""
+        feature_matrix, feature_defs, selected_cols = build_featuretools_feature_store(
+            data_dir,
+            y_train,
+            agg_primitives=["sum", "mean"],
+            max_depth=1,
+            iv_threshold=0.0,
+            corr_threshold=0.99,
+        )
+        return feature_matrix, feature_defs, selected_cols
+
+    def test_apply_returns_dataframe(self, data_dir, built_store):
+        """Should return a DataFrame."""
+        _, feature_defs, selected_cols = built_store
+
+        result = apply_featuretools_feature_store(
+            data_dir,
+            feature_defs,
+            selected_cols,
+            mode="test",
+        )
+
+        assert isinstance(result, pd.DataFrame)
+
+    def test_apply_index_matches_test_ids(self, data_dir, built_store):
+        """Result index should match test data IDs."""
+        _, feature_defs, selected_cols = built_store
+
+        result = apply_featuretools_feature_store(
+            data_dir,
+            feature_defs,
+            selected_cols,
+            mode="test",
+        )
+
+        # Synthetic test data has IDs 100001-100007
+        test_ids = [100001, 100002, 100003, 100004, 100005, 100006, 100007]
+        assert set(result.index) == set(test_ids)
+
+    def test_apply_columns_match_selected_cols(self, data_dir, built_store):
+        """Result columns should match selected_cols."""
+        _, feature_defs, selected_cols = built_store
+
+        result = apply_featuretools_feature_store(
+            data_dir,
+            feature_defs,
+            selected_cols,
+            mode="test",
+        )
+
+        assert set(result.columns) == set(selected_cols)
+
+    def test_apply_no_inf_values(self, data_dir, built_store):
+        """Result should not contain np.inf values."""
+        _, feature_defs, selected_cols = built_store
+
+        result = apply_featuretools_feature_store(
+            data_dir,
+            feature_defs,
+            selected_cols,
+            mode="test",
+        )
+
+        assert not np.isinf(result.values).any()
+
+    def test_apply_nan_filled_with_sentinel(self, data_dir, built_store):
+        """Result should not contain NaN (filled with -999)."""
+        _, feature_defs, selected_cols = built_store
+
+        result = apply_featuretools_feature_store(
+            data_dir,
+            feature_defs,
+            selected_cols,
+            mode="test",
+        )
+
+        assert not result.isna().any().any()
+
+    def test_apply_numeric_dtypes(self, data_dir, built_store):
+        """All result columns should be numeric."""
+        _, feature_defs, selected_cols = built_store
+
+        result = apply_featuretools_feature_store(
+            data_dir,
+            feature_defs,
+            selected_cols,
+            mode="test",
+        )
+
+        assert all(pd.api.types.is_numeric_dtype(result[col]) for col in result.columns)
+
+    def test_apply_mode_test_vs_train(self, data_dir, built_store, y_train):
+        """Test and train modes should produce different numbers of rows."""
+        _, feature_defs, selected_cols = built_store
+
+        result_train = apply_featuretools_feature_store(
+            data_dir,
+            feature_defs,
+            selected_cols,
+            mode="train",
+        )
+
+        result_test = apply_featuretools_feature_store(
+            data_dir,
+            feature_defs,
+            selected_cols,
+            mode="test",
+        )
+
+        # Synthetic data: 5 train IDs, 7 test IDs
+        assert len(result_train) == len(y_train)
+        assert len(result_test) == 7
+
+
+# ---------------------------------------------------------------------------
+# Tests: Edge cases and error handling
+# ---------------------------------------------------------------------------
+
+
+class TestAutoFeaturesEdgeCases:
+    """Edge case and error handling tests."""
+
+    def test_empty_train_ids_raises_error(self, data_dir, tmp_path):
+        """Passing empty train_ids should raise an error."""
+        y_train_empty = pd.Series([], name="TARGET")
+
+        with pytest.raises((ValueError, IndexError)):
+            build_featuretools_feature_store(
+                data_dir,
+                y_train_empty,
+                agg_primitives=["sum"],
+                max_depth=1,
+            )
+
+    def test_missing_csv_files_raises_error(self, tmp_path):
+        """Missing CSV files should raise FileNotFoundError."""
+        y_train = pd.Series([0, 1], index=[100001, 100002], name="TARGET")
+
+        with pytest.raises(FileNotFoundError):
+            build_featuretools_feature_store(
+                tmp_path,  # empty directory
+                y_train,
+                agg_primitives=["sum"],
+                max_depth=1,
+            )
+
+    def test_negative_iv_threshold_raises_error(self, data_dir, y_train):
+        """Negative IV threshold should raise an error."""
+        with pytest.raises((ValueError, AssertionError)):
+            build_featuretools_feature_store(
+                data_dir,
+                y_train,
+                iv_threshold=-0.1,
+                agg_primitives=["sum"],
+                max_depth=1,
+            )
+
+    def test_invalid_mode_raises_error(self, data_dir, built_store):
+        """Invalid mode should raise an error."""
+        _, feature_defs, selected_cols = built_store
+
+        with pytest.raises(ValueError):
+            apply_featuretools_feature_store(
+                data_dir,
+                feature_defs,
+                selected_cols,
+                mode="invalid_mode",
+            )
+
+    @pytest.fixture
+    def built_store(self, data_dir, y_train):
+        """Build a feature store for edge case tests."""
+        return build_featuretools_feature_store(
+            data_dir,
+            y_train,
+            agg_primitives=["sum", "mean"],
+            max_depth=1,
+            iv_threshold=0.0,
+            corr_threshold=0.99,
+        )
