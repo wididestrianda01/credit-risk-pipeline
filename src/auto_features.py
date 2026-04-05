@@ -342,8 +342,26 @@ def build_featuretools_feature_store(
     if agg_primitives is None:
         agg_primitives = _DEFAULT_AGG_PRIMITIVES
 
+    # Extract SK_ID_CURR values from application_train.csv.
+    # y_train may have a positional integer index (not SK_ID_CURR), so we read
+    # the actual loan IDs directly from the source file and align by row order.
+    app_ids_series = pd.read_csv(
+        data_dir / _FILE_APP_TRAIN, usecols=["SK_ID_CURR"]
+    )["SK_ID_CURR"].reset_index(drop=True)
+
+    if len(app_ids_series) != len(y_train):
+        raise ValueError(
+            f"application_train.csv has {len(app_ids_series)} rows but "
+            f"y_train has {len(y_train)} rows — cannot align by row order"
+        )
+
+    train_ids = app_ids_series.tolist()
+
+    # Build a properly SK_ID_CURR indexed y for IV filtering so index alignment
+    # between feature_matrix (SK_ID_CURR index) and labels is correct.
+    y_indexed = pd.Series(y_train.values, index=app_ids_series.values, name=y_train.name)
+
     # Load and build EntitySet
-    train_ids = list(y_train.index)
     tables = _load_entity_tables(data_dir, train_ids)
 
     # Drop TARGET from application before building EntitySet (it's a label, not a feature)
@@ -384,11 +402,15 @@ def build_featuretools_feature_store(
     # Ensure index name is SK_ID_CURR (DFS preserves application index)
     feature_matrix.index.name = "SK_ID_CURR"
 
-    # Apply IV filter; suppress print() output from select_features_by_iv
+    # Align y_indexed to feature_matrix row order so that after
+    # reset_index(drop=True) inside compute_woe_iv, positions correspond.
+    y_for_iv = y_indexed.loc[feature_matrix.index]
+
+    # Apply IV filter; suppress print() output from select_features_by_iv.
     with io.StringIO() as _buf, contextlib.redirect_stdout(_buf):
         iv_dict = select_features_by_iv(
             feature_matrix,
-            y_train,
+            y_for_iv,
             min_iv=iv_threshold,
             bins=10,
         )

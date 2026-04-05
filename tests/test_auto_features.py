@@ -461,6 +461,41 @@ class TestBuildFeaturetoolsFeatureStore:
         feature_matrix, _, _ = result
         assert len(feature_matrix) == len(y_train)
 
+    def test_positional_index_y_train_loads_all_rows(self, data_dir):
+        """build_featuretools_feature_store must use SK_ID_CURR from application_train.csv,
+        not y_train.index, as train_ids — even when y_train has a positional integer index.
+
+        Regression test for the bug where y_train.index=[0,1,2,...] was passed as
+        SK_ID_CURR filter, producing partial row counts and scrambled IV labels.
+        """
+        # Positional-index y_train (mirrors real y_train.parquet from save_training_frame)
+        y_positional = pd.Series(
+            [0, 1, 0, 1, 0],
+            index=[0, 1, 2, 3, 4],  # positional, NOT SK_ID_CURR
+            name="TARGET",
+        )
+        result = build_featuretools_feature_store(
+            data_dir,
+            y_positional,
+            agg_primitives=["mean"],
+            max_depth=1,
+            iv_threshold=0.0,
+            corr_threshold=0.99,
+        )
+        feature_matrix, _, _ = result
+
+        # Must return ALL 5 applicants (not just those with SK_ID_CURR ≤ 4)
+        assert len(feature_matrix) == 5, (
+            f"Expected 5 rows (all applicants), got {len(feature_matrix)}. "
+            "Likely y_train.index was used as SK_ID_CURR filter instead of reading "
+            "SK_ID_CURR from application_train.csv."
+        )
+        # Index must be SK_ID_CURR values, not positional integers
+        expected_ids = {100001, 100002, 100003, 100004, 100005}
+        assert set(feature_matrix.index) == expected_ids, (
+            f"feature_matrix.index should be SK_ID_CURR values, got {set(feature_matrix.index)}"
+        )
+
     def test_no_inf_values_in_feature_matrix(self, data_dir, y_train):
         """Feature matrix should not contain np.inf values."""
         result = build_featuretools_feature_store(
