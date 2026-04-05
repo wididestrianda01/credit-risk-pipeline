@@ -525,3 +525,291 @@ def test_build_training_frame_no_new_column_duplication(data_dir):
     X, _ = build_training_frame(data_dir)
     assert X.columns.tolist().count("cc_has_records") == 1
     assert X.columns.tolist().count("bureau_has_bbal") == 1
+
+
+# ---------------------------------------------------------------------------
+# Tests for Phase A2: time-series features
+# ---------------------------------------------------------------------------
+
+
+class TestInstallmentStreaks:
+    """Tests for _compute_installment_streaks()."""
+
+    def test_consecutive_late_streak_three_in_row(self, data_dir):
+        """3 consecutive late payments → max streak = 3."""
+        from credit_engine.data_loader import _compute_installment_streaks
+
+        inst = pd.read_csv(data_dir / "installments_payments.csv")
+        # Create a new applicant with 3 consecutive late payments
+        # DAYS values are negative. Late = DAYS_ENTRY_PAYMENT > DAYS_INSTALMENT
+        # (less negative = later payment)
+        late_payments = pd.DataFrame({
+            'SK_ID_CURR': [999999, 999999, 999999, 999999],
+            'SK_ID_PREV': [400001, 400001, 400001, 400001],
+            'NUM_INSTALMENT_VERSION': [1, 1, 1, 1],
+            'NUM_INSTALMENT_NUMBER': [1, 2, 3, 4],
+            'DAYS_INSTALMENT': [-120, -90, -60, -30],
+            'DAYS_ENTRY_PAYMENT': [-110, -80, -50, -25],  # late: -110 > -120, -80 > -90, -50 > -60, -25 > -30
+            'AMT_INSTALMENT': [500, 500, 500, 500],
+            'AMT_PAYMENT': [500, 500, 500, 500],
+        })
+        # All 4 rows are late, last 3 consecutive
+        # Change first one to on-time: -130 < -120
+        late_payments.loc[0, 'DAYS_ENTRY_PAYMENT'] = -130
+
+        result = _compute_installment_streaks(late_payments)
+        assert result.loc[999999, 'inst_max_consec_late_streak'] == 3
+
+    def test_no_late_payments_streak_zero(self, data_dir):
+        """All on-time payments → streak = 0."""
+        from credit_engine.data_loader import _compute_installment_streaks
+
+        inst_df = pd.DataFrame({
+            'SK_ID_CURR': [888888, 888888, 888888],
+            'SK_ID_PREV': [400002, 400002, 400002],
+            'NUM_INSTALMENT_VERSION': [1, 1, 1],
+            'NUM_INSTALMENT_NUMBER': [1, 2, 3],
+            'DAYS_INSTALMENT': [-30, -60, -90],
+            'DAYS_ENTRY_PAYMENT': [-35, -65, -95],  # paid earlier = on time
+            'AMT_INSTALMENT': [500, 500, 500],
+            'AMT_PAYMENT': [500, 500, 500],
+        })
+        result = _compute_installment_streaks(inst_df)
+        assert result.loc[888888, 'inst_max_consec_late_streak'] == 0
+        assert pd.isna(result.loc[888888, 'inst_months_since_last_late'])
+
+    def test_streak_resets_on_on_time_payment(self):
+        """Late, on-time, late, late → max streak = 2."""
+        from credit_engine.data_loader import _compute_installment_streaks
+
+        inst_df = pd.DataFrame({
+            'SK_ID_CURR': [777777, 777777, 777777, 777777],
+            'SK_ID_PREV': [400003, 400003, 400003, 400003],
+            'NUM_INSTALMENT_VERSION': [1, 1, 1, 1],
+            'NUM_INSTALMENT_NUMBER': [1, 2, 3, 4],
+            'DAYS_INSTALMENT': [-30, -60, -90, -120],
+            'DAYS_ENTRY_PAYMENT': [-25, -65, -80, -110],  # late, on-time, late, late
+            'AMT_INSTALMENT': [500, 500, 500, 500],
+            'AMT_PAYMENT': [500, 500, 500, 500],
+        })
+        result = _compute_installment_streaks(inst_df)
+        assert result.loc[777777, 'inst_max_consec_late_streak'] == 2
+
+    def test_returns_sk_id_curr_indexed_dataframe(self):
+        """Result is indexed by SK_ID_CURR."""
+        from credit_engine.data_loader import _compute_installment_streaks
+
+        inst_df = pd.DataFrame({
+            'SK_ID_CURR': [666666, 666666],
+            'SK_ID_PREV': [400004, 400004],
+            'NUM_INSTALMENT_VERSION': [1, 1],
+            'NUM_INSTALMENT_NUMBER': [1, 2],
+            'DAYS_INSTALMENT': [-30, -60],
+            'DAYS_ENTRY_PAYMENT': [-35, -65],
+            'AMT_INSTALMENT': [500, 500],
+            'AMT_PAYMENT': [500, 500],
+        })
+        result = _compute_installment_streaks(inst_df)
+        assert result.index.name == 'SK_ID_CURR'
+        assert 'inst_max_consec_late_streak' in result.columns
+        assert 'inst_months_since_last_late' in result.columns
+
+    def test_months_since_last_late_computed(self):
+        """Most recent late payment at DAYS_INSTALMENT=-60 → months_since ≈ 2."""
+        from credit_engine.data_loader import _compute_installment_streaks
+
+        inst_df = pd.DataFrame({
+            'SK_ID_CURR': [555555, 555555, 555555],
+            'SK_ID_PREV': [400005, 400005, 400005],
+            'NUM_INSTALMENT_VERSION': [1, 1, 1],
+            'NUM_INSTALMENT_NUMBER': [1, 2, 3],
+            'DAYS_INSTALMENT': [-30, -60, -90],
+            'DAYS_ENTRY_PAYMENT': [-25, -50, -100],  # late, on-time, on-time
+            'AMT_INSTALMENT': [500, 500, 500],
+            'AMT_PAYMENT': [500, 500, 500],
+        })
+        result = _compute_installment_streaks(inst_df)
+        months_since = result.loc[555555, 'inst_months_since_last_late']
+        # Most recent late at DAYS_INSTALMENT=-30, so months_since = 30/30 ≈ 1
+        assert months_since == pytest.approx(1.0, abs=0.1)
+
+
+class TestBureauDpdRecency:
+    """Tests for _compute_bureau_dpd_recency()."""
+
+    def test_clean_bureau_returns_nan_months_since(self):
+        """All STATUS in {'C', 'X', '0'} → months_since_last_dpd = NaN."""
+        from credit_engine.data_loader import _compute_bureau_dpd_recency
+
+        bbal_df = pd.DataFrame({
+            'SK_ID_BUREAU': [500001, 500001, 500001],
+            'MONTHS_BALANCE': [-1, -2, -3],
+            'STATUS': ['0', 'C', 'X'],  # No DPD
+        })
+        bureau_df = pd.DataFrame({
+            'SK_ID_BUREAU': [500001],
+            'SK_ID_CURR': [444444],
+        })
+        result = _compute_bureau_dpd_recency(bbal_df, bureau_df)
+        assert pd.isna(result.loc[444444, 'bbal_months_since_last_dpd'])
+
+    def test_dpd_recency_computed_correctly(self):
+        """STATUS='1' at MONTHS_BALANCE=-1 → months_since ≈ 1."""
+        from credit_engine.data_loader import _compute_bureau_dpd_recency
+
+        bbal_df = pd.DataFrame({
+            'SK_ID_BUREAU': [500002, 500002],
+            'MONTHS_BALANCE': [-1, -2],
+            'STATUS': ['1', '0'],  # DPD at -1
+        })
+        bureau_df = pd.DataFrame({
+            'SK_ID_BUREAU': [500002],
+            'SK_ID_CURR': [333333],
+        })
+        result = _compute_bureau_dpd_recency(bbal_df, bureau_df)
+        months_since = result.loc[333333, 'bbal_months_since_last_dpd']
+        assert months_since == pytest.approx(1.0, abs=0.1)
+
+    def test_last_3m_rate_computed(self):
+        """2 out of 3 most recent months have DPD → rate ≈ 0.667."""
+        from credit_engine.data_loader import _compute_bureau_dpd_recency
+
+        bbal_df = pd.DataFrame({
+            'SK_ID_BUREAU': [500003, 500003, 500003],
+            'MONTHS_BALANCE': [-1, -2, -3],
+            'STATUS': ['1', '1', '0'],  # 2 DPD in last 3m
+        })
+        bureau_df = pd.DataFrame({
+            'SK_ID_BUREAU': [500003],
+            'SK_ID_CURR': [222222],
+        })
+        result = _compute_bureau_dpd_recency(bbal_df, bureau_df)
+        rate = result.loc[222222, 'bbal_dpd_last_3m_rate']
+        assert rate == pytest.approx(2.0 / 3.0, abs=0.01)
+
+    def test_dpd_trajectory_worsening(self):
+        """Last 6m DPD rate > prior 6m rate → trajectory > 0."""
+        from credit_engine.data_loader import _compute_bureau_dpd_recency
+
+        bbal_df = pd.DataFrame({
+            'SK_ID_BUREAU': [500004] * 12,
+            'MONTHS_BALANCE': list(range(-1, -13, -1)),
+            # Last 6m: 4 DPD, prior 6m: 1 DPD
+            'STATUS': ['1', '1', '1', '1', '0', '0', '0', '1', '0', '0', '0', '0'],
+        })
+        bureau_df = pd.DataFrame({
+            'SK_ID_BUREAU': [500004],
+            'SK_ID_CURR': [111111],
+        })
+        result = _compute_bureau_dpd_recency(bbal_df, bureau_df)
+        trajectory = result.loc[111111, 'bbal_dpd_last_6m_vs_prior_rate']
+        # Last 6m: 4/6 ≈ 0.667, prior: 1/6 ≈ 0.167, so trajectory ≈ 0.5
+        assert trajectory > 0
+
+
+class TestPaymentTrend:
+    """Tests for _compute_payment_amount_trend()."""
+
+    def test_increasing_payments_positive_slope(self):
+        """Increasing AMT_PAYMENT over time → slope > 0."""
+        from credit_engine.data_loader import _compute_payment_amount_trend
+
+        # DAYS_ENTRY_PAYMENT is negative and increases over time (becomes less negative).
+        # Most negative = oldest, least negative = newest.
+        inst_df = pd.DataFrame({
+            'SK_ID_CURR': [100101, 100101, 100101],
+            'SK_ID_PREV': [500001, 500001, 500001],
+            'NUM_INSTALMENT_VERSION': [1, 1, 1],
+            'NUM_INSTALMENT_NUMBER': [1, 2, 3],
+            'DAYS_ENTRY_PAYMENT': [-90, -60, -30],  # oldest to newest
+            'AMT_PAYMENT': [100.0, 150.0, 200.0],  # increasing over time
+            'DAYS_INSTALMENT': [-90, -60, -30],
+            'AMT_INSTALMENT': [100, 150, 200],
+        })
+        result = _compute_payment_amount_trend(inst_df)
+        slope = result.loc[100101, 'inst_payment_trend_slope']
+        assert slope > 0
+
+    def test_fewer_than_3_points_slope_zero(self):
+        """< 3 data points → slope = 0.0."""
+        from credit_engine.data_loader import _compute_payment_amount_trend
+
+        inst_df = pd.DataFrame({
+            'SK_ID_CURR': [100102, 100102],
+            'SK_ID_PREV': [500002, 500002],
+            'NUM_INSTALMENT_VERSION': [1, 1],
+            'NUM_INSTALMENT_NUMBER': [1, 2],
+            'DAYS_ENTRY_PAYMENT': [-30, -60],
+            'AMT_PAYMENT': [100.0, 150.0],
+            'DAYS_INSTALMENT': [-30, -60],
+            'AMT_INSTALMENT': [100, 150],
+        })
+        result = _compute_payment_amount_trend(inst_df)
+        slope = result.loc[100102, 'inst_payment_trend_slope']
+        assert slope == 0.0
+
+    def test_returns_sk_id_curr_indexed(self):
+        """Result indexed by SK_ID_CURR with 'inst_payment_trend_slope' column."""
+        from credit_engine.data_loader import _compute_payment_amount_trend
+
+        inst_df = pd.DataFrame({
+            'SK_ID_CURR': [100103, 100103, 100103],
+            'SK_ID_PREV': [500003, 500003, 500003],
+            'NUM_INSTALMENT_VERSION': [1, 1, 1],
+            'NUM_INSTALMENT_NUMBER': [1, 2, 3],
+            'DAYS_ENTRY_PAYMENT': [-30, -60, -90],
+            'AMT_PAYMENT': [100.0, 100.0, 100.0],
+            'DAYS_INSTALMENT': [-30, -60, -90],
+            'AMT_INSTALMENT': [100, 100, 100],
+        })
+        result = _compute_payment_amount_trend(inst_df)
+        assert result.index.name == 'SK_ID_CURR'
+        assert 'inst_payment_trend_slope' in result.columns
+
+
+class TestBuildTrainingFrameNewCols:
+    """Tests for new time-series columns in build_training_frame()."""
+
+    def test_new_time_series_cols_present(self, data_dir):
+        """build_training_frame output contains all 6 new time-series columns."""
+        X, _ = build_training_frame(data_dir)
+        expected_cols = [
+            'inst_max_consec_late_streak',
+            'inst_months_since_last_late',
+            'inst_payment_trend_slope',
+            'bbal_months_since_last_dpd',
+            'bbal_dpd_last_3m_rate',
+            'bbal_dpd_last_6m_vs_prior_rate',
+        ]
+        for col in expected_cols:
+            assert col in X.columns, f"Missing time-series column: {col}"
+
+    def test_new_cols_are_numeric(self, data_dir):
+        """New time-series columns are numeric (float or int)."""
+        X, _ = build_training_frame(data_dir)
+        new_cols = [
+            'inst_max_consec_late_streak',
+            'inst_months_since_last_late',
+            'inst_payment_trend_slope',
+            'bbal_months_since_last_dpd',
+            'bbal_dpd_last_3m_rate',
+            'bbal_dpd_last_6m_vs_prior_rate',
+        ]
+        for col in new_cols:
+            if col in X.columns:
+                assert X[col].dtype in [np.float32, np.float64, np.int32, np.int64, int, float]
+
+    def test_new_cols_no_remaining_nans(self, data_dir):
+        """New time-series columns have no remaining NaN after sentinel fill."""
+        X, _ = build_training_frame(data_dir)
+        new_cols = [
+            'inst_max_consec_late_streak',
+            'inst_months_since_last_late',
+            'inst_payment_trend_slope',
+            'bbal_months_since_last_dpd',
+            'bbal_dpd_last_3m_rate',
+            'bbal_dpd_last_6m_vs_prior_rate',
+        ]
+        for col in new_cols:
+            if col in X.columns:
+                assert not X[col].isna().any(), f"{col} contains NaN values"

@@ -1587,6 +1587,7 @@ def train_ensemble(
 def run_ensemble_workflow(
     X: pd.DataFrame,
     y: pd.Series,
+    X_raw: pd.DataFrame | None = None,
     lgb_params: dict | None = None,
     xgb_params: dict | None = None,
     method: Literal["average", "logistic"] = "logistic",
@@ -1602,9 +1603,13 @@ def run_ensemble_workflow(
     Parameters
     ----------
     X : pd.DataFrame
-        Feature matrix.
+        Feature matrix (typically WoE-encoded for logistic meta-learner).
     y : pd.Series
         Binary target labels.
+    X_raw : pd.DataFrame, optional
+        Raw (non-WoE) feature matrix for tree models (LightGBM, XGBoost).
+        When provided, tree models receive X_raw instead of X, allowing them
+        to find continuous splits. When None (default), tree models use X.
     lgb_params : dict, optional
         LightGBM hyperparameters. Defaults to _ENSEMBLE_LGB_DEFAULTS.
     xgb_params : dict, optional
@@ -1628,9 +1633,13 @@ def run_ensemble_workflow(
     if xgb_params is None:
         xgb_params = _ENSEMBLE_XGB_DEFAULTS.copy()
 
+    # Determine which feature matrix to use for tree models
+    X_tree = X_raw if X_raw is not None else X
+
     # Shared 80/20 split — identical seed guarantees all three use the same X_test.
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=_TEST_SIZE, stratify=y, random_state=_RANDOM_STATE
+    # Split using X_tree (which may be X_raw or X)
+    X_tree_train, X_tree_test, y_train, y_test = train_test_split(
+        X_tree, y, test_size=_TEST_SIZE, stratify=y, random_state=_RANDOM_STATE
     )
 
     # Compute scale_pos_weight from training data for imbalance handling
@@ -1638,21 +1647,22 @@ def run_ensemble_workflow(
     n_pos = int((y_train == 1).sum())
     scale_pos_weight = float(n_neg) / float(n_pos) if n_pos > 0 else 1.0
 
-    # --- Train LightGBM base model ---
+    # --- Train LightGBM base model (on X_tree) ---
     lgb_params_final = {**lgb_params, "scale_pos_weight": scale_pos_weight}
     lgb_model = lgb.LGBMClassifier(**lgb_params_final)
-    lgb_model.fit(X_train, y_train)
-    lgb_metrics = evaluate_model(lgb_model, X_test, y_test, "LightGBM")
+    lgb_model.fit(X_tree_train, y_train)
+    lgb_metrics = evaluate_model(lgb_model, X_tree_test, y_test, "LightGBM")
     lgb_gini: float = float(lgb_metrics["Gini"])
 
-    # --- Train XGBoost base model ---
+    # --- Train XGBoost base model (on X_tree) ---
     xgb_params_final = {**xgb_params, "scale_pos_weight": scale_pos_weight}
     xgb_model = xgb.XGBClassifier(**xgb_params_final)
-    xgb_model.fit(X_train, y_train)
-    xgb_metrics = evaluate_model(xgb_model, X_test, y_test, "XGBoost")
+    xgb_model.fit(X_tree_train, y_train)
+    xgb_metrics = evaluate_model(xgb_model, X_tree_test, y_test, "XGBoost")
     xgb_gini: float = float(xgb_metrics["Gini"])
 
-    # --- Train stacked ensemble on same X/y (train_ensemble does its own internal split) ---
+    # --- Train stacked ensemble on original X/y (train_ensemble does its own internal split) ---
+    # Meta-learner always receives X (WoE features for logistic regression)
     ensemble_model, ensemble_metrics = train_ensemble(
         X, y, lgb_params=lgb_params, xgb_params=xgb_params, method=method
     )

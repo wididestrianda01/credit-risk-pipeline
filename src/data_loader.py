@@ -98,7 +98,7 @@ _CATEGORICAL_APP_COLS = [
 _MISSING_DROP_THRESHOLD = 0.60  # drop columns with > 60% missing values
 _NAN_SENTINEL = -999  # sentinel fill for tree models (LightGBM/XGBoost)
 _SECONDARY_COL_PREFIXES = (  # prefixes of secondary-table columns to sentinel-fill
-    "bureau_", "prev_", "pos_", "inst_", "cc_"
+    "bureau_", "bbal_", "prev_", "pos_", "inst_", "cc_"
 )
 
 
@@ -534,6 +534,11 @@ def _join_bureau(app: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
         result["bureau_prolong_sum"].fillna(0).astype(np.int32)
     )
 
+    # Phase A2: Add DPD recency features from bureau_balance
+    bbal = pd.read_csv(data_dir / _FILE_BUREAU_BAL)
+    dpd_recency = _compute_bureau_dpd_recency(bbal, bureau)
+    result = result.merge(dpd_recency, on="SK_ID_CURR", how="left")
+
     _assert_no_row_multiplication(app, result, "bureau join")
     return result
 
@@ -674,6 +679,214 @@ def _join_pos_cash(app: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# Private helpers: time-series features (Phase A2)
+# ---------------------------------------------------------------------------
+
+
+def _compute_installment_streaks(inst: pd.DataFrame) -> pd.DataFrame:
+    """Compute consecutive late payment streaks from installments_payments.
+
+    A payment is LATE when DAYS_ENTRY_PAYMENT > DAYS_INSTALMENT (both negative;
+    less negative = more recent / later payment).
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns: inst_max_consec_late_streak, inst_months_since_last_late.
+        Indexed by SK_ID_CURR.
+    """
+    inst = inst.copy()
+
+    # Late flag: payment date > scheduled date (less negative = later)
+    inst = inst.assign(
+        is_late=(inst["DAYS_ENTRY_PAYMENT"] > inst["DAYS_INSTALMENT"]).astype(np.int8)
+    )
+
+    # Sort by applicant and schedule date (oldest first)
+    inst = inst.sort_values(["SK_ID_CURR", "DAYS_INSTALMENT"]).reset_index(drop=True)
+
+    # Compute consecutive streak using cumsum trick:
+    # Within each applicant, identify groups where is_late status changes
+    shifted = inst.groupby("SK_ID_CURR", sort=False)["is_late"].shift()
+    inst["is_late_changed"] = inst["is_late"] != shifted
+    inst["streak_group"] = inst.groupby("SK_ID_CURR", sort=False)["is_late_changed"].cumsum()
+
+    # Within each streak_group, count consecutive records (cumcount)
+    inst["streak_count"] = inst.groupby(
+        ["streak_group"], sort=False
+    ).cumcount() + 1
+
+    # Only keep counts where is_late == 1 (late payments)
+    # For non-late groups, replace with 0
+    inst["streak_length"] = np.where(
+        inst["is_late"] == 1,
+        inst["streak_count"],
+        0
+    )
+
+    # Max consecutive late streak per applicant
+    max_streak = (
+        inst.groupby("SK_ID_CURR", sort=False)["streak_length"]
+        .max()
+        .fillna(0)
+        .astype(np.int32)
+    )
+
+    # Most recent late payment: find max DAYS_INSTALMENT (least negative = most recent)
+    # where is_late == 1, then compute months as abs(DAYS_INSTALMENT) / 30
+    late_payments = inst[inst["is_late"] == 1].copy()
+    most_recent_late = (
+        late_payments.groupby("SK_ID_CURR", sort=False)["DAYS_INSTALMENT"]
+        .max()  # least negative = most recent
+    )
+    months_since_late = (-most_recent_late / 30.0).round(2)
+
+    # Combine results
+    result = pd.DataFrame({
+        'inst_max_consec_late_streak': max_streak,
+        'inst_months_since_last_late': months_since_late,
+    })
+
+    return result
+
+
+def _compute_bureau_dpd_recency(
+    bbal: pd.DataFrame,
+    bureau: pd.DataFrame,
+) -> pd.DataFrame:
+    """Compute DPD recency features from bureau_balance + bureau.
+
+    STATUS codes: C = closed, X = unknown, 0 = no DPD, 1-5 = DPD buckets.
+    DPD = True when STATUS in {'1', '2', '3', '4', '5'}.
+    MONTHS_BALANCE: 0 = most recent, negative = older months.
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns: bbal_months_since_last_dpd, bbal_dpd_last_3m_rate,
+        bbal_dpd_last_6m_vs_prior_rate.
+        Indexed by SK_ID_CURR (aggregated from SK_ID_BUREAU level).
+    """
+    bbal = bbal.copy()
+
+    # DPD indicator: STATUS in {'1', '2', '3', '4', '5'}
+    bbal = bbal.assign(
+        is_dpd=bbal["STATUS"].isin({"1", "2", "3", "4", "5"}).astype(np.int8)
+    )
+
+    # Add time window flags
+    bbal = bbal.assign(
+        in_last_3m=(bbal["MONTHS_BALANCE"] >= -3).astype(bool),
+        in_last_6m=(bbal["MONTHS_BALANCE"] >= -6).astype(bool),
+        in_prior_6m=(bbal["MONTHS_BALANCE"] < -6).astype(bool),
+    )
+
+    # --- Months since last DPD ---
+    # Most recent DPD (max MONTHS_BALANCE = least negative)
+    dpd_records = bbal[bbal["is_dpd"] == 1].copy()
+    most_recent_dpd = (
+        dpd_records.groupby("SK_ID_BUREAU", sort=False)["MONTHS_BALANCE"]
+        .max()
+    )
+    months_since_dpd_bureau = (-most_recent_dpd).round(2)
+
+    # --- DPD rates (windowed) ---
+    # Last 3m rate per bureau
+    dpd_3m_rate = (
+        bbal[bbal["in_last_3m"]]
+        .groupby("SK_ID_BUREAU", sort=False)["is_dpd"]
+        .mean()
+        .fillna(0.0)
+    )
+
+    # Last 6m and prior 6m rates
+    dpd_last_6m_rate = (
+        bbal[bbal["in_last_6m"]]
+        .groupby("SK_ID_BUREAU", sort=False)["is_dpd"]
+        .mean()
+        .fillna(0.0)
+    )
+    dpd_prior_6m_rate = (
+        bbal[bbal["in_prior_6m"]]
+        .groupby("SK_ID_BUREAU", sort=False)["is_dpd"]
+        .mean()
+        .fillna(0.0)
+    )
+
+    # Trajectory: last_6m - prior_6m (positive = worsening)
+    dpd_trajectory = (dpd_last_6m_rate - dpd_prior_6m_rate).round(3)
+
+    # Combine bureau-level results
+    bureau_features = pd.DataFrame({
+        'bbal_months_since_last_dpd': months_since_dpd_bureau,
+        'bbal_dpd_last_3m_rate': dpd_3m_rate,
+        'bbal_dpd_last_6m_vs_prior_rate': dpd_trajectory,
+    }).reset_index()
+
+    # Aggregate to SK_ID_CURR by mean (average across multiple bureau entries)
+    bureau = bureau[['SK_ID_CURR', 'SK_ID_BUREAU']].copy()
+    merged = bureau.merge(bureau_features, on='SK_ID_BUREAU', how='left')
+
+    result = (
+        merged.groupby("SK_ID_CURR", sort=False)
+        .agg({
+            'bbal_months_since_last_dpd': 'mean',
+            'bbal_dpd_last_3m_rate': 'mean',
+            'bbal_dpd_last_6m_vs_prior_rate': 'mean',
+        })
+        .round(3)
+    )
+
+    return result
+
+
+def _compute_payment_amount_trend(inst: pd.DataFrame) -> pd.DataFrame:
+    """Compute payment amount trend (slope) from installments_payments.
+
+    Uses linear regression: AMT_PAYMENT ~ time_order.
+    Time order increases from oldest (most negative DAYS_ENTRY_PAYMENT) to newest
+    (least negative DAYS_ENTRY_PAYMENT).
+    Applicants with < 3 payments get slope = 0.0.
+
+    Returns
+    -------
+    pd.DataFrame
+        Column: inst_payment_trend_slope.
+        Indexed by SK_ID_CURR.
+    """
+    inst = inst.copy()
+    inst = inst.sort_values(["SK_ID_CURR", "DAYS_ENTRY_PAYMENT"]).reset_index(drop=True)
+
+    def compute_trend(group):
+        """Fit linear regression within one applicant's payments."""
+        if len(group) < 3:
+            return 0.0
+
+        # Create time ordering (0, 1, 2, ...) from oldest to newest
+        x = np.arange(len(group), dtype=np.float64)
+        y = group["AMT_PAYMENT"].values.astype(np.float64)
+
+        # Linear regression: y = a*x + b; return slope a
+        try:
+            coeffs = np.polyfit(x, y, deg=1)
+            return float(coeffs[0])
+        except (np.linalg.LinAlgError, ValueError):
+            return 0.0
+
+    slope = (
+        inst.groupby("SK_ID_CURR", sort=False)
+        .apply(compute_trend, include_groups=False)
+        .astype(np.float32)
+    )
+
+    result = pd.DataFrame({
+        'inst_payment_trend_slope': slope,
+    })
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Private helpers: installments payments
 # ---------------------------------------------------------------------------
 
@@ -746,6 +959,13 @@ def _join_installments(app: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
 
     result["inst_cnt"] = result["inst_cnt"].fillna(0).astype(np.int32)
     result["inst_late_cnt"] = result["inst_late_cnt"].fillna(0).astype(np.int32)
+
+    # Phase A2: Add time-series features
+    streak_features = _compute_installment_streaks(inst)
+    trend_features = _compute_payment_amount_trend(inst)
+
+    result = result.merge(streak_features, on="SK_ID_CURR", how="left")
+    result = result.merge(trend_features, on="SK_ID_CURR", how="left")
 
     _assert_no_row_multiplication(app, result, "installments join")
     return result

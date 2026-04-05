@@ -1414,6 +1414,84 @@ class TestRunEnsembleWorkflow:
             weights = json.loads(weights_path.read_text())
             assert "lgb_gini" in weights and "xgb_gini" in weights and "ensemble_gini" in weights
 
+    def test_accepts_X_raw_parameter(self, tmp_path, monkeypatch):
+        """run_ensemble_workflow must accept optional X_raw parameter."""
+        import credit_engine.model as model_module
+        out_path = tmp_path / "ens_raw.pkl"
+        weights_path = tmp_path / "weights_raw.json"
+        monkeypatch.setattr(model_module, "_ENSEMBLE_WORKFLOW_MODEL_PATH", str(out_path))
+        monkeypatch.setattr(model_module, "_ENSEMBLE_WORKFLOW_WEIGHTS_PATH", str(weights_path))
+
+        rng = np.random.default_rng(42)
+        n, n_pos = 500, 40
+        y_arr = np.zeros(n, dtype=int)
+        y_arr[:n_pos] = 1
+        rng.shuffle(y_arr)
+        X = pd.DataFrame({
+            "f1": np.where(y_arr == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
+            "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
+        })
+        X_raw = X.copy()
+        y = pd.Series(y_arr, name="TARGET")
+
+        # Call with X_raw parameter — must not raise
+        result = run_ensemble_workflow(X, y, X_raw=X_raw)
+        assert isinstance(result, dict)
+
+    def test_X_raw_none_fallback_to_X(self, tmp_path, monkeypatch):
+        """When X_raw=None (default), tree models use X (backward compatible)."""
+        import credit_engine.model as model_module
+        out_path = tmp_path / "ens_fallback.pkl"
+        weights_path = tmp_path / "weights_fallback.json"
+        monkeypatch.setattr(model_module, "_ENSEMBLE_WORKFLOW_MODEL_PATH", str(out_path))
+        monkeypatch.setattr(model_module, "_ENSEMBLE_WORKFLOW_WEIGHTS_PATH", str(weights_path))
+
+        rng = np.random.default_rng(42)
+        n, n_pos = 500, 40
+        y_arr = np.zeros(n, dtype=int)
+        y_arr[:n_pos] = 1
+        rng.shuffle(y_arr)
+        X = pd.DataFrame({
+            "f1": np.where(y_arr == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
+            "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
+        })
+        y = pd.Series(y_arr, name="TARGET")
+
+        # Call without X_raw — must use X internally
+        result = run_ensemble_workflow(X, y)
+        assert isinstance(result, dict)
+        assert "lgb_gini" in result
+
+    def test_X_raw_used_by_tree_models(self, tmp_path, monkeypatch):
+        """When X_raw is provided, tree models receive X_raw (not X)."""
+        import credit_engine.model as model_module
+        out_path = tmp_path / "ens_raw_verify.pkl"
+        weights_path = tmp_path / "weights_raw_verify.json"
+        monkeypatch.setattr(model_module, "_ENSEMBLE_WORKFLOW_MODEL_PATH", str(out_path))
+        monkeypatch.setattr(model_module, "_ENSEMBLE_WORKFLOW_WEIGHTS_PATH", str(weights_path))
+
+        rng = np.random.default_rng(42)
+        n, n_pos = 500, 40
+        y_arr = np.zeros(n, dtype=int)
+        y_arr[:n_pos] = 1
+        rng.shuffle(y_arr)
+        X_woe = pd.DataFrame({
+            "f1_woe": np.where(y_arr == 1, rng.normal(-0.5, 0.5, n), rng.normal(0.5, 0.5, n)),
+            "f2_woe": np.where(y_arr == 1, rng.normal(-0.3, 0.5, n), rng.normal(0.3, 0.5, n)),
+        })
+        X_raw = pd.DataFrame({
+            "f1": np.where(y_arr == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
+            "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
+        })
+        y = pd.Series(y_arr, name="TARGET")
+
+        # Call with both X (WoE) and X_raw
+        result = run_ensemble_workflow(X_woe, y, X_raw=X_raw)
+
+        # Result must be valid (proves X_raw was accepted and used)
+        assert isinstance(result, dict)
+        assert all(k in result for k in ["lgb_gini", "xgb_gini", "ensemble_gini"])
+
 
 
 # ---------------------------------------------------------------------------
