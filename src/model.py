@@ -119,7 +119,7 @@ _LGB_MAX_DEPTH_MAX: int = 12
 _LGB_LEARNING_RATE_MIN: float = 0.01
 _LGB_LEARNING_RATE_MAX: float = 0.2
 _LGB_N_ESTIMATORS_MIN: int = 100
-_LGB_N_ESTIMATORS_MAX: int = 500
+_LGB_N_ESTIMATORS_MAX: int = 1000
 _LGB_MIN_CHILD_SAMPLES_MIN: int = 5
 _LGB_MIN_CHILD_SAMPLES_MAX: int = 100
 _LGB_SUBSAMPLE_MIN: float = 0.6
@@ -201,6 +201,7 @@ _STRATEGY_HYBRID: str = "SMOTE+Cost-Sensitive"
 
 # OOF Ensemble defaults — fast, sensible hyperparameters for blending
 # Reduced from 200 to 100 estimators for faster unit testing
+# scale_pos_weight is computed and added dynamically for each fit (see train_ensemble, run_ensemble_workflow)
 _ENSEMBLE_LGB_DEFAULTS: dict = {
     "n_estimators": 100,
     "num_leaves": 31,
@@ -209,7 +210,6 @@ _ENSEMBLE_LGB_DEFAULTS: dict = {
     "colsample_bytree": 0.8,
     "random_state": 42,
     "verbosity": -1,
-    "is_unbalance": True,
 }
 _ENSEMBLE_XGB_DEFAULTS: dict = {
     "n_estimators": 100,
@@ -1058,6 +1058,10 @@ def _lightgbm_optuna_objective(
     the maximum; early stopping may terminate sooner if the validation AUC
     plateaus for ``_LGB_EARLY_STOPPING_ROUNDS`` consecutive rounds.
 
+    Imbalance handling uses ``scale_pos_weight = n_neg / n_pos`` (cost-sensitive
+    strategy), which adjusts gradient weights without compressing probability outputs.
+    This preserves calibration and rank separation crucial for Gini-based selection.
+
     Parameters
     ----------
     trial : optuna.Trial
@@ -1153,9 +1157,10 @@ def train_lightgbm_optuna(
     training split (with a held-out validation slice for early stopping),
     then evaluated on the held-out test split.
 
-    Imbalance handling uses ``is_unbalance=True`` — LightGBM's built-in
-    strategy that internally computes ``n_neg / n_pos`` and adjusts both
-    the loss weights and leaf output values, avoiding external resampling.
+    Imbalance handling uses ``scale_pos_weight = n_neg / n_pos`` (cost-sensitive
+    strategy), which adjusts gradient weights to reweight the loss without
+    compressing probability outputs. This preserves probability calibration
+    and AUC-based ranking, critical for Gini optimization on imbalanced credit data.
 
     Parameters
     ----------
@@ -1524,17 +1529,19 @@ def train_ensemble(
         y_fold_train = y_train.iloc[train_idx]
         X_fold_val = X_train.iloc[val_idx]
 
-        # --- Fit LightGBM on fold training data ---
-        lgb_fold = lgb.LGBMClassifier(**lgb_params)
-        lgb_fold.fit(X_fold_train, y_fold_train)
-        oof_lgb[val_idx] = lgb_fold.predict_proba(X_fold_val)[:, 1]
-
-        # --- Fit XGBoost on fold training data ---
-        # Compute scale_pos_weight from fold training labels
+        # --- Compute imbalance ratio from fold training labels (per-fold for consistency) ---
         n_neg = (y_fold_train == 0).sum()
         n_pos = (y_fold_train == 1).sum()
         scale_pos_weight = float(n_neg) / float(n_pos) if n_pos > 0 else 1.0
 
+        # --- Fit LightGBM on fold training data ---
+        lgb_params_fold = lgb_params.copy()
+        lgb_params_fold["scale_pos_weight"] = scale_pos_weight
+        lgb_fold = lgb.LGBMClassifier(**lgb_params_fold)
+        lgb_fold.fit(X_fold_train, y_fold_train)
+        oof_lgb[val_idx] = lgb_fold.predict_proba(X_fold_val)[:, 1]
+
+        # --- Fit XGBoost on fold training data ---
         xgb_params_fold = xgb_params.copy()
         xgb_params_fold["scale_pos_weight"] = scale_pos_weight
 
@@ -1547,7 +1554,9 @@ def train_ensemble(
     n_pos_train = (y_train == 1).sum()
     scale_pos_weight_train = float(n_neg_train) / float(n_pos_train) if n_pos_train > 0 else 1.0
 
-    lgb_final = lgb.LGBMClassifier(**lgb_params)
+    lgb_params_final = lgb_params.copy()
+    lgb_params_final["scale_pos_weight"] = scale_pos_weight_train
+    lgb_final = lgb.LGBMClassifier(**lgb_params_final)
     lgb_final.fit(X_train, y_train)
 
     xgb_params_final = xgb_params.copy()
@@ -1624,16 +1633,19 @@ def run_ensemble_workflow(
         X, y, test_size=_TEST_SIZE, stratify=y, random_state=_RANDOM_STATE
     )
 
+    # Compute scale_pos_weight from training data for imbalance handling
+    n_neg = int((y_train == 0).sum())
+    n_pos = int((y_train == 1).sum())
+    scale_pos_weight = float(n_neg) / float(n_pos) if n_pos > 0 else 1.0
+
     # --- Train LightGBM base model ---
-    lgb_model = lgb.LGBMClassifier(**lgb_params)
+    lgb_params_final = {**lgb_params, "scale_pos_weight": scale_pos_weight}
+    lgb_model = lgb.LGBMClassifier(**lgb_params_final)
     lgb_model.fit(X_train, y_train)
     lgb_metrics = evaluate_model(lgb_model, X_test, y_test, "LightGBM")
     lgb_gini: float = float(lgb_metrics["Gini"])
 
     # --- Train XGBoost base model ---
-    n_neg = int((y_train == 0).sum())
-    n_pos = int((y_train == 1).sum())
-    scale_pos_weight = float(n_neg) / float(n_pos) if n_pos > 0 else 1.0
     xgb_params_final = {**xgb_params, "scale_pos_weight": scale_pos_weight}
     xgb_model = xgb.XGBClassifier(**xgb_params_final)
     xgb_model.fit(X_train, y_train)

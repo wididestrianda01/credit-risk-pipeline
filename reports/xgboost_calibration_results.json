@@ -1,0 +1,15 @@
+{
+  "model": "XGBoost (Optuna-tuned)",
+  "calibration_method": "sigmoid (Platt scaling)",
+  "test_set_size": 61503,
+  "target_prevalence": 0.08072776937710356,
+  "gini_uncalibrated": 0.546965794057999,
+  "gini_calibrated": 0.546965794057999,
+  "gini_improvement": 0.0,
+  "brier_uncalibrated": 0.18959294941514457,
+  "brier_calibrated": 0.06691882800733194,
+  "brier_improvement": 0.12267412140781263,
+  "brier_skill_uncalibrated": -1.5547893032902866,
+  "brier_skill_calibrated": 0.09826021215851388,
+  "brier_skill_improvement": 1.6530495154488005
+}
