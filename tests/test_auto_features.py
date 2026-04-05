@@ -817,6 +817,17 @@ class TestAutoFeaturesEdgeCases:
                 mode="invalid_mode",
             )
 
+    def test_empty_feature_defs_raises_error(self, data_dir, built_store):
+        """Empty feature_defs list should raise ValueError."""
+        _, _, selected_cols = built_store
+
+        with pytest.raises(ValueError, match="feature_defs cannot be empty"):
+            apply_featuretools_feature_store(
+                data_dir,
+                feature_defs=[],
+                selected_cols=selected_cols,
+            )
+
     @pytest.fixture
     def built_store(self, data_dir, y_train):
         """Build a feature store for edge case tests."""

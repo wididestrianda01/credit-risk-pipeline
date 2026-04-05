@@ -10,6 +10,8 @@ Entry points:
   - apply_featuretools_feature_store: Apply feature definitions to test data
 """
 
+import contextlib
+import io
 import warnings
 from pathlib import Path
 from typing import Any
@@ -365,8 +367,16 @@ def build_featuretools_feature_store(
             verbose=False,
         )
 
-    # Post-process: numeric only, inf -> 0, NaN -> sentinel
+    # Post-process: numeric only, inf -> sentinel, NaN -> sentinel
+    all_cols = feature_matrix.columns.tolist()
     numeric_cols = feature_matrix.select_dtypes(include=["number"]).columns.tolist()
+    dropped = [c for c in all_cols if c not in numeric_cols]
+    if dropped:
+        warnings.warn(
+            f"Dropping {len(dropped)} non-numeric DFS columns (e.g. {dropped[:3]})",
+            UserWarning,
+            stacklevel=2,
+        )
     feature_matrix = feature_matrix[numeric_cols].copy()
     feature_matrix = feature_matrix.replace([np.inf, -np.inf], _NAN_SENTINEL)
     feature_matrix = feature_matrix.fillna(_NAN_SENTINEL)
@@ -374,9 +384,8 @@ def build_featuretools_feature_store(
     # Ensure index name is SK_ID_CURR (DFS preserves application index)
     feature_matrix.index.name = "SK_ID_CURR"
 
-    # Apply IV filter (suppress print output from select_features_by_iv)
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore")
+    # Apply IV filter; suppress print() output from select_features_by_iv
+    with io.StringIO() as _buf, contextlib.redirect_stdout(_buf):
         iv_dict = select_features_by_iv(
             feature_matrix,
             y_train,
@@ -450,6 +459,8 @@ def apply_featuretools_feature_store(
     ValueError
         If mode is not "test" or "train".
     """
+    if not feature_defs:
+        raise ValueError("feature_defs cannot be empty")
     if mode not in ("test", "train"):
         raise ValueError(f"mode must be 'test' or 'train', got {mode!r}")
 
