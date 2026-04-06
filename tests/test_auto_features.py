@@ -26,6 +26,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+pytest.importorskip("featuretools", reason="featuretools not installed — skip auto_features tests")
+
 from credit_engine.auto_features import (
     _build_entity_set,
     _load_entity_tables,
