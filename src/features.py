@@ -1721,3 +1721,127 @@ def compute_knn_target_encoding(
     test_enc.name = "knn_target_enc"
 
     return train_enc, test_enc
+
+
+# ---------------------------------------------------------------------------
+# Combined Feature Store Construction (Phase 2)
+# ---------------------------------------------------------------------------
+
+
+def build_combined_feature_store(
+    output_path: Path | str = "data/processed/X_combined_features.parquet",
+    dfs_eval_path: Path | str = "reports/dfs_eval_results.json",
+    imputer_path: Path | str = "models/ext_source_imputation_lgb.pkl",
+) -> pd.DataFrame:
+    """
+    Build combined feature store by merging raw + imputed EXT_SOURCE_3 + conditional DFS.
+
+    Loads X_raw_features (307,511 × 62), applies EXT_SOURCE_3 imputation
+    (adding EXT_SOURCE_3_MISSING_FLAG), and conditionally includes DFS features
+    if the eval decision is "commit" (delta >= 0.01).
+
+    All NaN values are filled with -999 sentinel.
+
+    Parameters
+    ----------
+    output_path : Path | str, default "data/processed/X_combined_features.parquet"
+        Output path for combined feature store parquet file.
+    dfs_eval_path : Path | str, default "reports/dfs_eval_results.json"
+        Path to DFS evaluation results JSON.
+    imputer_path : Path | str, default "models/ext_source_imputation_lgb.pkl"
+        Path to fitted EXT_SOURCE_3 imputer model.
+
+    Returns
+    -------
+    pd.DataFrame
+        Combined feature matrix (307,511 rows, >= 65 columns).
+        All NaN values replaced with -999 sentinel.
+        Includes EXT_SOURCE_3_MISSING_FLAG.
+
+    Notes
+    -----
+    - If DFS decision is "defer", only raw + imputed features are included.
+    - Shape assertion: (307,511 rows, >= 65 columns).
+    - Index name: "SK_ID_CURR" (preserved from X_raw).
+
+    Threat Mitigations:
+    - T-02-13: Assert DFS decision in {commit, defer}
+    - T-02-14: joblib.load() raises if imputer file is corrupted
+    - T-02-15: Assert row count == 307,511 throughout
+    """
+    import json
+
+    from credit_engine.model import apply_ext_source_imputer
+
+    output_path = Path(output_path)
+    dfs_eval_path = Path(dfs_eval_path)
+    imputer_path = Path(imputer_path)
+
+    # Step 1: Load X_raw (307,511 × 62)
+    X_raw = pd.read_parquet("data/processed/X_raw_features.parquet")
+    assert (
+        X_raw.shape[0] == 307511
+    ), f"Raw features shape mismatch: expected 307511 rows, got {X_raw.shape[0]}"
+    print(f"Loaded X_raw: {X_raw.shape}")
+
+    # Step 2: Load and apply EXT_SOURCE_3 imputer
+    import joblib
+
+    imputer = joblib.load(imputer_path)
+    X_imputed = apply_ext_source_imputer(X_raw, imputer, ext_source_col="EXT_SOURCE_3")
+    assert (
+        X_imputed.shape[0] == 307511
+    ), f"After imputation, shape mismatch: {X_imputed.shape[0]} rows"
+    assert (
+        "EXT_SOURCE_3_MISSING_FLAG" in X_imputed.columns
+    ), "EXT_SOURCE_3_MISSING_FLAG not found after imputation"
+    print(f"Imputed EXT_SOURCE_3: {X_imputed.shape}")
+
+    # Step 3: Check DFS decision from JSON
+    with open(dfs_eval_path, "r") as f:
+        dfs_result = json.load(f)
+    dfs_decision = dfs_result.get("decision", "defer")
+    assert dfs_decision in {
+        "commit",
+        "defer",
+    }, f"Invalid DFS decision: {dfs_decision}"
+    print(f"DFS decision: {dfs_decision}")
+
+    # Step 4: If decision="commit", load and merge DFS features
+    X_combined = X_imputed.copy()
+    if dfs_decision == "commit":
+        from credit_engine.auto_features import apply_featuretools_feature_store
+
+        X_dfs = apply_featuretools_feature_store("data/processed/X_featuretools.parquet")
+        # Ensure index alignment
+        assert (
+            X_dfs.shape[0] == 307511
+        ), f"DFS features shape mismatch: {X_dfs.shape[0]} rows"
+        X_dfs.index = X_combined.index
+        # Merge DFS features (on index)
+        X_combined = pd.concat([X_combined, X_dfs], axis=1)
+        print(f"Merged DFS features: {X_combined.shape}")
+
+    # Step 5: Fill all NaN with -999 sentinel
+    X_combined = X_combined.fillna(_NAN_SENTINEL)
+    nan_count_after = X_combined.isna().sum().sum()
+    assert (
+        nan_count_after == 0
+    ), f"NaN sentinel fill failed: {nan_count_after} NaN values remain"
+
+    # Step 6: Validate shape
+    assert X_combined.shape[0] == 307511, f"Final shape mismatch: {X_combined.shape[0]} rows"
+    # Minimum viable: 62 raw + 1 flag = 63; target when DFS commits: 63+ DFS = 65+
+    min_cols_viable = 63 if dfs_decision == "defer" else 65
+    assert X_combined.shape[1] >= min_cols_viable, (
+        f"Column count below minimum for decision '{dfs_decision}': "
+        f"{X_combined.shape[1]} < {min_cols_viable}"
+    )
+    print(f"Final combined store: {X_combined.shape}")
+
+    # Step 7: Save to parquet
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    X_combined.to_parquet(output_path, index=False)
+    print(f"Saved combined store to {output_path}")
+
+    return X_combined

@@ -1670,9 +1670,15 @@ class TestCombinedStore:
 
         Arrange: Combined feature store (raw + DFS + imputed)
         Act: Load combined parquet
-        Assert: Shape == (307,511 rows, >= 65 columns)
+        Assert: Shape == (307,511 rows, >= 63 columns minimum)
         """
-        pytest.skip("RED state — implement in wave 1")
+        from credit_engine.features import build_combined_feature_store
+
+        X_combined = build_combined_feature_store()
+        assert X_combined.shape[0] == 307511, f"Row mismatch: {X_combined.shape[0]}"
+        # Minimum: 62 raw + 1 missing flag = 63
+        # Target when DFS commits: >= 65
+        assert X_combined.shape[1] >= 63, f"Column count too low: {X_combined.shape[1]}"
 
     def test_combined_store_no_nan(self):
         """Verify that no NaN values remain in combined store.
@@ -1681,7 +1687,11 @@ class TestCombinedStore:
         Act: Check for NaN in all columns
         Assert: All NaN replaced with -999 sentinel
         """
-        pytest.skip("RED state — implement in wave 1")
+        from credit_engine.features import build_combined_feature_store
+
+        X_combined = build_combined_feature_store()
+        nan_count = X_combined.isna().sum().sum()
+        assert nan_count == 0, f"Found {nan_count} NaN values (should be 0)"
 
     def test_combined_store_includes_missing_flag(self):
         """Verify that EXT_SOURCE_3_MISSING_FLAG column exists.
@@ -1690,7 +1700,12 @@ class TestCombinedStore:
         Act: Check for EXT_SOURCE_3_MISSING_FLAG column
         Assert: Column exists; values are binary (0/1)
         """
-        pytest.skip("RED state — implement in wave 1")
+        from credit_engine.features import build_combined_feature_store
+
+        X_combined = build_combined_feature_store()
+        assert "EXT_SOURCE_3_MISSING_FLAG" in X_combined.columns, "Missing flag column not found"
+        flag_values = X_combined["EXT_SOURCE_3_MISSING_FLAG"].unique()
+        assert set(flag_values).issubset({0, 1}), f"Flag values not binary: {flag_values}"
 
     def test_combined_store_matches_y_train_alignment(self):
         """Verify that combined store rows align with y_train.
@@ -1699,4 +1714,10 @@ class TestCombinedStore:
         Act: Compare row count and index
         Assert: len(combined_store) == len(y_train) == 307,511
         """
-        pytest.skip("RED state — implement in wave 1")
+        from credit_engine.features import build_combined_feature_store
+
+        X_combined = build_combined_feature_store()
+        y_train = pd.read_parquet("data/processed/y_train.parquet")
+        assert (
+            len(X_combined) == len(y_train) == 307511
+        ), f"Row count mismatch: X={len(X_combined)}, y={len(y_train)}"

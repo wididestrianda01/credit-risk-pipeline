@@ -1,0 +1,10 @@
+{
+  "raw_gini": 0.5548,
+  "dfs_gini": 0.5521,
+  "gini_delta": -0.0027,
+  "decision": "defer",
+  "raw_features": 62,
+  "dfs_features": 47,
+  "dfs_features_dedup": 31,
+  "note": "DFS evaluation deferred - delta < 0.01 threshold. 13-primitive expanded set produced 47 features after correlation dedup to 31, but yielded -0.27% Gini degradation vs raw baseline. Defer to Phase 2 v2 (ADV-04) for hyperparameter retuning on combined store."
+}
