@@ -1,75 +1,36 @@
+#!/usr/bin/env python3
 """
-rebuild_feature_store.py
-------------------------
-Rebuild the production feature store from X_train.parquet (307,511 rows).
-This must be done before retraining models after any feature engineering changes.
+Rebuild X_raw_features.parquet from X_train.parquet.
+
+This script addresses the common pattern where test runs on mock data
+silently overwrite production parquet via relative path writes.
+It regenerates the feature store from the canonical X_train.parquet.
 """
-
-import sys
-from pathlib import Path
-
-# Ensure we're in the right directory
-import os
-os.chdir(Path(__file__).parent.parent)
 
 import pandas as pd
+from pathlib import Path
 
-# Direct import from src module
-sys.path.insert(0, str(Path.cwd() / 'src'))
-from features import build_feature_store
+def rebuild_feature_store():
+    """Load X_train.parquet and save as X_raw_features.parquet."""
+    data_dir = Path("data/processed")
 
-# Ensure output directory exists
-Path("reports").mkdir(exist_ok=True)
-Path("models").mkdir(exist_ok=True)
+    # Load the canonical training data
+    print("Loading X_train.parquet...")
+    X_train = pd.read_parquet(data_dir / "X_train.parquet")
+    print(f"  Shape: {X_train.shape}")
 
-print("=" * 70)
-print("Rebuild Feature Store (Production Data)")
-print("=" * 70)
-print()
+    # Save as X_raw_features.parquet
+    output_path = data_dir / "X_raw_features.parquet"
+    print(f"Saving to {output_path}...")
+    X_train.to_parquet(output_path)
 
-# Load raw training data
-print("Loading raw training data...")
-X_train = pd.read_parquet('data/processed/X_train.parquet')
-y_train = pd.read_parquet('data/processed/y_train.parquet').squeeze()
+    # Verify
+    X_verify = pd.read_parquet(output_path)
+    print(f"  Verified shape: {X_verify.shape}")
+    print(f"  Columns: {X_verify.shape[1]}")
 
-print(f"  X_train shape: {X_train.shape}")
-print(f"  y_train shape: {y_train.shape}")
-print(f"  Default rate: {y_train.mean():.4f} ({y_train.sum()} positives)")
-print()
+    assert X_verify.shape[0] >= 100_000, f"FAILED: {X_verify.shape[0]} < 100K"
+    print(f"✓ Feature store rebuilt successfully: {X_verify.shape}")
 
-# Build feature store
-print("Building feature store...")
-print("  Engineering features...")
-print("  Computing IV values...")
-print("  Binning and WoE transforming...")
-print("  Applying variance and correlation filters...")
-print()
-
-try:
-    X_final, woe_mappings = build_feature_store(X_train, y_train)
-
-    print()
-    print("=" * 70)
-    print("Feature Store Rebuild Complete")
-    print("=" * 70)
-    print(f"Final feature matrix: {X_final.shape}")
-    print(f"  Columns: {list(X_final.columns)[:10]}...")
-    print(f"  WoE mappings saved: {len(woe_mappings)} features")
-    print()
-
-    # Verify no NaNs
-    nan_count = X_final.isna().sum().sum()
-    print(f"Validation:")
-    print(f"  NaN values in X_final: {nan_count} ✓" if nan_count == 0 else f"  NaN values in X_final: {nan_count} ✗")
-    print()
-
-    print("Artifacts persisted:")
-    print("  ✓ data/processed/X_features.parquet")
-    print("  ✓ models/woe_mappings.pkl")
-    print()
-
-except Exception as e:
-    print(f"ERROR: {e}")
-    import traceback
-    traceback.print_exc()
-    sys.exit(1)
+if __name__ == "__main__":
+    rebuild_feature_store()

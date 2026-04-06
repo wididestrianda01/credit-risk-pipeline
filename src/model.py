@@ -1471,6 +1471,8 @@ def calibrate_model(
     X_test: pd.DataFrame,
     y_test: pd.Series,
     method: str = "sigmoid",
+    output_model_path: str | None = None,
+    output_figure_path: str | None = None,
 ) -> tuple[object, float, float]:
     """
     Calibrate probability predictions using Platt scaling or isotonic regression.
@@ -1498,7 +1500,7 @@ def calibrate_model(
     ----------
     model : object
         A fitted sklearn-compatible classifier with ``predict_proba``.
-        Typically the LightGBM model from ``train_lightgbm_optuna``.
+        Typically an XGBoost or LightGBM model.
     X_train : pd.DataFrame
         Training feature matrix. Split 70/30 internally — 70% is unused
         (model already fitted), 30% trains the calibration layer.
@@ -1511,6 +1513,12 @@ def calibrate_model(
     method : str, optional
         ``'sigmoid'`` (Platt scaling, default) or ``'isotonic'`` (nonparametric,
         may overfit on small calibration sets).
+    output_model_path : str | None, optional
+        Path to save calibrated model as joblib pickle. If None, defaults to
+        _CALIBRATED_MODEL_PATH constant for backward compatibility.
+    output_figure_path : str | None, optional
+        Path to save reliability diagram PNG. If None, defaults to
+        _CALIBRATION_FIGURE_PATH constant for backward compatibility.
 
     Returns
     -------
@@ -1523,9 +1531,8 @@ def calibrate_model(
 
     Notes
     -----
-    Artefacts written to disk:
-    - ``models/lightgbm_calibrated.pkl``               — joblib-serialised calibrated model
-    - ``reports/figures/calibration_reliability.png``  — reliability diagram
+    Artifact paths are determined by caller-provided output_model_path and
+    output_figure_path parameters, or defaults if None.
     """
     import matplotlib.pyplot as plt
     from sklearn.calibration import CalibratedClassifierCV, calibration_curve
@@ -1578,13 +1585,17 @@ def calibrate_model(
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
 
-    fig_path = Path(_CALIBRATION_FIGURE_PATH)
+    # Use provided paths or defaults
+    fig_save_path = output_figure_path or _CALIBRATION_FIGURE_PATH
+    model_save_path = output_model_path or _CALIBRATED_MODEL_PATH
+
+    fig_path = Path(fig_save_path)
     fig_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(fig_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
     # --- Persist calibrated model ---
-    save_model(calibrated_model, _CALIBRATED_MODEL_PATH)
+    save_model(calibrated_model, model_save_path)
 
     return calibrated_model, brier_uncal, brier_cal
 
