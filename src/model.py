@@ -2101,6 +2101,182 @@ def train_catboost_optuna(
 
 
 # ---------------------------------------------------------------------------
+# EXT_SOURCE_3 Supervised Imputation (Phase 2.2)
+# ---------------------------------------------------------------------------
+
+def train_ext_source_imputer(
+    X: pd.DataFrame,
+    y: pd.Series,
+    ext_source_col: str = "EXT_SOURCE_3",
+    n_trials: int = 50,
+) -> tuple[object, float]:
+    """
+    Train LightGBM regressor to impute missing EXT_SOURCE_3 values.
+
+    Fits a regressor on rows where EXT_SOURCE_3 is observed (not -999 sentinel).
+    Uses stratified train/test split on observed rows to prevent leakage.
+    Optuna HPO maximizes correlation between predicted and observed values.
+    Final imputer is retrained on all observed data.
+
+    Parameters
+    ----------
+    X : pd.DataFrame
+        Feature matrix with EXT_SOURCE_3 column (may contain -999 sentinels).
+    y : pd.Series
+        Target series for stratified fold selection (not used in imputation directly).
+    ext_source_col : str, default "EXT_SOURCE_3"
+        Column name to impute.
+    n_trials : int, default 50
+        Number of Optuna trials for hyperparameter optimisation.
+
+    Returns
+    -------
+    tuple[object, float]
+        - Fitted LightGBM regressor (also saved to models/ext_source_imputation_lgb.pkl)
+        - Best trial correlation value (float, typically 0.5–0.8)
+
+    Notes
+    -----
+    - Only rows where EXT_SOURCE_3 != -999.0 are used for training.
+    - EXT_SOURCE_1 and EXT_SOURCE_2 are dropped from features to avoid circular dependencies.
+    - Imputer is fit on 80% of observed rows; 20% used for validation during Optuna.
+    - Final retraining uses 100% of observed rows (no holdout).
+    """
+    import lightgbm as lgb
+    import optuna
+    from json import dump as json_dump
+
+    # 1. Identify observed rows (where EXT_SOURCE_3 is not the sentinel -999)
+    observed_mask = X[ext_source_col] != -999.0
+    X_obs = X[observed_mask].copy()
+    y_obs = X_obs[ext_source_col].copy()  # Target for regression
+
+    # 2. Drop the target column and other EXT_SOURCE columns from features
+    #    (avoid circular dependency)
+    features_to_drop = {ext_source_col, "EXT_SOURCE_1", "EXT_SOURCE_2"}
+    X_obs = X_obs.drop(columns=features_to_drop)
+
+    # 3. Stratified train/test split on observed data
+    #    Use the original target (y) to stratify, sliced to observed indices only
+    y_stratify = y[observed_mask].copy()
+    X_train_obs, X_test_obs, y_train_obs, y_test_obs = train_test_split(
+        X_obs,
+        y_obs,
+        test_size=0.2,
+        random_state=42,
+        stratify=y_stratify,
+    )
+
+    # 4. Optuna HPO: maximize correlation between predicted and observed
+    def objective(trial: optuna.Trial) -> float:
+        """Objective function: mean correlation over a CV split."""
+        params = {
+            "n_estimators": trial.suggest_int("n_estimators", 50, 500),
+            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+            "num_leaves": trial.suggest_int("num_leaves", 20, 100),
+            "min_child_samples": trial.suggest_int("min_child_samples", 5, 50),
+            "reg_alpha": trial.suggest_float("reg_alpha", 0.0, 10.0),
+            "reg_lambda": trial.suggest_float("reg_lambda", 0.0, 10.0),
+        }
+
+        model = lgb.LGBMRegressor(**params, random_state=42, verbose=-1)
+        model.fit(
+            X_train_obs,
+            y_train_obs,
+            eval_set=[(X_test_obs, y_test_obs)],
+            callbacks=[lgb.early_stopping(50), lgb.log_evaluation(period=0)],
+        )
+
+        # Predict on test fold
+        y_pred = model.predict(X_test_obs)
+
+        # Correlation between predicted and observed
+        corr = float(np.corrcoef(y_pred, y_test_obs)[0, 1])
+        return corr
+
+    # Create and optimize study
+    study = optuna.create_study(
+        direction="maximize",
+        sampler=optuna.samplers.TPESampler(seed=_RANDOM_STATE),
+    )
+    study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+    best_correlation = float(study.best_value)
+
+    # 5. Retrain imputer on full observed data with best hyperparameters
+    best_params = study.best_params
+    imputer = lgb.LGBMRegressor(**best_params, random_state=42, verbose=-1)
+    imputer.fit(X_obs, y_obs)
+
+    # Save imputer to disk
+    imputer_path = Path("models/ext_source_imputation_lgb.pkl")
+    imputer_path.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(imputer, imputer_path)
+
+    # Save best params for reference
+    params_path = Path("models/ext_source_imputation_params.json")
+    with params_path.open("w") as fh:
+        json_dump(best_params, fh, indent=2)
+
+    return imputer, best_correlation
+
+
+def apply_ext_source_imputer(
+    X: pd.DataFrame,
+    imputer: object,
+    ext_source_col: str = "EXT_SOURCE_3",
+) -> pd.DataFrame:
+    """
+    Apply EXT_SOURCE_3 imputer to fill missing values.
+
+    Adds an EXT_SOURCE_3_MISSING_FLAG column (1 = originally missing, 0 = observed).
+    Fills -999 sentinel values with predictions from the imputer.
+    Preserves originally-observed values unchanged.
+
+    Parameters
+    ----------
+    X : pd.DataFrame
+        Feature matrix with EXT_SOURCE_3 column (may contain -999 sentinels).
+    imputer : object
+        Fitted LightGBM regressor (from train_ext_source_imputer).
+    ext_source_col : str, default "EXT_SOURCE_3"
+        Column name to impute.
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy of X with:
+        - EXT_SOURCE_3_MISSING_FLAG added (1 = originally missing, 0 = observed)
+        - Missing EXT_SOURCE_3 values filled with predictions
+        - Observed EXT_SOURCE_3 values preserved unchanged
+
+    Notes
+    -----
+    - This function follows the immutability pattern: returns a new DataFrame copy.
+    - Missing flag is added BEFORE imputation (captures original missingness pattern).
+    - Only rows where EXT_SOURCE_3 == -999.0 get imputed; observed rows are unchanged.
+    """
+    out = X.copy()
+
+    # 1. Create missing flag (1 = originally missing, 0 = observed)
+    out[f"{ext_source_col}_MISSING_FLAG"] = (
+        (out[ext_source_col] == -999.0).astype(int)
+    )
+
+    # 2. Prepare features for prediction (drop EXT_SOURCE columns and the flag we just added)
+    features_to_drop = {ext_source_col, "EXT_SOURCE_1", "EXT_SOURCE_2", f"{ext_source_col}_MISSING_FLAG"}
+    X_for_pred = out.drop(columns=features_to_drop)
+
+    # 3. Predict on all rows (including observed)
+    y_imputed = imputer.predict(X_for_pred)
+
+    # 4. Fill missing values only (preserve observed)
+    missing_mask = out[ext_source_col] == -999.0
+    out.loc[missing_mask, ext_source_col] = y_imputed[missing_mask]
+
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Stubs (Phase 3.3+ — LightGBM and XGBoost, implemented in later tasks)
 # ---------------------------------------------------------------------------
 
