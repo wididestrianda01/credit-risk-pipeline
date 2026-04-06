@@ -1,0 +1,32 @@
+{
+  "booster": "goss",
+  "unconstrained": {
+    "mean_gini": 0.5546739405871156,
+    "std_gini": 0.00849679472087641,
+    "elapsed_sec": 174.8
+  },
+  "constrained": {
+    "mean_gini": 0.5535934036024179,
+    "std_gini": 0.008048245877452322,
+    "elapsed_sec": 360.6
+  },
+  "delta_gini": -0.001081,
+  "verdict": "degraded",
+  "active_constraints": {
+    "AGE_YEARS": 1,
+    "YEARS_EMPLOYED": 1,
+    "EXT_SOURCE_1": 1,
+    "EXT_SOURCE_2": 1,
+    "EXT_SOURCE_3": 1
+  },
+  "missing_constraint_features": [
+    "CREDIT_INCOME_RATIO",
+    "inst_days_past_due_mean"
+  ],
+  "metadata": {
+    "X_path": "data/processed/X_raw_features.parquet",
+    "n_rows": 307511,
+    "n_features": 63,
+    "cv_folds": 5
+  }
+}

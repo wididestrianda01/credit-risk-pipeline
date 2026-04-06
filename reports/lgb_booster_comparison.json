@@ -1,0 +1,74 @@
+{
+  "results": [
+    {
+      "booster": "goss",
+      "mean_gini": 0.5546739405871156,
+      "std_gini": 0.00849679472087641,
+      "min_gini": 0.5443543829036481,
+      "max_gini": 0.5662532646900342,
+      "fold_ginis": [
+        0.5525935501604728,
+        0.5662532646900342,
+        0.5443543829036481,
+        0.5626914481637484,
+        0.5474770570176746
+      ],
+      "elapsed_sec": 16.3
+    },
+    {
+      "booster": "gbdt",
+      "mean_gini": 0.5534937763311095,
+      "std_gini": 0.008014179759412385,
+      "min_gini": 0.5422096422841811,
+      "max_gini": 0.5632650941934112,
+      "fold_ginis": [
+        0.551213469702684,
+        0.5619451589963964,
+        0.5422096422841811,
+        0.5632650941934112,
+        0.5488355164788752
+      ],
+      "elapsed_sec": 17.0
+    },
+    {
+      "booster": "dart",
+      "mean_gini": 0.5240129567547411,
+      "std_gini": 0.008366753437479155,
+      "min_gini": 0.514172178701928,
+      "max_gini": 0.533972838256283,
+      "fold_ginis": [
+        0.522193904859575,
+        0.533972838256283,
+        0.5162252576497195,
+        0.5335006043061998,
+        0.514172178701928
+      ],
+      "elapsed_sec": 92.4
+    }
+  ],
+  "best_booster": "goss",
+  "best_mean_gini": 0.5546739405871156,
+  "baseline_mean_gini": 0.5534937763311095,
+  "metadata": {
+    "X_path": "data/processed/X_raw_features.parquet",
+    "n_rows": 307511,
+    "n_features": 63,
+    "cv_folds": 5,
+    "embargo_frac": 0.02,
+    "fixed_hp": {
+      "num_leaves": 125,
+      "max_depth": 4,
+      "min_child_samples": 90,
+      "learning_rate": 0.05,
+      "n_estimators": 500,
+      "subsample": 0.8,
+      "colsample_bytree": 0.8,
+      "reg_alpha": 4.25,
+      "reg_lambda": 9.54,
+      "is_unbalance": true,
+      "verbosity": -1,
+      "random_state": 42,
+      "metric": "auc"
+    }
+  }
+}

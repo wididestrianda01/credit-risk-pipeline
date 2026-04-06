@@ -1,0 +1,25 @@
+{
+  "gini": 0.439963,
+  "auc": 0.719982,
+  "delta_vs_woe_baseline": -0.012037,
+  "delta_vs_raw_attempt": 0.029263,
+  "config": {
+    "use_scale_pos_weight": false,
+    "num_leaves_max": 150,
+    "n_trials": 100,
+    "n_features": 63
+  },
+  "best_params": {
+    "num_leaves": 125,
+    "max_depth": 4,
+    "learning_rate": 0.03135557178104431,
+    "n_estimators": 947,
+    "min_child_samples": 90,
+    "subsample": 0.936774889323868,
+    "colsample_bytree": 0.6162293857822962,
+    "reg_alpha": 4.2473785141366776,
+    "reg_lambda": 9.536133103271833
+  },
+  "hypothesis": "scale_pos_weight=11.4 x num_leaves_max=300 caused overfitting. Ablation: is_unbalance=True, num_leaves_max=150.",
+  "verdict": "NOT_CONFIRMED \u2014 investigate further"
+}

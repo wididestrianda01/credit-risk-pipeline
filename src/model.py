@@ -13,6 +13,7 @@ Supported estimators
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 from typing import Literal
 
@@ -113,10 +114,11 @@ _XGB_OPTUNA_FIGURE_PATH: str = "reports/figures/xgboost_roc_pr.png"
 # imbalanced credit data where the minority class has few examples per leaf.
 _LGB_OPTUNA_N_TRIALS: int = 50
 _LGB_NUM_LEAVES_MIN: int = 20
-_LGB_NUM_LEAVES_MAX: int = 150
+_LGB_NUM_LEAVES_MAX: int = 150       # WoE path: 10 bins/feature → diminishing returns > 150
+_LGB_RAW_NUM_LEAVES_MAX: int = 300   # Raw path: continuous features can exploit deeper trees
 _LGB_MAX_DEPTH_MIN: int = 3
 _LGB_MAX_DEPTH_MAX: int = 12
-_LGB_LEARNING_RATE_MIN: float = 0.01
+_LGB_LEARNING_RATE_MIN: float = 0.03   # raised from 0.01: ultra-slow LR stalls at n_estimators ceiling
 _LGB_LEARNING_RATE_MAX: float = 0.2
 _LGB_N_ESTIMATORS_MIN: int = 100
 _LGB_N_ESTIMATORS_MAX: int = 1000
@@ -128,13 +130,29 @@ _LGB_COLSAMPLE_BYTREE_MIN: float = 0.6
 _LGB_COLSAMPLE_BYTREE_MAX: float = 1.0
 _LGB_REG_ALPHA_MIN: float = 0.0
 _LGB_REG_ALPHA_MAX: float = 5.0
-_LGB_REG_LAMBDA_MIN: float = 0.0
-_LGB_REG_LAMBDA_MAX: float = 10.0
+_LGB_REG_LAMBDA_MIN: float = 3.0   # raised from 0.0: ablation-tuned baseline is 9.54; prevent collapsing regularisation
+_LGB_REG_LAMBDA_MAX: float = 15.0  # raised from 10.0: include ablation value 9.54 with headroom
 # Two-tier early stopping: HPO objective uses aggressive patience to quickly
 # triage bad configs; final refit uses standard patience for a proper model.
 _LGB_OBJ_EARLY_STOPPING_ROUNDS: int = 20   # fast config triage inside Optuna
 _LGB_EARLY_STOPPING_ROUNDS: int = 50        # full patience for final refit
 _LGB_FINAL_VAL_SIZE: float = 0.2
+
+# DART booster: fraction of trees dropped per round (dropout regularisation).
+# 0.05–0.3 is the validated range for credit tabular data; values > 0.3
+# increase variance without additional bias reduction.
+# Note: DART early stopping is not supported in LightGBM 4.x —
+# the stage-1 model trains to full n_estimators (dropout is the regulariser).
+_LGB_DART_DROP_RATE_MIN: float = 0.05
+_LGB_DART_DROP_RATE_MAX: float = 0.3
+
+# GOSS booster: top-gradient fraction (retain high-loss instances) and
+# other-rate (random sample of low-loss instances). Constraint: top + other ≤ 1.
+# Low other_rate (≤ 0.1) reduces memory overhead while preserving minority-class signal.
+_LGB_GOSS_TOP_RATE_MIN: float = 0.01
+_LGB_GOSS_TOP_RATE_MAX: float = 0.2
+_LGB_GOSS_OTHER_RATE_MIN: float = 0.01
+_LGB_GOSS_OTHER_RATE_MAX: float = 0.1
 
 # Output paths for LightGBM Optuna HPO artefacts
 _LGB_OPTUNA_MODEL_PATH: str = "models/lightgbm_best.pkl"
@@ -1045,22 +1063,18 @@ def _lightgbm_optuna_objective(
     X_train: pd.DataFrame,
     y_train: pd.Series,
     cv: "StratifiedKFold | _TemporalCV",
+    scale_pos_weight: float | None = None,
+    num_leaves_max: int = _LGB_NUM_LEAVES_MAX,
+    boosting_type: Literal["gbdt", "dart", "goss"] = "gbdt",
+    monotone_constraints: dict[str, int] | None = None,
 ) -> float:
     """
     Optuna objective: 5-fold CV AUC-ROC for a suggested LightGBM configuration.
 
-    Called once per trial by ``study.optimize()``. Samples 9 hyperparameters,
-    runs stratified k-fold CV on X_train with early stopping inside each fold,
+    Called once per trial by ``study.optimize()``. Samples 9 base hyperparameters
+    plus booster-specific parameters, runs temporal CV on X_train with early
+    stopping inside each fold (skipped for DART — not supported in LGB 4.x),
     and returns the mean out-of-fold AUC-ROC. X_test is never passed in.
-
-    Early stopping uses the CV validation fold as the eval set — no additional
-    data split is needed inside the objective. This means ``n_estimators`` is
-    the maximum; early stopping may terminate sooner if the validation AUC
-    plateaus for ``_LGB_EARLY_STOPPING_ROUNDS`` consecutive rounds.
-
-    Imbalance handling uses ``scale_pos_weight = n_neg / n_pos`` (cost-sensitive
-    strategy), which adjusts gradient weights without compressing probability outputs.
-    This preserves calibration and rank separation crucial for Gini-based selection.
 
     Parameters
     ----------
@@ -1070,8 +1084,22 @@ def _lightgbm_optuna_objective(
         Training features (80% split). Never the held-out test set.
     y_train : pd.Series
         Training labels.
-    cv : StratifiedKFold
-        5-fold CV splitter, seeded for reproducibility.
+    cv : StratifiedKFold | _TemporalCV
+        CV splitter, seeded for reproducibility.
+    scale_pos_weight : float | None
+        If provided, used for cost-sensitive imbalance handling.
+    num_leaves_max : int
+        Upper bound for num_leaves search.
+    boosting_type : {'gbdt', 'dart', 'goss'}, optional
+        LightGBM booster algorithm. Default 'gbdt'. DART and GOSS add
+        booster-specific hyperparameters to the Optuna search space.
+        Note: DART does not support early stopping (LGB 4.x) — the objective
+        trains to full n_estimators in that case.
+    monotone_constraints : dict[str, int] | None, optional
+        Map of feature name → direction (+1 = monotone increasing,
+        -1 = monotone decreasing, 0 = unconstrained). Features not in
+        the dict default to 0. Converted to the column-ordered list
+        required by LightGBM internally.
 
     Returns
     -------
@@ -1080,9 +1108,9 @@ def _lightgbm_optuna_objective(
     """
     import lightgbm as lgb
 
-    params = {
+    params: dict = {
         "num_leaves": trial.suggest_int(
-            "num_leaves", _LGB_NUM_LEAVES_MIN, _LGB_NUM_LEAVES_MAX
+            "num_leaves", _LGB_NUM_LEAVES_MIN, num_leaves_max
         ),
         "max_depth": trial.suggest_int(
             "max_depth", _LGB_MAX_DEPTH_MIN, _LGB_MAX_DEPTH_MAX
@@ -1108,18 +1136,52 @@ def _lightgbm_optuna_objective(
         "reg_lambda": trial.suggest_float(
             "reg_lambda", _LGB_REG_LAMBDA_MIN, _LGB_REG_LAMBDA_MAX
         ),
-        "is_unbalance": True,
+        "boosting_type": boosting_type,
         "metric": "auc",      # CRITICAL: binary_logloss early-stop fires at iter 1 with is_unbalance=True
         "verbosity": -1,
         "random_state": _RANDOM_STATE,
     }
 
-    # Aggressive early stopping inside the objective: enough to distinguish
-    # good from bad configs without training to full depth on each fold.
-    callbacks = [
-        lgb.early_stopping(stopping_rounds=_LGB_OBJ_EARLY_STOPPING_ROUNDS, verbose=False),
-        lgb.log_evaluation(period=0),
-    ]
+    # DART: add dropout hyperparameters to the search space.
+    # drop_rate controls the fraction of trees dropped per boosting round —
+    # the primary regularisation knob in DART.
+    if boosting_type == "dart":
+        params["drop_rate"] = trial.suggest_float(
+            "drop_rate", _LGB_DART_DROP_RATE_MIN, _LGB_DART_DROP_RATE_MAX
+        )
+    # GOSS: gradient-based one-side sampling — retain top-gradient instances
+    # (top_rate) plus a random sample of the remainder (other_rate).
+    elif boosting_type == "goss":
+        params["top_rate"] = trial.suggest_float(
+            "top_rate", _LGB_GOSS_TOP_RATE_MIN, _LGB_GOSS_TOP_RATE_MAX
+        )
+        params["other_rate"] = trial.suggest_float(
+            "other_rate", _LGB_GOSS_OTHER_RATE_MIN, _LGB_GOSS_OTHER_RATE_MAX
+        )
+
+    # Imbalance handling: scale_pos_weight preserves natural probability range
+    # (adjusts gradient weights only); is_unbalance compresses leaf outputs.
+    # scale_pos_weight is preferred when rank-based Gini is the target metric.
+    if scale_pos_weight is not None:
+        params["scale_pos_weight"] = scale_pos_weight
+    else:
+        params["is_unbalance"] = True
+
+    # Monotone constraints: convert feature-name dict to column-ordered list.
+    # LightGBM requires constraints as a list aligned to X_train.columns.
+    if monotone_constraints is not None:
+        cols = X_train.columns.tolist()
+        params["monotone_constraints"] = [monotone_constraints.get(c, 0) for c in cols]
+
+    # Early stopping callbacks — silenced for DART (not supported in LGB 4.x;
+    # dropout is the regulariser and trains to full n_estimators by design).
+    _use_early_stopping = boosting_type != "dart"
+    callbacks = [lgb.log_evaluation(period=0)]
+    if _use_early_stopping:
+        callbacks.insert(
+            0,
+            lgb.early_stopping(stopping_rounds=_LGB_OBJ_EARLY_STOPPING_ROUNDS, verbose=False),
+        )
 
     fold_aucs: list[float] = []
     for train_idx, val_idx in cv.split(X_train, y_train):
@@ -1129,12 +1191,14 @@ def _lightgbm_optuna_objective(
         y_fold_val = y_train.iloc[val_idx]
 
         model = lgb.LGBMClassifier(**params)
-        model.fit(
-            X_fold_train,
-            y_fold_train,
-            eval_set=[(X_fold_val, y_fold_val)],
-            callbacks=callbacks,
-        )
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="Early stopping is not available in dart mode")
+            model.fit(
+                X_fold_train,
+                y_fold_train,
+                eval_set=[(X_fold_val, y_fold_val)],
+                callbacks=callbacks,
+            )
         y_prob_val = model.predict_proba(X_fold_val)[:, 1]
         fold_aucs.append(float(roc_auc_score(y_fold_val, y_prob_val)))
 
@@ -1146,37 +1210,68 @@ def train_lightgbm_optuna(
     y: pd.Series,
     n_trials: int = _LGB_OPTUNA_N_TRIALS,
     groups: pd.Series | None = None,
+    use_scale_pos_weight: bool = False,
+    num_leaves_max: int = _LGB_NUM_LEAVES_MAX,
+    boosting_type: Literal["gbdt", "dart", "goss"] = "gbdt",
+    monotone_constraints: dict[str, int] | None = None,
+    enqueue_trials: list[dict] | None = None,
 ) -> tuple[object, dict, pd.DataFrame, pd.Series, dict]:
     """
     Train LightGBM with Bayesian hyperparameter optimisation via Optuna.
 
-    Runs ``n_trials`` of TPE-based search over a 9-dimensional space,
-    selecting the configuration that maximises mean out-of-fold AUC-ROC.
-    Early stopping inside each CV fold prevents over-training on any given
-    hyperparameter configuration. The final model is retrained on the full
-    training split (with a held-out validation slice for early stopping),
-    then evaluated on the held-out test split.
-
-    Imbalance handling uses ``scale_pos_weight = n_neg / n_pos`` (cost-sensitive
-    strategy), which adjusts gradient weights to reweight the loss without
-    compressing probability outputs. This preserves probability calibration
-    and AUC-based ranking, critical for Gini optimization on imbalanced credit data.
+    Runs ``n_trials`` of TPE-based search over a 9-dimensional base space
+    plus booster-specific dimensions (DART: +1, GOSS: +2), selecting the
+    configuration that maximises mean out-of-fold AUC-ROC under temporal CV.
+    The final model is retrained on the full training split using a two-stage
+    process: early stopping on a held-out validation slice (GBDT/GOSS only)
+    identifies the optimal ``n_estimators``, then a clean refit on all training
+    data uses that tree count.
 
     Parameters
     ----------
     X : pd.DataFrame
-        WoE-transformed feature matrix (40 columns, produced by
-        ``credit_engine.features.apply_feature_store``).
+        Feature matrix. Raw continuous features or WoE-encoded matrix.
     y : pd.Series
         Binary TARGET series (0 = repaid, 1 = defaulted).
     n_trials : int, optional
-        Number of Optuna trials. Default 50 balances exploration depth
-        against compute budget for the 9-dimensional search space.
+        Number of Optuna trials. Default 50.
+    groups : pd.Series | None, optional
+        Temporal group labels for embargo-based CV. Auto-detected from
+        ``_TEMPORAL_SORT_COL`` when None and column is present in X.
+    use_scale_pos_weight : bool, optional
+        Use ``scale_pos_weight = n_neg / n_pos`` for imbalance handling instead
+        of ``is_unbalance=True``. Default False.
+    num_leaves_max : int, optional
+        Upper bound for num_leaves search. Default ``_LGB_NUM_LEAVES_MAX``.
+    boosting_type : {'gbdt', 'dart', 'goss'}, optional
+        Booster algorithm. Default 'gbdt'. DART adds ``drop_rate`` to the
+        search space; GOSS adds ``top_rate`` and ``other_rate``. DART does not
+        support early stopping in LGB 4.x — stage-1 trains to full n_estimators.
+    monotone_constraints : dict[str, int] | None, optional
+        Map of feature name → constraint direction (+1 increasing, -1 decreasing,
+        0 unconstrained). Keys must be column names in X. Features absent from
+        the dict default to 0. Applied to both the Optuna objective and the
+        final model. Example::
+
+            {
+                "AGE_YEARS": 1,
+                "CREDIT_INCOME_RATIO": -1,
+                "EXT_SOURCE_1": 1,
+            }
+
+    enqueue_trials : list[dict] | None, optional
+        Warm-start parameter dicts to evaluate before random exploration.
+        Each dict must contain all Optuna-searchable keys for the active
+        ``boosting_type`` (base 9 dims + booster-specific dims). Useful for
+        anchoring TPE priors near a previously validated configuration.
+        Example::
+
+            [{"num_leaves": 125, "max_depth": 4, "learning_rate": 0.031, ...}]
 
     Returns
     -------
     lgb_model : LGBMClassifier
-        Fitted LightGBM model with best hyperparameters and early stopping.
+        Fitted LightGBM model with best hyperparameters.
     metrics_dict : dict
         Evaluation metrics on X_test. Keys: Model, AUC-ROC, Gini, KS,
         Brier, BrierSkill, AvgPrecision.
@@ -1185,8 +1280,15 @@ def train_lightgbm_optuna(
     y_test : pd.Series
         Held-out test labels.
     best_params : dict
-        Optimised hyperparameters (9 keys). Also persisted to
-        ``models/lightgbm_params.json``.
+        Optimised hyperparameters (9+ keys). Persisted to
+        ``models/lightgbm_params.json``. Does not include ``boosting_type``
+        (fixed, not Optuna-searched).
+
+    Raises
+    ------
+    ValueError
+        If ``n_trials < 1``, ``boosting_type`` is invalid, or
+        ``monotone_constraints`` contains keys absent from X.
 
     Notes
     -----
@@ -1204,26 +1306,65 @@ def train_lightgbm_optuna(
     if n_trials < 1:
         raise ValueError(f"n_trials must be >= 1, got {n_trials}.")
 
+    _VALID_BOOSTING_TYPES: frozenset[str] = frozenset({"gbdt", "dart", "goss"})
+    if boosting_type not in _VALID_BOOSTING_TYPES:
+        raise ValueError(
+            f"boosting_type must be one of {sorted(_VALID_BOOSTING_TYPES)}, "
+            f"got {boosting_type!r}."
+        )
+    if monotone_constraints is not None:
+        _unknown_cols = set(monotone_constraints) - set(X.columns)
+        if _unknown_cols:
+            raise ValueError(
+                f"monotone_constraints keys not found in X: {sorted(_unknown_cols)}"
+            )
+
     # --- Train / test split (stratified, identical seed across all models) ---
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=_TEST_SIZE, stratify=y, random_state=_RANDOM_STATE
     )
 
+    # --- Imbalance weight for scale_pos_weight path ---
+    _scale_pos_weight: float | None = None
+    if use_scale_pos_weight:
+        _n_neg = float((y_train == 0).sum())
+        _n_pos = float((y_train == 1).sum())
+        _scale_pos_weight = _n_neg / _n_pos
+
     # --- Optuna study ---
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
     # Auto-detect temporal groups from _TEMPORAL_SORT_COL if not supplied.
-    if groups is None and _TEMPORAL_SORT_COL in X.columns:
-        groups = X[_TEMPORAL_SORT_COL]
+    # Warn explicitly when the column is absent so callers know CV is iid.
+    if groups is None:
+        if _TEMPORAL_SORT_COL in X.columns:
+            groups = X[_TEMPORAL_SORT_COL]
+        else:
+            warnings.warn(
+                f"Temporal sort column '{_TEMPORAL_SORT_COL}' not found in X. "
+                "Falling back to StratifiedKFold (treats folds as iid). "
+                "CV Gini may be inflated by 0.02–0.05 on temporally ordered data.",
+                UserWarning,
+                stacklevel=2,
+            )
     groups_train = (
         groups.loc[X_train.index].to_numpy() if groups is not None else None
     )
     cv = _make_cv(groups_train, n_splits=_XGB_CV_N_SPLITS)
 
     def objective(trial: optuna.Trial) -> float:
-        return _lightgbm_optuna_objective(trial, X_train, y_train, cv)
+        return _lightgbm_optuna_objective(
+            trial, X_train, y_train, cv,
+            scale_pos_weight=_scale_pos_weight,
+            num_leaves_max=num_leaves_max,
+            boosting_type=boosting_type,
+            monotone_constraints=monotone_constraints,
+        )
 
     study = optuna.create_study(direction="maximize")
+    if enqueue_trials:
+        for trial_params in enqueue_trials:
+            study.enqueue_trial(trial_params)
     study.optimize(objective, n_trials=n_trials)
 
     best_params: dict = study.best_params
@@ -1239,32 +1380,60 @@ def train_lightgbm_optuna(
         random_state=_RANDOM_STATE,
     )
 
+    # Build imbalance kwargs once; applied consistently to Stage 1 and Stage 2.
+    _imbalance_kwargs: dict = (
+        {"scale_pos_weight": _scale_pos_weight}
+        if _scale_pos_weight is not None
+        else {"is_unbalance": True}
+    )
+
+    # Monotone constraint list (column-ordered) for final model construction.
+    # Mirrors the conversion done inside the Optuna objective.
+    _mc_kwargs: dict = {}
+    if monotone_constraints is not None:
+        _cols = X_train.columns.tolist()
+        _mc_kwargs["monotone_constraints"] = [
+            monotone_constraints.get(c, 0) for c in _cols
+        ]
+
+    # Stage 1 early stopping: DART does not support it in LGB 4.x.
+    _stage1_callbacks = [lgb.log_evaluation(period=0)]
+    if boosting_type != "dart":
+        _stage1_callbacks.insert(
+            0,
+            lgb.early_stopping(stopping_rounds=_LGB_EARLY_STOPPING_ROUNDS, verbose=False),
+        )
+
     _stage1_model = lgb.LGBMClassifier(
         **best_params,
-        is_unbalance=True,
+        boosting_type=boosting_type,
+        **_imbalance_kwargs,
+        **_mc_kwargs,
         verbosity=-1,
         random_state=_RANDOM_STATE,
     )
-    _stage1_model.fit(
-        X_tr,
-        y_tr,
-        eval_set=[(X_val, y_val)],
-        callbacks=[
-            lgb.early_stopping(stopping_rounds=_LGB_EARLY_STOPPING_ROUNDS, verbose=False),
-            lgb.log_evaluation(period=0),
-        ],
-    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Early stopping is not available in dart mode")
+        _stage1_model.fit(
+            X_tr,
+            y_tr,
+            eval_set=[(X_val, y_val)],
+            callbacks=_stage1_callbacks,
+        )
 
     # Stage 2: refit on the full X_train with the early-stopping-derived
     # n_estimators so the final model sees 100% of training data, matching
     # the XGBoost approach and eliminating the ~20% training-data disadvantage.
+    # For DART, best_iteration_ is 0 — fall back to best_params n_estimators.
     _best_n_trees = getattr(_stage1_model, "best_iteration_", -1)
     if _best_n_trees <= 0:
         _best_n_trees = best_params.get("n_estimators", _LGB_N_ESTIMATORS_MAX)
 
     final_model = lgb.LGBMClassifier(
         **{**best_params, "n_estimators": _best_n_trees},
-        is_unbalance=True,
+        boosting_type=boosting_type,
+        **_imbalance_kwargs,
+        **_mc_kwargs,
         verbosity=-1,
         random_state=_RANDOM_STATE,
     )
