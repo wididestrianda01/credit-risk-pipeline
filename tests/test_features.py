@@ -8,6 +8,8 @@ Run with
     pytest tests/test_features.py -v
 """
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -1655,10 +1657,28 @@ class TestEngineerInstalmentStreaks:
 # ---------------------------------------------------------------------------
 
 
-class TestCombinedStore:
-    """Test stubs for combined feature store construction.
+def _prod_raw_available() -> bool:
+    """Return True if production X_raw_features.parquet is present with >= 100K rows."""
+    _path = Path("data/processed/X_raw_features.parquet")
+    if not _path.exists():
+        return False
+    try:
+        return pd.read_parquet(_path, columns=["SK_ID_CURR"]).shape[0] >= 100_000
+    except Exception:
+        return False
 
-    These tests define expected behavior for:
+
+@pytest.mark.skipif(
+    not _prod_raw_available(),
+    reason="Production X_raw_features.parquet not available (< 100K rows)",
+)
+class TestCombinedStore:
+    """Integration tests for combined feature store construction.
+
+    These tests require production-scale data (307,511 rows).
+    They are skipped automatically when only mock data is present.
+
+    Tests define expected behavior for:
     - Combined store shape (307,511 rows, >= 65 columns)
     - NaN sentinel handling (-999 for all missing)
     - EXT_SOURCE_3_MISSING_FLAG presence
