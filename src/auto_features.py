@@ -8,10 +8,13 @@ manual specification of aggregate functions.
 Entry points:
   - build_featuretools_feature_store: DFS on train data, IV + correlation filter
   - apply_featuretools_feature_store: Apply feature definitions to test data
+  - deduplicate_dfs_features: Remove highly correlated feature pairs
+  - evaluate_dfs_features: Evaluate DFS features with Gini delta gating
 """
 
 import contextlib
 import io
+import json
 import warnings
 from pathlib import Path
 from typing import Any
@@ -25,9 +28,27 @@ except ImportError:
     ft = None  # type: ignore
 
 from credit_engine.features import select_features_by_iv
+from credit_engine.model import train_xgboost_optuna
+from credit_engine.utils import gini_coefficient
+from credit_engine.model import train_xgboost_optuna
+from credit_engine.utils import gini_coefficient
 
 # Constants
-_DEFAULT_AGG_PRIMITIVES = ["mean", "std", "min", "max", "count", "skew", "median"]
+_DEFAULT_AGG_PRIMITIVES = [
+    "mean",
+    "std",
+    "min",
+    "max",
+    "count",
+    "skew",
+    "median",
+    "sum",
+    "mode",
+    "percent_true",
+    "num_unique",
+    "any",
+    "all",
+]
 _NAN_SENTINEL = -999.0
 
 # File names (canonical in Home Credit dataset)
@@ -402,37 +423,27 @@ def build_featuretools_feature_store(
     # Ensure index name is SK_ID_CURR (DFS preserves application index)
     feature_matrix.index.name = "SK_ID_CURR"
 
-    # Align y_indexed to feature_matrix row order so that after
-    # reset_index(drop=True) inside compute_woe_iv, positions correspond.
-    y_for_iv = y_indexed.loc[feature_matrix.index]
+    # Per D-02: Skip IV filter (inappropriate for tree models).
+    # Use correlation deduplication instead on all DFS features.
+    all_dfs_cols = feature_matrix.columns.tolist()
 
-    # Apply IV filter; suppress print() output from select_features_by_iv.
-    with io.StringIO() as _buf, contextlib.redirect_stdout(_buf):
-        iv_dict = select_features_by_iv(
-            feature_matrix,
-            y_for_iv,
-            min_iv=iv_threshold,
-            bins=10,
-        )
-
-    iv_cols = list(iv_dict.keys())
-
-    # Correlation deduplication on IV-filtered features only
-    if len(iv_cols) > 1:
-        corr_matrix = feature_matrix[iv_cols].corr().abs()
+    # Correlation deduplication on all DFS features
+    if len(all_dfs_cols) > 1:
+        corr_matrix = feature_matrix[all_dfs_cols].corr().abs()
         to_drop = set()
-        for i, col_a in enumerate(iv_cols):
+        for i, col_a in enumerate(all_dfs_cols):
             if col_a in to_drop:
                 continue
-            for col_b in iv_cols[i + 1 :]:
+            for col_b in all_dfs_cols[i + 1 :]:
                 if col_b in to_drop:
                     continue
                 if corr_matrix.loc[col_a, col_b] > corr_threshold:
-                    to_drop.add(col_b)  # keep col_a (higher IV comes first)
+                    # Keep the first one (arbitrary, but consistent)
+                    to_drop.add(col_b)
 
-        selected_cols = [c for c in iv_cols if c not in to_drop]
+        selected_cols = [c for c in all_dfs_cols if c not in to_drop]
     else:
-        selected_cols = iv_cols
+        selected_cols = all_dfs_cols
 
     # Save selected features if output_path provided
     if output_path is not None:
@@ -462,37 +473,48 @@ def apply_featuretools_feature_store(
     ----------
     data_dir : Path | str
         Directory containing application_test.csv (or application_train.csv).
-    feature_defs : list
+    feature_defs : list[Any]
         Feature definitions from build_featuretools_feature_store.
     selected_cols : list[str]
-        Selected column names (from build output).
+        Column list from build_featuretools_feature_store.
     mode : str, optional
-        "test" (default) or "train".
+        "test" (default) uses application_test.csv; "train" uses application_train.csv.
     n_jobs : int, optional
         Number of jobs for DFS (default 1).
 
     Returns
     -------
     pd.DataFrame
-        Feature matrix with columns = selected_cols, no NaN/inf values.
+        Feature matrix with selected columns only, matching the training data shape
+        and column order.
 
     Raises
     ------
     ValueError
-        If mode is not "test" or "train".
+        If feature_defs is empty or mode is not "test" or "train".
+    FileNotFoundError
+        If CSV files are missing.
     """
     if not feature_defs:
         raise ValueError("feature_defs cannot be empty")
+
     if mode not in ("test", "train"):
-        raise ValueError(f"mode must be 'test' or 'train', got {mode!r}")
+        raise ValueError(f'mode must be "test" or "train", got {mode}')
+
+    if ft is None:
+        raise ImportError("featuretools is required for this function")
 
     data_dir = Path(data_dir)
 
-    # Load application data
-    if mode == "train":
-        app_path = data_dir / _FILE_APP_TRAIN
-    else:  # mode == "test"
-        app_path = data_dir / _FILE_APP_TEST
+    # Choose CSV file based on mode
+    if mode == "test":
+        app_filename = _FILE_APP_TEST
+    else:
+        app_filename = _FILE_APP_TRAIN
+
+    app_path = data_dir / app_filename
+    if not app_path.exists():
+        raise FileNotFoundError(f"Missing {app_filename} in {data_dir}")
 
     application = pd.read_csv(app_path)
 
@@ -555,3 +577,311 @@ def apply_featuretools_feature_store(
 
     # Return only selected columns
     return feature_matrix[selected_cols]
+
+
+def deduplicate_dfs_features(
+    X_dfs: pd.DataFrame,
+    feature_importance: dict[str, float] | None = None,
+    corr_threshold: float = 0.90,
+) -> list[str]:
+    """
+    Identify and remove highly correlated DFS feature pairs.
+
+    Computes the absolute correlation matrix and identifies pairs with
+    |r| > threshold. For each pair, keeps the feature with higher importance
+    (or the first one if importance dict is not provided).
+
+    Parameters
+    ----------
+    X_dfs : pd.DataFrame
+        DFS feature matrix.
+    feature_importance : dict[str, float] | None, optional
+        Feature importance scores (e.g. from tree importance). If provided,
+        uses importance to decide which feature to drop. If None, drops the
+        second feature in each correlated pair.
+    corr_threshold : float, optional
+        Correlation threshold for deduplication (default 0.90).
+
+    Returns
+    -------
+    list[str]
+        Column names to keep (after deduplication).
+    """
+    all_cols = X_dfs.columns.tolist()
+
+    if len(all_cols) <= 1:
+        return all_cols
+
+    corr_matrix = X_dfs.corr().abs()
+    to_drop = set()
+
+    for i, col_a in enumerate(all_cols):
+        if col_a in to_drop:
+            continue
+        for col_b in all_cols[i + 1 :]:
+            if col_b in to_drop:
+                continue
+            if corr_matrix.loc[col_a, col_b] > corr_threshold:
+                # Drop the feature with lower importance (or col_b if not provided)
+                if feature_importance is not None:
+                    imp_a = feature_importance.get(col_a, 0.0)
+                    imp_b = feature_importance.get(col_b, 0.0)
+                    if imp_a >= imp_b:
+                        to_drop.add(col_b)
+                    else:
+                        to_drop.add(col_a)
+                else:
+                    # No importance info: keep the first one
+                    to_drop.add(col_b)
+
+    return [c for c in all_cols if c not in to_drop]
+
+
+def evaluate_dfs_features(
+    X_raw: pd.DataFrame,
+    X_dfs: pd.DataFrame,
+    y: pd.Series,
+    output_path: Path | str | None = None,
+    n_trials: int = 50,
+    corr_threshold: float = 0.90,
+) -> dict[str, Any]:
+    """
+    Evaluate DFS features by comparing Gini on raw vs combined feature sets.
+
+    Trains XGBoost on raw features (baseline), deduplicates DFS features,
+    trains XGBoost on combined (raw + DFS), and computes Gini delta.
+    Commits DFS features only if delta >= 0.01.
+
+    Parameters
+    ----------
+    X_raw : pd.DataFrame
+        Raw feature matrix (baseline).
+    X_dfs : pd.DataFrame
+        DFS-generated feature matrix.
+    y : pd.Series
+        Binary target series.
+    output_path : Path | str | None, optional
+        If provided, save evaluation results to JSON at this path.
+    n_trials : int, optional
+        Number of Optuna trials for XGBoost HPO (default 50).
+    corr_threshold : float, optional
+        Correlation threshold for DFS feature deduplication (default 0.90).
+
+    Returns
+    -------
+    dict[str, Any]
+        Keys:
+        - "raw_gini": Gini coefficient on raw features
+        - "dfs_gini": Gini coefficient on combined (raw + dedup DFS) features
+        - "gini_delta": dfs_gini - raw_gini
+        - "decision": "commit" if delta >= 0.01 else "defer"
+        - "raw_features": Number of raw features
+        - "dfs_features": Number of DFS features before dedup
+        - "dfs_features_dedup": Number of DFS features after dedup
+    """
+    # Baseline: XGBoost on raw features
+    model_raw, metrics_raw, X_test_raw, y_test, _ = train_xgboost_optuna(
+        X=X_raw,
+        y=y,
+        n_trials=n_trials,
+    )
+
+    raw_gini = gini_coefficient(y_test, model_raw.predict_proba(X_test_raw)[:, 1])
+
+    # Deduplicate DFS features (no importance info, so uses default)
+    dfs_cols_dedup = deduplicate_dfs_features(
+        X_dfs,
+        feature_importance=None,
+        corr_threshold=corr_threshold,
+    )
+
+    X_dfs_dedup = X_dfs[dfs_cols_dedup].copy()
+
+    # Combined: raw + dedup DFS
+    X_combined = pd.concat([X_raw, X_dfs_dedup], axis=1)
+
+    # Align indices and train on combined
+    model_combined, _, X_test_combined, _, _ = train_xgboost_optuna(
+        X=X_combined,
+        y=y,
+        n_trials=n_trials,
+    )
+
+    dfs_gini = gini_coefficient(y_test, model_combined.predict_proba(X_test_combined)[:, 1])
+
+    # Compute delta and decision
+    gini_delta = dfs_gini - raw_gini
+    decision = "commit" if gini_delta >= 0.01 else "defer"
+
+    result = {
+        "raw_gini": float(raw_gini),
+        "dfs_gini": float(dfs_gini),
+        "gini_delta": float(gini_delta),
+        "decision": decision,
+        "raw_features": X_raw.shape[1],
+        "dfs_features": X_dfs.shape[1],
+        "dfs_features_dedup": len(dfs_cols_dedup),
+    }
+
+    # Save to JSON if path provided
+    if output_path is not None:
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w") as f:
+            json.dump(result, f, indent=2)
+
+    return result
+
+
+def deduplicate_dfs_features(
+    X_dfs: pd.DataFrame,
+    feature_importance: dict[str, float] | None = None,
+    corr_threshold: float = 0.90,
+) -> list[str]:
+    """
+    Identify and remove highly correlated DFS feature pairs.
+
+    Computes the absolute correlation matrix and identifies pairs with
+    |r| > threshold. For each pair, keeps the feature with higher importance
+    (or the first one if importance dict is not provided).
+
+    Parameters
+    ----------
+    X_dfs : pd.DataFrame
+        DFS feature matrix.
+    feature_importance : dict[str, float] | None, optional
+        Feature importance scores (e.g. from tree importance). If provided,
+        uses importance to decide which feature to drop. If None, drops the
+        second feature in each correlated pair.
+    corr_threshold : float, optional
+        Correlation threshold for deduplication (default 0.90).
+
+    Returns
+    -------
+    list[str]
+        Column names to keep (after deduplication).
+    """
+    all_cols = X_dfs.columns.tolist()
+
+    if len(all_cols) <= 1:
+        return all_cols
+
+    corr_matrix = X_dfs.corr().abs()
+    to_drop = set()
+
+    for i, col_a in enumerate(all_cols):
+        if col_a in to_drop:
+            continue
+        for col_b in all_cols[i + 1 :]:
+            if col_b in to_drop:
+                continue
+            if corr_matrix.loc[col_a, col_b] > corr_threshold:
+                # Drop the feature with lower importance (or col_b if not provided)
+                if feature_importance is not None:
+                    imp_a = feature_importance.get(col_a, 0.0)
+                    imp_b = feature_importance.get(col_b, 0.0)
+                    if imp_a >= imp_b:
+                        to_drop.add(col_b)
+                    else:
+                        to_drop.add(col_a)
+                else:
+                    # No importance info: keep the first one
+                    to_drop.add(col_b)
+
+    return [c for c in all_cols if c not in to_drop]
+
+
+def evaluate_dfs_features(
+    X_raw: pd.DataFrame,
+    X_dfs: pd.DataFrame,
+    y: pd.Series,
+    output_path: Path | str | None = None,
+    n_trials: int = 50,
+    corr_threshold: float = 0.90,
+) -> dict[str, Any]:
+    """
+    Evaluate DFS features by comparing Gini on raw vs combined feature sets.
+
+    Trains XGBoost on raw features (baseline), deduplicates DFS features,
+    trains XGBoost on combined (raw + DFS), and computes Gini delta.
+    Commits DFS features only if delta >= 0.01.
+
+    Parameters
+    ----------
+    X_raw : pd.DataFrame
+        Raw feature matrix (baseline).
+    X_dfs : pd.DataFrame
+        DFS-generated feature matrix.
+    y : pd.Series
+        Binary target series.
+    output_path : Path | str | None, optional
+        If provided, save evaluation results to JSON at this path.
+    n_trials : int, optional
+        Number of Optuna trials for XGBoost HPO (default 50).
+    corr_threshold : float, optional
+        Correlation threshold for DFS feature deduplication (default 0.90).
+
+    Returns
+    -------
+    dict[str, Any]
+        Keys:
+        - "raw_gini": Gini coefficient on raw features
+        - "dfs_gini": Gini coefficient on combined (raw + dedup DFS) features
+        - "gini_delta": dfs_gini - raw_gini
+        - "decision": "commit" if delta >= 0.01 else "defer"
+        - "raw_features": Number of raw features
+        - "dfs_features": Number of DFS features before dedup
+        - "dfs_features_dedup": Number of DFS features after dedup
+    """
+    # Baseline: XGBoost on raw features
+    model_raw, metrics_raw, X_test_raw, y_test, _ = train_xgboost_optuna(
+        X=X_raw,
+        y=y,
+        n_trials=n_trials,
+    )
+
+    raw_gini = gini_coefficient(y_test, model_raw.predict_proba(X_test_raw)[:, 1])
+
+    # Deduplicate DFS features (no importance info, so uses default)
+    dfs_cols_dedup = deduplicate_dfs_features(
+        X_dfs,
+        feature_importance=None,
+        corr_threshold=corr_threshold,
+    )
+
+    X_dfs_dedup = X_dfs[dfs_cols_dedup].copy()
+
+    # Combined: raw + dedup DFS
+    X_combined = pd.concat([X_raw, X_dfs_dedup], axis=1)
+
+    # Align indices and train on combined
+    model_combined, _, X_test_combined, _, _ = train_xgboost_optuna(
+        X=X_combined,
+        y=y,
+        n_trials=n_trials,
+    )
+
+    dfs_gini = gini_coefficient(y_test, model_combined.predict_proba(X_test_combined)[:, 1])
+
+    # Compute delta and decision
+    gini_delta = dfs_gini - raw_gini
+    decision = "commit" if gini_delta >= 0.01 else "defer"
+
+    result = {
+        "raw_gini": float(raw_gini),
+        "dfs_gini": float(dfs_gini),
+        "gini_delta": float(gini_delta),
+        "decision": decision,
+        "raw_features": X_raw.shape[1],
+        "dfs_features": X_dfs.shape[1],
+        "dfs_features_dedup": len(dfs_cols_dedup),
+    }
+
+    # Save to JSON if path provided
+    if output_path is not None:
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w") as f:
+            json.dump(result, f, indent=2)
+
+    return result

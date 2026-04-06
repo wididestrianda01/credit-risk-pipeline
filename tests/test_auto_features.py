@@ -892,29 +892,193 @@ class TestDFSEvaluation:
     - Removing highly correlated features (|r| > 0.90)
     """
 
-    def test_dfs_evaluation_gini_delta(self):
-        """Verify delta computation between baseline and DFS models.
-
-        Arrange: Mock baseline Gini and DFS-augmented Gini
-        Act: Compute delta = dfs_gini - baseline_gini
-        Assert: Delta computed correctly
-        """
-        pytest.skip("RED state — implement in wave 1")
-
-    def test_dfs_feature_selection_respects_threshold(self):
-        """Verify that features with delta < 0.01 are deferred.
-
-        Arrange: DFS evaluation with threshold=0.01
-        Act: Evaluate features and select only those exceeding threshold
-        Assert: All selected features have delta >= 0.01
-        """
-        pytest.skip("RED state — implement in wave 1")
-
     def test_dfs_correlation_dedup(self):
         """Verify that highly correlated feature pairs are removed.
 
         Arrange: Feature matrix with |r| > 0.90 pairs
-        Act: Run correlation deduplication (keep higher-IV feature)
+        Act: Run correlation deduplication with default threshold
         Assert: No pairs remain with |r| > 0.90
         """
-        pytest.skip("RED state — implement in wave 1")
+        from credit_engine.auto_features import deduplicate_dfs_features
+
+        # Create a small matrix with one highly correlated pair
+        X = pd.DataFrame(
+            {
+                "feat_a": [1.0, 2.0, 3.0, 4.0, 5.0],
+                "feat_b": [1.0, 2.0, 3.0, 4.0, 5.0],  # Corr = 1.0 with feat_a
+                "feat_c": [2.0, 4.0, 6.0, 8.0, 10.0],  # Corr = 1.0 with feat_a (2x)
+                "feat_d": [5.0, 4.0, 3.0, 2.0, 1.0],   # Corr = -1.0 with feat_a, abs = 1.0
+                "feat_e": [1.5, 2.5, 3.5, 4.5, 5.5],  # Low corr with feat_a
+            }
+        )
+
+        # Mock feature importance (for deduplicate_dfs_features to decide which to drop)
+        feature_importance = {
+            "feat_a": 0.5,
+            "feat_b": 0.3,
+            "feat_c": 0.4,
+            "feat_d": 0.2,
+            "feat_e": 0.1,
+        }
+
+        cols_to_keep = deduplicate_dfs_features(
+            X,
+            feature_importance=feature_importance,
+            corr_threshold=0.90
+        )
+
+        # Verify no highly correlated pairs remain
+        X_kept = X[cols_to_keep]
+        corr_matrix = X_kept.corr().abs()
+
+        # Check that all off-diagonal correlations are <= 0.90
+        for i in range(len(cols_to_keep)):
+            for j in range(i + 1, len(cols_to_keep)):
+                assert corr_matrix.iloc[i, j] <= 0.90, \
+                    f"Found pair {cols_to_keep[i]}, {cols_to_keep[j]} with corr={corr_matrix.iloc[i, j]}"
+
+    def test_dfs_evaluation_gini_delta(self, monkeypatch):
+        """Verify delta computation between baseline and DFS models.
+
+        Arrange: Mock X_raw and X_dfs with synthetic data
+        Act: Compute delta = gini_dfs - gini_raw
+        Assert: Delta computed and verdict assigned correctly
+        """
+        from credit_engine.auto_features import evaluate_dfs_features
+        from unittest.mock import MagicMock
+        import tempfile
+
+        # Mock train_xgboost_optuna to avoid expensive training
+        def mock_train_xgboost_optuna(X, y, n_trials=50, groups=None):
+            """Mock that returns fixed Gini values."""
+            model = MagicMock()
+            X_test = X.iloc[-20:]  # Simulate 20% test split
+            y_test = y.iloc[-20:]
+            # Generate probabilities matching X_test size
+            proba = np.random.uniform(0, 1, len(X_test))
+            model.predict_proba = lambda X_test_arg: np.column_stack([1 - proba, proba])
+            metrics = {}
+            return model, metrics, X_test, y_test, {}
+
+        monkeypatch.setattr(
+            "credit_engine.auto_features.train_xgboost_optuna",
+            mock_train_xgboost_optuna
+        )
+
+        # Create synthetic data
+        np.random.seed(42)
+        n_rows = 100
+
+        # Raw features (2 cols)
+        X_raw = pd.DataFrame(
+            {
+                "raw_feat_1": np.random.normal(0, 1, n_rows),
+                "raw_feat_2": np.random.normal(0, 1, n_rows),
+            }
+        )
+
+        # DFS features (3 cols)
+        X_dfs = pd.DataFrame(
+            {
+                "dfs_feat_1": np.random.normal(0, 1, n_rows),
+                "dfs_feat_2": np.random.normal(0, 1, n_rows),
+                "dfs_feat_3": np.random.normal(0, 1, n_rows),
+            }
+        )
+
+        # Target (binary)
+        y = pd.Series(np.random.binomial(1, 0.3, n_rows))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "dfs_eval.json"
+
+            result = evaluate_dfs_features(
+                X_raw=X_raw,
+                X_dfs=X_dfs,
+                y=y,
+                output_path=str(output_path),
+                n_trials=2,  # Minimal for mocked version
+                corr_threshold=0.90,
+            )
+
+            # Verify result structure
+            assert "gini_delta" in result
+            assert "raw_gini" in result
+            assert "dfs_gini" in result
+            assert "decision" in result
+            assert result["decision"] in ["commit", "defer"]
+
+            # Verify decision logic
+            if result["gini_delta"] >= 0.01:
+                assert result["decision"] == "commit"
+            else:
+                assert result["decision"] == "defer"
+
+            # Verify JSON was written (before temp dir closes)
+            assert Path(output_path).exists()
+
+    def test_dfs_feature_selection_respects_threshold(self, monkeypatch):
+        """Verify that features with delta < 0.01 are deferred.
+
+        Arrange: Evaluate DFS features with mocked training
+        Act: Call evaluate_dfs_features
+        Assert: Decision logic respects threshold
+        """
+        from credit_engine.auto_features import evaluate_dfs_features
+        from unittest.mock import MagicMock
+        import tempfile
+
+        # Mock train_xgboost_optuna to return controlled Gini values
+        def mock_train_xgboost_optuna(X, y, n_trials=50, groups=None):
+            """Mock that returns different Gini values."""
+            model = MagicMock()
+            X_test = X.iloc[-20:]
+            y_test = y.iloc[-20:]
+            # Generate probabilities matching X_test size
+            proba = np.random.uniform(0, 1, len(X_test))
+            model.predict_proba = lambda X_test_arg: np.column_stack([1 - proba, proba])
+            return model, {}, X_test, y_test, {}
+
+        monkeypatch.setattr(
+            "credit_engine.auto_features.train_xgboost_optuna",
+            mock_train_xgboost_optuna
+        )
+
+        # Create synthetic data
+        np.random.seed(42)
+        n_rows = 100
+
+        X_raw = pd.DataFrame(
+            {
+                "feat_1": np.random.normal(0, 1, n_rows),
+                "feat_2": np.random.normal(0, 1, n_rows),
+            }
+        )
+
+        X_dfs = pd.DataFrame(
+            {
+                "noise_1": np.random.normal(0, 1, n_rows),
+                "noise_2": np.random.normal(0, 1, n_rows),
+            }
+        )
+
+        y = pd.Series(np.random.binomial(1, 0.3, n_rows))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "dfs_eval.json"
+
+            result = evaluate_dfs_features(
+                X_raw=X_raw,
+                X_dfs=X_dfs,
+                y=y,
+                output_path=str(output_path),
+                n_trials=2,
+                corr_threshold=0.90,
+            )
+
+        # Verify decision is correct for the delta value
+        assert result["decision"] in ["commit", "defer"]
+        if result["gini_delta"] < 0.01:
+            assert result["decision"] == "defer"
+        else:
+            assert result["decision"] == "commit"
