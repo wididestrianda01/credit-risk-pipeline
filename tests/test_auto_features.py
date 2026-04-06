@@ -876,3 +876,45 @@ class TestAutoFeaturesEdgeCases:
             iv_threshold=0.0,
             corr_threshold=0.99,
         )
+
+
+# ---------------------------------------------------------------------------
+# Tests: DFS Evaluation (Wave 0 — test stubs, RED state)
+# ---------------------------------------------------------------------------
+
+
+class TestDFSEvaluation:
+    """Test stubs for DFS feature evaluation gating and filtering.
+
+    These tests define expected behavior for:
+    - Computing Gini delta between baseline and DFS-augmented models
+    - Respecting delta threshold (< 0.01 defers features)
+    - Removing highly correlated features (|r| > 0.90)
+    """
+
+    def test_dfs_evaluation_gini_delta(self):
+        """Verify delta computation between baseline and DFS models.
+
+        Arrange: Mock baseline Gini and DFS-augmented Gini
+        Act: Compute delta = dfs_gini - baseline_gini
+        Assert: Delta computed correctly
+        """
+        pytest.skip("RED state — implement in wave 1")
+
+    def test_dfs_feature_selection_respects_threshold(self):
+        """Verify that features with delta < 0.01 are deferred.
+
+        Arrange: DFS evaluation with threshold=0.01
+        Act: Evaluate features and select only those exceeding threshold
+        Assert: All selected features have delta >= 0.01
+        """
+        pytest.skip("RED state — implement in wave 1")
+
+    def test_dfs_correlation_dedup(self):
+        """Verify that highly correlated feature pairs are removed.
+
+        Arrange: Feature matrix with |r| > 0.90 pairs
+        Act: Run correlation deduplication (keep higher-IV feature)
+        Assert: No pairs remain with |r| > 0.90
+        """
+        pytest.skip("RED state — implement in wave 1")

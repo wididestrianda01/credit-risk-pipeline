@@ -21,6 +21,7 @@ from credit_engine.features import (
     compute_knn_target_encoding,
     compute_woe_iv,
     engineer_application_features,
+    engineer_instalment_streaks,
     engineer_secondary_features,
     select_features_by_iv,
 )
@@ -1450,3 +1451,252 @@ class TestKnnTargetEncoding:
         # All KNN instances should use k=3
         for k_used in n_neighbors_used:
             assert k_used == 3, f"Expected k=3, got k={k_used}"
+
+
+# ---------------------------------------------------------------------------
+# Instalment time-series features — TDD tests (RED phase)
+# ---------------------------------------------------------------------------
+
+
+class TestEngineerInstalmentStreaks:
+    """TDD tests for engineer_instalment_streaks()."""
+
+    @pytest.fixture
+    def instalment_data(self) -> pd.DataFrame:
+        """
+        Synthetic instalment payments table with rows designed to test streak logic.
+
+        Columns: SK_ID_CURR, DAYS_INSTALMENT, DAYS_ENTRY_PAYMENT, AMT_INSTALMENT, AMT_PAYMENT
+
+        Notes:
+        - DAYS_INSTALMENT, DAYS_ENTRY_PAYMENT are negative (days before application).
+        - More recent = less negative = higher value.
+        - A payment is LATE when DAYS_ENTRY_PAYMENT > DAYS_INSTALMENT.
+        - DPD (Days Past Due) = max(0, DAYS_ENTRY_PAYMENT - DAYS_INSTALMENT).
+        """
+        return pd.DataFrame({
+            "SK_ID_CURR": [
+                101, 101, 101, 101, 101,  # Borrower 101: 5 instalments, streaky DPD
+                102, 102, 102,              # Borrower 102: 3 instalments, no late
+                103, 103, 103, 103,         # Borrower 103: 4 instalments, uniform payment
+                104, 104,                   # Borrower 104: 2 instalments, only 1 record
+            ],
+            "DAYS_INSTALMENT": [
+                -120, -100, -80, -60, -40,  # Recent to old for 101
+                -100, -80, -60,              # Recent to old for 102 (no DPD)
+                -120, -100, -80, -60,        # Recent to old for 103
+                -50, -30,                    # Recent to old for 104
+            ],
+            "DAYS_ENTRY_PAYMENT": [
+                -115, -105, -75, -70, -40,  # 101: late on days 100, 80, 60; early on day 120
+                -100, -80, -60,              # 102: on time always
+                -120, -95, -80, -65,         # 103: late on day 100, slight on 60 and 80
+                -50, -25,                    # 104: 0 DPD on first, 5 on second
+            ],
+            "AMT_INSTALMENT": [
+                1000.0, 1000.0, 1050.0, 1050.0, 1100.0,  # 101: increasing trend
+                1000.0, 1000.0, 1000.0,                   # 102: flat
+                500.0, 500.0, 500.0, 500.0,               # 103: flat
+                2000.0, 2500.0,                            # 104: increasing
+            ],
+            "AMT_PAYMENT": [
+                950.0, 980.0, 1000.0, 1020.0, 1100.0,   # 101: increasing
+                1000.0, 1000.0, 1000.0,                  # 102: exact
+                505.0, 510.0, 515.0, 520.0,              # 103: increasing
+                2000.0, 2500.0,                           # 104: increasing
+            ],
+        })
+
+    def test_engineer_instalment_streaks_returns_correct_columns(self, instalment_data):
+        """Output must have exactly these 5 columns."""
+        result = engineer_instalment_streaks(instalment_data)
+        expected_cols = {
+            "inst_longest_dpd_streak",
+            "inst_months_since_last_dpd",
+            "inst_payment_amt_slope",
+            "inst_payment_ratio_trend",
+            "inst_recent_vs_historical_dpd",
+        }
+        assert set(result.columns) == expected_cols, (
+            f"Expected columns {expected_cols}, got {set(result.columns)}"
+        )
+
+    def test_engineer_instalment_streaks_shape(self, instalment_data):
+        """Output must have one row per unique SK_ID_CURR."""
+        result = engineer_instalment_streaks(instalment_data)
+        unique_borrowers = instalment_data["SK_ID_CURR"].nunique()
+        assert len(result) == unique_borrowers, (
+            f"Expected {unique_borrowers} rows, got {len(result)}"
+        )
+
+    def test_engineer_instalment_streaks_index_is_sk_id_curr(self, instalment_data):
+        """Result index must be SK_ID_CURR."""
+        result = engineer_instalment_streaks(instalment_data)
+        assert result.index.name == "SK_ID_CURR", (
+            f"Expected index name 'SK_ID_CURR', got '{result.index.name}'"
+        )
+
+    def test_engineer_instalment_streaks_no_dpd_borrower(self, instalment_data):
+        """Borrower 102 has zero DPD (DAYS_ENTRY_PAYMENT == DAYS_INSTALMENT on all).
+        inst_longest_dpd_streak must be 0."""
+        result = engineer_instalment_streaks(instalment_data)
+        assert result.loc[102, "inst_longest_dpd_streak"] == 0, (
+            "Borrower with no DPD must have inst_longest_dpd_streak == 0"
+        )
+
+    def test_engineer_instalment_streaks_detects_streak(self, instalment_data):
+        """Borrower 101 has consecutive late payments (DAYS_INSTALMENT 100, 80, 60).
+        inst_longest_dpd_streak must be > 0."""
+        result = engineer_instalment_streaks(instalment_data)
+        streak = result.loc[101, "inst_longest_dpd_streak"]
+        assert streak > 0, "Borrower with DPD must have inst_longest_dpd_streak > 0"
+
+    def test_engineer_instalment_streaks_no_nan_or_inf(self, instalment_data):
+        """Output must have zero NaN or inf values."""
+        result = engineer_instalment_streaks(instalment_data)
+        assert not result.isna().any().any(), "Result must not contain NaN"
+        assert not result.isin([np.inf, -np.inf]).any().any(), "Result must not contain inf"
+
+    def test_engineer_instalment_streaks_months_since_dpd_correct_bounds(self, instalment_data):
+        """Borrower with no DPD must have inst_months_since_last_dpd == 999 (far past)."""
+        result = engineer_instalment_streaks(instalment_data)
+        # Borrower 102 has no DPD
+        assert result.loc[102, "inst_months_since_last_dpd"] == 999, (
+            "Borrower with no DPD must have inst_months_since_last_dpd == 999"
+        )
+
+    def test_engineer_instalment_streaks_payment_slope_reasonable(self, instalment_data):
+        """Borrower 101 has increasing payment amounts → positive slope.
+        Borrower 102 has flat amounts → slope near 0."""
+        result = engineer_instalment_streaks(instalment_data)
+        slope_101 = result.loc[101, "inst_payment_amt_slope"]
+        slope_102 = result.loc[102, "inst_payment_amt_slope"]
+        # 101 increases: 1000 → 1100, so slope should be positive
+        assert slope_101 > 0, "Borrower with increasing amounts must have positive slope"
+        # 102 is flat: all 1000, so slope should be near 0
+        assert abs(slope_102) < 0.1, "Borrower with flat amounts must have slope near 0"
+
+    def test_engineer_instalment_streaks_single_instalment(self, instalment_data):
+        """Borrower with only 1 instalment should not crash (edge case for slope).
+        Slope should be 0.0 when n < 2."""
+        result = engineer_instalment_streaks(instalment_data)
+        # Borrower 104 has only 2 instalments; slope should be computed
+        slope_104 = result.loc[104, "inst_payment_amt_slope"]
+        assert isinstance(slope_104, (int, float)), "Slope must be numeric"
+        assert not np.isnan(slope_104), "Slope must not be NaN"
+
+    def test_engineer_instalment_streaks_integration_with_pipeline(self, instalment_data):
+        """Calling engineer_instalment_streaks() and merging into a full dataframe works."""
+        result = engineer_instalment_streaks(instalment_data)
+        # Create a dummy full dataframe and merge
+        full_df = pd.DataFrame({
+            "SK_ID_CURR": [101, 102, 103, 104],
+            "AMT_INCOME_TOTAL": [100_000, 80_000, 120_000, 90_000],
+        }).set_index("SK_ID_CURR")
+        merged = full_df.join(result, how="left")
+        assert merged.shape[1] == 6, f"Expected 6 columns, got {merged.shape[1]}"
+        assert not merged.isnull().any().any(), "Merged dataframe must not have NaN"
+
+    def test_engineer_secondary_features_with_instalment_data(self, instalment_data):
+        """engineer_secondary_features() accepts optional df_inst parameter.
+        When provided, output includes the 5 instalment streak features."""
+        # Create a minimal secondary features dataframe
+        secondary_df = pd.DataFrame({
+            "SK_ID_CURR": [101, 102, 103, 104],
+            "inst_cnt": [5, 3, 4, 2],
+            "inst_late_cnt": [2, 0, 1, 0],
+            "prev_cnt": [1, 2, 1, 0],
+            "prev_approved_cnt": [1, 2, 0, 0],
+            "AMT_INCOME_TOTAL": [100_000, 80_000, 120_000, 90_000],
+            "AMT_ANNUITY": [5_000, 4_000, 6_000, 3_000],
+        }).set_index("SK_ID_CURR")
+
+        # Call engineer_secondary_features with df_inst parameter
+        result = engineer_secondary_features(secondary_df, df_inst=instalment_data)
+
+        # Check that instalment streak columns are present
+        streak_cols = {
+            "inst_longest_dpd_streak",
+            "inst_months_since_last_dpd",
+            "inst_payment_amt_slope",
+            "inst_payment_ratio_trend",
+            "inst_recent_vs_historical_dpd",
+        }
+        for col in streak_cols:
+            assert col in result.columns, f"Missing column: {col}"
+
+        # Check that original columns are still present
+        assert "inst_cnt" in result.columns
+        assert "inst_late_cnt" in result.columns
+
+    def test_engineer_secondary_features_backward_compatible(self):
+        """engineer_secondary_features() works without df_inst (backward compatible)."""
+        secondary_df = pd.DataFrame({
+            "SK_ID_CURR": [1, 2, 3],
+            "inst_cnt": [5, 3, 4],
+            "inst_late_cnt": [2, 0, 1],
+            "prev_cnt": [1, 2, 1],
+            "prev_approved_cnt": [1, 2, 0],
+            "AMT_INCOME_TOTAL": [100_000, 80_000, 120_000],
+        }).set_index("SK_ID_CURR")
+
+        # Call without df_inst (None by default)
+        result = engineer_secondary_features(secondary_df)
+
+        # Should have original columns plus derived ratios
+        assert "inst_cnt" in result.columns
+        assert "prev_approval_rate" in result.columns
+        # Should NOT have instalment streak features
+        assert "inst_longest_dpd_streak" not in result.columns
+
+
+# ---------------------------------------------------------------------------
+# Tests: Combined Feature Store (Wave 0 — test stubs, RED state)
+# ---------------------------------------------------------------------------
+
+
+class TestCombinedStore:
+    """Test stubs for combined feature store construction.
+
+    These tests define expected behavior for:
+    - Combined store shape (307,511 rows, >= 65 columns)
+    - NaN sentinel handling (-999 for all missing)
+    - EXT_SOURCE_3_MISSING_FLAG presence
+    - Row alignment with y_train
+    """
+
+    def test_combined_store_shape(self):
+        """Verify combined store has correct shape.
+
+        Arrange: Combined feature store (raw + DFS + imputed)
+        Act: Load combined parquet
+        Assert: Shape == (307,511 rows, >= 65 columns)
+        """
+        pytest.skip("RED state — implement in wave 1")
+
+    def test_combined_store_no_nan(self):
+        """Verify that no NaN values remain in combined store.
+
+        Arrange: Combined feature store with imputation applied
+        Act: Check for NaN in all columns
+        Assert: All NaN replaced with -999 sentinel
+        """
+        pytest.skip("RED state — implement in wave 1")
+
+    def test_combined_store_includes_missing_flag(self):
+        """Verify that EXT_SOURCE_3_MISSING_FLAG column exists.
+
+        Arrange: Combined feature store
+        Act: Check for EXT_SOURCE_3_MISSING_FLAG column
+        Assert: Column exists; values are binary (0/1)
+        """
+        pytest.skip("RED state — implement in wave 1")
+
+    def test_combined_store_matches_y_train_alignment(self):
+        """Verify that combined store rows align with y_train.
+
+        Arrange: Combined store and y_train loaded
+        Act: Compare row count and index
+        Assert: len(combined_store) == len(y_train) == 307,511
+        """
+        pytest.skip("RED state — implement in wave 1")

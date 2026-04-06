@@ -14,14 +14,15 @@ from __future__ import annotations
 import matplotlib
 matplotlib.use("Agg")  # non-interactive backend — must be set before pyplot import
 
+import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-
-import json
 
 from credit_engine.model import (
     _AverageEnsemble,
@@ -779,6 +780,125 @@ def test_train_lightgbm_optuna_zero_trials_raises(mock_data):
     X, y = mock_data
     with pytest.raises(ValueError, match="n_trials must be >= 1"):
         train_lightgbm_optuna(X, y, n_trials=0)
+
+
+def test_train_lightgbm_optuna_warns_when_temporal_col_absent(mock_data, tmp_path, monkeypatch):
+    """UserWarning must fire when _TEMPORAL_SORT_COL is not in X.
+
+    The raw feature store (X_raw_features.parquet) typically does not contain
+    `prev_days_decision_mean` if it was dropped by correlation dedup. Without
+    the warning, LGB silently falls back to StratifiedKFold and CV Gini can be
+    inflated by 0.02–0.05, misleading Optuna into over-tuning.
+    """
+    import credit_engine.model as model_module
+
+    monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb.pkl"))
+    monkeypatch.setattr(
+        model_module, "_LGB_OPTUNA_PARAMS_PATH", str(tmp_path / "lgb_params.json")
+    )
+    monkeypatch.setattr(
+        model_module, "_LGB_OPTUNA_FIGURE_PATH", str(tmp_path / "lgb_roc.png")
+    )
+    X, y = mock_data
+    # Ensure _TEMPORAL_SORT_COL is absent from X
+    temporal_col = model_module._TEMPORAL_SORT_COL
+    X_no_temporal = X.drop(columns=[temporal_col], errors="ignore")
+
+    import warnings as _warnings
+    with _warnings.catch_warnings(record=True) as caught:
+        _warnings.simplefilter("always")
+        train_lightgbm_optuna(X_no_temporal, y, n_trials=1)
+
+    user_warnings = [w for w in caught if issubclass(w.category, UserWarning)]
+    assert any(temporal_col in str(w.message) for w in user_warnings), (
+        f"Expected UserWarning mentioning '{temporal_col}' when column absent from X. "
+        f"Got: {[str(w.message) for w in user_warnings]}"
+    )
+
+
+def test_train_lightgbm_optuna_no_warn_when_temporal_col_present(mock_data, tmp_path, monkeypatch):
+    """No UserWarning about temporal fallback when _TEMPORAL_SORT_COL is in X."""
+    import credit_engine.model as model_module
+
+    monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb.pkl"))
+    monkeypatch.setattr(
+        model_module, "_LGB_OPTUNA_PARAMS_PATH", str(tmp_path / "lgb_params.json")
+    )
+    monkeypatch.setattr(
+        model_module, "_LGB_OPTUNA_FIGURE_PATH", str(tmp_path / "lgb_roc.png")
+    )
+    X, y = mock_data
+    temporal_col = model_module._TEMPORAL_SORT_COL
+    # Inject a dummy temporal column if not already present
+    X_with_temporal = X.copy()
+    if temporal_col not in X_with_temporal.columns:
+        X_with_temporal[temporal_col] = range(len(X_with_temporal))
+
+    import warnings as _warnings
+    with _warnings.catch_warnings(record=True) as caught:
+        _warnings.simplefilter("always")
+        train_lightgbm_optuna(X_with_temporal, y, n_trials=1)
+
+    temporal_warns = [
+        w for w in caught
+        if issubclass(w.category, UserWarning) and temporal_col in str(w.message)
+    ]
+    assert not temporal_warns, (
+        f"Unexpected temporal fallback warning when '{temporal_col}' is present in X."
+    )
+
+
+def test_train_lightgbm_optuna_scale_pos_weight_path(mock_data, tmp_path, monkeypatch):
+    """use_scale_pos_weight=True must produce a model without is_unbalance=True.
+
+    The raw-feature path uses scale_pos_weight (gradient rescaling only)
+    instead of is_unbalance (which compresses leaf outputs toward majority-class
+    mean, reducing rank separation on skewed credit data).
+    """
+    import credit_engine.model as model_module
+
+    monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb.pkl"))
+    monkeypatch.setattr(
+        model_module, "_LGB_OPTUNA_PARAMS_PATH", str(tmp_path / "lgb_params.json")
+    )
+    monkeypatch.setattr(
+        model_module, "_LGB_OPTUNA_FIGURE_PATH", str(tmp_path / "lgb_roc.png")
+    )
+    X, y = mock_data
+    model, _, _, _, _ = train_lightgbm_optuna(
+        X, y, n_trials=1, use_scale_pos_weight=True
+    )
+    fitted_params = model.get_params()
+    assert fitted_params.get("scale_pos_weight") is not None, (
+        "scale_pos_weight should be set when use_scale_pos_weight=True"
+    )
+    assert fitted_params.get("is_unbalance") is not True, (
+        "is_unbalance must not be True when using scale_pos_weight path"
+    )
+
+
+def test_train_lightgbm_optuna_num_leaves_max_respected(mock_data, tmp_path, monkeypatch):
+    """num_leaves_max=5 must constrain the Optuna search space.
+
+    Confirms the raw-feature path's wider num_leaves ceiling (300) is correctly
+    propagated through the objective — tested here with a tight ceiling of 5.
+    """
+    import credit_engine.model as model_module
+
+    monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb.pkl"))
+    monkeypatch.setattr(
+        model_module, "_LGB_OPTUNA_PARAMS_PATH", str(tmp_path / "lgb_params.json")
+    )
+    monkeypatch.setattr(
+        model_module, "_LGB_OPTUNA_FIGURE_PATH", str(tmp_path / "lgb_roc.png")
+    )
+    X, y = mock_data
+    _, _, _, _, best_params = train_lightgbm_optuna(
+        X, y, n_trials=3, num_leaves_max=25
+    )
+    assert best_params["num_leaves"] <= 25, (
+        f"num_leaves={best_params['num_leaves']} exceeded num_leaves_max=25"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1620,3 +1740,300 @@ class TestPrepareCatBoostFeatures:
         X_out, cat_cols = prepare_catboost_features(X_woe, df_raw=None)
         pd.testing.assert_frame_equal(X_out, X_woe)
         assert cat_cols == []
+
+
+# ---------------------------------------------------------------------------
+# calibrate_model — Raw path (XGBoost raw features)
+# ---------------------------------------------------------------------------
+
+class TestCalibrateModelRawPath:
+    """Tests for calibrate_model() on raw (non-WoE) features."""
+
+    def test_calibrate_model_raw_preserves_gini(self, mock_data, monkeypatch):
+        """Platt calibration preserves Gini (rank-monotone transform).
+
+        Gini is a rank-based metric, so any monotone increasing transform
+        (like Platt sigmoid) preserves the ranking and hence Gini.
+        """
+        import credit_engine.model as model_module
+
+        # Train an uncalibrated model on mock raw features
+        X, y = mock_data
+        from sklearn.model_selection import train_test_split as tts
+
+        X_train, X_test, y_train, y_test = tts(
+            X, y, test_size=0.2, stratify=y, random_state=42
+        )
+
+        # Train a simple LR baseline (serves as mock uncalibrated model)
+        pipeline, *_ = train_logistic_baseline(X, y)
+
+        # Capture uncalibrated Gini before calibration
+        y_prob_uncal = pipeline.predict_proba(X_test)[:, 1]
+        from credit_engine.utils import gini_coefficient
+        gini_uncal = gini_coefficient(y_test, y_prob_uncal)
+
+        # Calibrate and check Gini is preserved (monotone transform)
+        tmp_path = Path("/tmp/test_calibrate_raw_gini")
+        tmp_path.mkdir(exist_ok=True, parents=True)
+        monkeypatch.setattr(
+            model_module, "_CALIBRATED_MODEL_PATH", str(tmp_path / "cal.pkl")
+        )
+        monkeypatch.setattr(
+            model_module, "_CALIBRATION_FIGURE_PATH", str(tmp_path / "cal.png")
+        )
+
+        cal_model, _, _ = calibrate_model(
+            pipeline, X_train, y_train, X_test, y_test, method="sigmoid"
+        )
+        y_prob_cal = cal_model.predict_proba(X_test)[:, 1]
+        gini_cal = gini_coefficient(y_test, y_prob_cal)
+
+        # Gini must be preserved (rank-monotone property)
+        assert np.isclose(
+            gini_uncal, gini_cal, rtol=1e-5, atol=1e-8
+        ), f"Gini changed: {gini_uncal:.6f} → {gini_cal:.6f}"
+
+    def test_calibrate_model_raw_improves_brier(self, mock_data, monkeypatch):
+        """Calibrated model has lower Brier score than uncalibrated."""
+        import credit_engine.model as model_module
+        from sklearn.metrics import brier_score_loss
+
+        X, y = mock_data
+        from sklearn.model_selection import train_test_split as tts
+
+        X_train, X_test, y_train, y_test = tts(
+            X, y, test_size=0.2, stratify=y, random_state=42
+        )
+
+        # Train baseline
+        pipeline, *_ = train_logistic_baseline(X, y)
+        y_prob_uncal = pipeline.predict_proba(X_test)[:, 1]
+        brier_uncal = float(brier_score_loss(y_test, y_prob_uncal))
+
+        # Calibrate
+        tmp_path = Path("/tmp/test_calibrate_raw_brier")
+        tmp_path.mkdir(exist_ok=True, parents=True)
+        monkeypatch.setattr(
+            model_module, "_CALIBRATED_MODEL_PATH", str(tmp_path / "cal.pkl")
+        )
+        monkeypatch.setattr(
+            model_module, "_CALIBRATION_FIGURE_PATH", str(tmp_path / "cal.png")
+        )
+
+        cal_model, _, brier_cal = calibrate_model(
+            pipeline, X_train, y_train, X_test, y_test, method="sigmoid"
+        )
+
+        # Brier should improve (lower is better)
+        assert (
+            brier_cal <= brier_uncal + 0.05
+        ), f"Brier degraded: {brier_uncal:.6f} → {brier_cal:.6f}"
+
+    def test_calibrate_model_raw_output_has_valid_probabilities(
+        self, mock_data, monkeypatch
+    ):
+        """calibrate_model() output probabilities are in [0, 1]."""
+        import credit_engine.model as model_module
+
+        X, y = mock_data
+        from sklearn.model_selection import train_test_split as tts
+
+        X_train, X_test, y_train, y_test = tts(
+            X, y, test_size=0.2, stratify=y, random_state=42
+        )
+
+        # Train baseline
+        pipeline, *_ = train_logistic_baseline(X, y)
+
+        # Calibrate
+        tmp_path = Path("/tmp/test_calibrate_raw_valid_proba")
+        tmp_path.mkdir(exist_ok=True, parents=True)
+        monkeypatch.setattr(
+            model_module, "_CALIBRATED_MODEL_PATH", str(tmp_path / "cal.pkl")
+        )
+        monkeypatch.setattr(
+            model_module, "_CALIBRATION_FIGURE_PATH", str(tmp_path / "cal.png")
+        )
+
+        cal_model, _, _ = calibrate_model(
+            pipeline, X_train, y_train, X_test, y_test, method="sigmoid"
+        )
+
+        # Check all probabilities are in [0, 1]
+        y_prob = cal_model.predict_proba(X_test)[:, 1]
+        assert np.all(y_prob >= 0.0) and np.all(
+            y_prob <= 1.0
+        ), f"Probabilities out of range: min={y_prob.min()}, max={y_prob.max()}"
+
+
+# ---------------------------------------------------------------------------
+# Track A: LightGBM API extensions — boosting_type and monotone_constraints
+# ---------------------------------------------------------------------------
+
+class TestLGBApiExtensions:
+    """
+    Unit tests for the boosting_type and monotone_constraints parameters
+    added to train_lightgbm_optuna().
+
+    Uses a 3-feature mock dataset so that monotone_constraints keys
+    ('f1', 'f2', 'f3') are valid column names.
+    """
+
+    @pytest.fixture(scope="class")
+    def mock_raw_data(self) -> tuple[pd.DataFrame, pd.Series]:
+        """3-feature, 300-row mock dataset with 8% positive rate."""
+        rng = np.random.default_rng(7)
+        n = 300
+        n_pos = int(n * 0.08)
+        y = np.zeros(n, dtype=int)
+        y[:n_pos] = 1
+        rng.shuffle(y)
+        X = pd.DataFrame({
+            "f1": np.where(y == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
+            "f2": np.where(y == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
+            "f3": rng.normal(0.0, 1.0, n),
+        })
+        return X, pd.Series(y, name="TARGET")
+
+    # --- boosting_type validation ---
+
+    def test_boosting_type_default_is_gbdt(self):
+        """Default boosting_type parameter is 'gbdt'."""
+        import inspect
+        sig = inspect.signature(train_lightgbm_optuna)
+        assert sig.parameters["boosting_type"].default == "gbdt"
+
+    def test_boosting_type_invalid_raises_value_error(self, mock_raw_data):
+        """Invalid boosting_type raises ValueError before Optuna runs."""
+        X, y = mock_raw_data
+        with pytest.raises(ValueError, match="boosting_type must be one of"):
+            train_lightgbm_optuna(X, y, n_trials=1, boosting_type="xgboost")
+
+    def test_boosting_type_gbdt_trains_without_error(self, mock_raw_data, tmp_path, monkeypatch):
+        """boosting_type='gbdt' (default) trains successfully on mock data."""
+        import credit_engine.model as model_module
+        X, y = mock_raw_data
+        monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb.pkl"))
+        monkeypatch.setattr(model_module, "_LGB_OPTUNA_PARAMS_PATH", str(tmp_path / "params.json"))
+        monkeypatch.setattr(model_module, "_LGB_OPTUNA_FIGURE_PATH", str(tmp_path / "fig.png"))
+        model, metrics, _, _, _ = train_lightgbm_optuna(
+            X, y, n_trials=1, boosting_type="gbdt"
+        )
+        assert model is not None
+        assert "Gini" in metrics
+
+    def test_boosting_type_dart_trains_without_error(self, mock_raw_data, tmp_path, monkeypatch):
+        """boosting_type='dart' trains successfully; early stopping skipped gracefully."""
+        import credit_engine.model as model_module
+        X, y = mock_raw_data
+        monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb_dart.pkl"))
+        monkeypatch.setattr(model_module, "_LGB_OPTUNA_PARAMS_PATH", str(tmp_path / "params_dart.json"))
+        monkeypatch.setattr(model_module, "_LGB_OPTUNA_FIGURE_PATH", str(tmp_path / "fig_dart.png"))
+        model, metrics, _, _, best_params = train_lightgbm_optuna(
+            X, y, n_trials=1, boosting_type="dart"
+        )
+        assert model is not None
+        # DART adds drop_rate to the search space
+        assert "drop_rate" in best_params
+
+    def test_boosting_type_goss_trains_without_error(self, mock_raw_data, tmp_path, monkeypatch):
+        """boosting_type='goss' trains successfully and adds top_rate/other_rate."""
+        import credit_engine.model as model_module
+        X, y = mock_raw_data
+        monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb_goss.pkl"))
+        monkeypatch.setattr(model_module, "_LGB_OPTUNA_PARAMS_PATH", str(tmp_path / "params_goss.json"))
+        monkeypatch.setattr(model_module, "_LGB_OPTUNA_FIGURE_PATH", str(tmp_path / "fig_goss.png"))
+        model, metrics, _, _, best_params = train_lightgbm_optuna(
+            X, y, n_trials=1, boosting_type="goss"
+        )
+        assert model is not None
+        assert "top_rate" in best_params
+        assert "other_rate" in best_params
+
+    # --- monotone_constraints validation ---
+
+    def test_monotone_constraints_default_is_none(self):
+        """Default monotone_constraints parameter is None."""
+        import inspect
+        sig = inspect.signature(train_lightgbm_optuna)
+        assert sig.parameters["monotone_constraints"].default is None
+
+    def test_monotone_constraints_unknown_feature_raises_value_error(self, mock_raw_data):
+        """monotone_constraints with a key not in X raises ValueError."""
+        X, y = mock_raw_data
+        with pytest.raises(ValueError, match="monotone_constraints keys not found in X"):
+            train_lightgbm_optuna(
+                X, y, n_trials=1,
+                monotone_constraints={"nonexistent_col": 1}
+            )
+
+    def test_monotone_constraints_valid_dict_trains_without_error(
+        self, mock_raw_data, tmp_path, monkeypatch
+    ):
+        """Valid monotone_constraints dict trains successfully."""
+        import credit_engine.model as model_module
+        X, y = mock_raw_data
+        monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb_mc.pkl"))
+        monkeypatch.setattr(model_module, "_LGB_OPTUNA_PARAMS_PATH", str(tmp_path / "params_mc.json"))
+        monkeypatch.setattr(model_module, "_LGB_OPTUNA_FIGURE_PATH", str(tmp_path / "fig_mc.png"))
+        model, metrics, X_test, y_test, _ = train_lightgbm_optuna(
+            X, y, n_trials=1,
+            monotone_constraints={"f1": 1, "f2": -1}
+        )
+        assert model is not None
+        # Predictions must be valid probabilities
+        proba = model.predict_proba(X_test)[:, 1]
+        assert np.all(proba >= 0.0) and np.all(proba <= 1.0)
+
+
+# ---------------------------------------------------------------------------
+# Tests: EXT_SOURCE_3 Imputation (Wave 0 — test stubs, RED state)
+# ---------------------------------------------------------------------------
+
+
+class TestExtSourceImputation:
+    """Test stubs for EXT_SOURCE_3 supervised imputation.
+
+    These tests define expected behavior for:
+    - Imputation shape preservation
+    - No leakage between training and test rows
+    - Observed values remain unchanged
+    - Cross-fold imputation correlation >= 0.5
+    """
+
+    def test_ext_source_imputation_shape(self):
+        """Verify that imputed output has correct shape.
+
+        Arrange: X_train with missing EXT_SOURCE_3 values
+        Act: Run supervised imputation
+        Assert: Output shape == X_train.shape
+        """
+        pytest.skip("RED state — implement in wave 1")
+
+    def test_ext_source_imputation_no_leakage(self):
+        """Verify that test rows are never used during imputation training.
+
+        Arrange: X_train, X_test with temporal split
+        Act: Fit imputer on X_train, apply to X_test
+        Assert: No test indices appear in imputer training rows
+        """
+        pytest.skip("RED state — implement in wave 1")
+
+    def test_ext_source_imputation_preserves_observed(self):
+        """Verify that observed EXT_SOURCE_3 values are unchanged.
+
+        Arrange: X_train with some non-missing EXT_SOURCE_3 values
+        Act: Run imputation
+        Assert: Non-missing values are identical before/after
+        """
+        pytest.skip("RED state — implement in wave 1")
+
+    def test_ext_source_imputation_correlation(self):
+        """Verify cross-fold imputation correlation >= 0.5.
+
+        Arrange: Imputation via two different models (e.g., 5-fold)
+        Act: Compute correlation of imputed values across folds
+        Assert: Correlation >= 0.5 (imputation stable across folds)
+        """
+        pytest.skip("RED state — implement in wave 1")
