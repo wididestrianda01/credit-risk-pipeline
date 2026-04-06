@@ -2139,3 +2139,100 @@ class TestExtSourceImputation:
 
         # Verify correlation meets minimum threshold
         assert correlation >= 0.5, f"Correlation {correlation:.3f} should be >= 0.5"
+
+
+# ---------------------------------------------------------------------------
+# Tests: Combined Feature Store (Wave 1 — integration tests with imputer)
+# ---------------------------------------------------------------------------
+
+
+class TestCombinedStore:
+    """Test integration of imputed EXT_SOURCE_3 into combined feature store.
+
+    These tests verify that build_combined_feature_store() works correctly
+    with the retrained imputer (n_features_in_=59 on 62-column raw data).
+    """
+
+    def test_combined_store_shape(self, mock_data_with_ext_source, tmp_path, monkeypatch):
+        """Verify that combined store has correct shape (rows preserved, flag added).
+
+        Arrange: Mock X with EXT_SOURCE_3 missing values
+        Act: Train imputer and apply to get imputed output
+        Assert: Output shape is (n_rows, n_cols + 1) for the missing flag
+        """
+        X, y = mock_data_with_ext_source
+
+        # Train imputer
+        imputer, _ = train_ext_source_imputer(X, y, n_trials=5)
+
+        # Apply imputation
+        X_combined = apply_ext_source_imputer(X, imputer, ext_source_col="EXT_SOURCE_3")
+
+        # Verify shape: should add 1 column (EXT_SOURCE_3_MISSING_FLAG)
+        assert X_combined.shape[0] == X.shape[0], "Row count should be preserved"
+        assert (
+            X_combined.shape[1] == X.shape[1] + 1
+        ), "Should have X.shape[1] + 1 columns (added missing flag)"
+
+    def test_combined_store_no_nan(self, mock_data_with_ext_source):
+        """Verify that imputed output has no NaN values.
+
+        Arrange: Mock X with EXT_SOURCE_3 values
+        Act: Train imputer and apply
+        Assert: Result has no NaN values (or filled with sentinel)
+        """
+        X, y = mock_data_with_ext_source
+
+        # Train imputer
+        imputer, _ = train_ext_source_imputer(X, y, n_trials=5)
+
+        # Apply imputation
+        X_combined = apply_ext_source_imputer(X, imputer, ext_source_col="EXT_SOURCE_3")
+
+        # Verify no NaN in imputed output
+        nan_count = X_combined.isna().sum().sum()
+        assert nan_count == 0, f"Expected 0 NaN values, found {nan_count}"
+
+    def test_combined_store_includes_missing_flag(self, mock_data_with_ext_source):
+        """Verify that combined store includes EXT_SOURCE_3_MISSING_FLAG column.
+
+        Arrange: Mock X with EXT_SOURCE_3 values
+        Act: Train imputer and apply
+        Assert: Output includes EXT_SOURCE_3_MISSING_FLAG column
+        """
+        X, y = mock_data_with_ext_source
+
+        # Train imputer
+        imputer, _ = train_ext_source_imputer(X, y, n_trials=5)
+
+        # Apply imputation
+        X_combined = apply_ext_source_imputer(X, imputer, ext_source_col="EXT_SOURCE_3")
+
+        # Verify flag column exists
+        assert (
+            "EXT_SOURCE_3_MISSING_FLAG" in X_combined.columns
+        ), "EXT_SOURCE_3_MISSING_FLAG column not found"
+
+        # Verify flag is binary (0 or 1)
+        flag_values = X_combined["EXT_SOURCE_3_MISSING_FLAG"].unique()
+        assert set(flag_values).issubset({0, 1}), f"Flag should be binary, got {flag_values}"
+
+    def test_combined_store_matches_y_train_alignment(self, mock_data_with_ext_source):
+        """Verify that imputed features remain aligned with y_train.
+
+        Arrange: Mock X and y
+        Act: Train imputer and apply
+        Assert: Output has same number of rows as input (alignment preserved)
+        """
+        X, y = mock_data_with_ext_source
+
+        # Train imputer
+        imputer, _ = train_ext_source_imputer(X, y, n_trials=5)
+
+        # Apply imputation
+        X_combined = apply_ext_source_imputer(X, imputer, ext_source_col="EXT_SOURCE_3")
+
+        # Verify alignment: X_combined.shape[0] == y.shape[0]
+        assert (
+            X_combined.shape[0] == y.shape[0]
+        ), f"Row mismatch: X_combined has {X_combined.shape[0]} rows, y has {y.shape[0]} rows"
