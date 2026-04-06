@@ -267,18 +267,164 @@ def _engineer_ext_source(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def engineer_instalment_streaks(df_inst: pd.DataFrame) -> pd.DataFrame:
+    """
+    Compute instalment time-series features via vectorised groupby operations.
+
+    Captures payment delinquency streaks, recent deterioration, and payment trends
+    from instalment-level data. Features link to specific time windows (e.g., last
+    6 instalments) and are risk-sensitive (streak length > magnitude).
+
+    Parameters
+    ----------
+    df_inst : pd.DataFrame
+        installments_payments table with columns:
+        SK_ID_CURR, DAYS_INSTALMENT, DAYS_ENTRY_PAYMENT, AMT_INSTALMENT, AMT_PAYMENT
+
+        Notes:
+        - DAYS_INSTALMENT, DAYS_ENTRY_PAYMENT are negative (days before application).
+        - More recent = less negative = higher value.
+        - DPD (Days Past Due) = max(0, DAYS_ENTRY_PAYMENT - DAYS_INSTALMENT).
+
+    Returns
+    -------
+    pd.DataFrame
+        One row per SK_ID_CURR (index='SK_ID_CURR') with columns:
+        - inst_longest_dpd_streak: max consecutive instalments with DPD > 0
+        - inst_months_since_last_dpd: months since most recent DPD; 999 if no DPD
+        - inst_payment_amt_slope: OLS slope of AMT_INSTALMENT over time
+        - inst_payment_ratio_trend: OLS slope of AMT_PAYMENT / AMT_INSTALMENT
+        - inst_recent_vs_historical_dpd: ratio of recent (last 6) to all DPD mean
+
+    All NaN → 0.0 EXCEPT inst_months_since_last_dpd → 999 (far past sentinel).
+    inf → 0.0. One-data-point features (single instalment) fill with 0.0.
+    """
+    # Named constants for readability
+    _MONTHS_PAST_SENTINEL: float = 999.0
+    _MONTHS_CONVERSION: float = 30.0
+    _RECENT_WINDOW: int = 6
+    _EPSILON: float = 1e-6
+
+    # Compute DPD = max(0, DAYS_ENTRY_PAYMENT - DAYS_INSTALMENT)
+    df = df_inst.copy()
+    df["dpd"] = np.maximum(0, df["DAYS_ENTRY_PAYMENT"] - df["DAYS_INSTALMENT"])
+
+    results = {}
+
+    # Group by SK_ID_CURR for vectorised processing
+    for sk_id, group in df.groupby("SK_ID_CURR", sort=False):
+        days_inst = group["DAYS_INSTALMENT"].values
+        dpd_vals = group["dpd"].values
+        amt_inst = group["AMT_INSTALMENT"].values
+        amt_payment = group["AMT_PAYMENT"].values
+
+        # 1. Longest DPD streak: max consecutive instalments with DPD > 0
+        # Use cumsum to identify "run" boundaries: DPD > 0 changes from False to True
+        is_dpd = (dpd_vals > 0).astype(int)
+        # Create run groups: increment counter when is_dpd goes from 0→1
+        run_ids = np.cumsum(np.diff(np.concatenate([[0], is_dpd])) > 0)
+        if len(is_dpd) > 0:
+            # Mask: keep only DPD-positive entries
+            run_ids_masked = np.where(is_dpd, run_ids, -1)
+            # Count consecutive 1s per run, keeping max
+            longest_streak = 0
+            if is_dpd.sum() > 0:
+                unique_runs = np.unique(run_ids_masked[run_ids_masked >= 0])
+                for run_id in unique_runs:
+                    streak_len = (run_ids_masked == run_id).sum()
+                    longest_streak = max(longest_streak, streak_len)
+            results[sk_id] = {
+                "inst_longest_dpd_streak": float(longest_streak),
+            }
+        else:
+            results[sk_id] = {"inst_longest_dpd_streak": 0.0}
+
+        # 2. Months since last DPD
+        # Find most recent instalment (max DAYS_INSTALMENT) where DPD > 0
+        dpd_mask = dpd_vals > 0
+        if dpd_mask.any():
+            last_dpd_idx = np.argmax(days_inst[dpd_mask])
+            last_dpd_day = days_inst[dpd_mask][last_dpd_idx]  # negative value
+            most_recent_day = days_inst.max()  # max (least negative)
+            # months_ago = abs(most_recent - last_dpd) / 30
+            months_ago = abs(most_recent_day - last_dpd_day) / _MONTHS_CONVERSION
+            results[sk_id]["inst_months_since_last_dpd"] = months_ago
+        else:
+            results[sk_id]["inst_months_since_last_dpd"] = _MONTHS_PAST_SENTINEL
+
+        # 3. Payment amount slope: OLS over time (sorted by DAYS_INSTALMENT)
+        # Sort by DAYS_INSTALMENT (chronological order)
+        sort_idx = np.argsort(days_inst)
+        amt_inst_sorted = amt_inst[sort_idx]
+        if len(amt_inst_sorted) > 1:
+            x = np.arange(len(amt_inst_sorted), dtype=float)
+            slope = np.polyfit(x, amt_inst_sorted, 1)[0]
+            results[sk_id]["inst_payment_amt_slope"] = slope
+        else:
+            results[sk_id]["inst_payment_amt_slope"] = 0.0
+
+        # 4. Payment ratio trend: OLS of (AMT_PAYMENT / AMT_INSTALMENT)
+        amt_payment_sorted = amt_payment[sort_idx]
+        ratio_vals = amt_payment_sorted / (amt_inst_sorted + _EPSILON)
+        if len(ratio_vals) > 1:
+            slope = np.polyfit(x, ratio_vals, 1)[0]
+            results[sk_id]["inst_payment_ratio_trend"] = slope
+        else:
+            results[sk_id]["inst_payment_ratio_trend"] = 0.0
+
+        # 5. Recent vs historical DPD: mean(last_6_dpd) / (mean(all_dpd) + eps)
+        # "Last 6" = 6 most recent instalments (highest DAYS_INSTALMENT values)
+        dpd_sorted = dpd_vals[sort_idx]  # Now in chronological order (oldest first)
+        if len(dpd_sorted) > 0:
+            mean_all_dpd = np.mean(dpd_sorted)
+            # Recent = last min(6, len) instalments
+            recent_count = min(_RECENT_WINDOW, len(dpd_sorted))
+            mean_recent_dpd = np.mean(dpd_sorted[-recent_count:])
+            ratio = mean_recent_dpd / (mean_all_dpd + _EPSILON)
+            results[sk_id]["inst_recent_vs_historical_dpd"] = ratio
+        else:
+            results[sk_id]["inst_recent_vs_historical_dpd"] = 0.0
+
+    # Convert to DataFrame indexed by SK_ID_CURR
+    result_df = pd.DataFrame.from_dict(results, orient="index")
+    result_df.index.name = "SK_ID_CURR"
+
+    # Fill inf → 0.0
+    result_df = result_df.replace([np.inf, -np.inf], 0.0)
+
+    # Fill remaining NaN → 0.0 (EXCEPT inst_months_since_last_dpd which uses 999)
+    # inst_months_since_last_dpd should already be populated; apply 0 to others
+    cols_to_fill_zero = [
+        c for c in result_df.columns
+        if c != "inst_months_since_last_dpd"
+    ]
+    result_df[cols_to_fill_zero] = result_df[cols_to_fill_zero].fillna(0.0)
+    result_df["inst_months_since_last_dpd"] = (
+        result_df["inst_months_since_last_dpd"].fillna(_MONTHS_PAST_SENTINEL)
+    )
+
+    return result_df
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
 
-def engineer_secondary_features(df: pd.DataFrame) -> pd.DataFrame:
+def engineer_secondary_features(
+    df: pd.DataFrame,
+    df_inst: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """
     Derive ratio and flag features from secondary table aggregates.
 
     These features are computed from columns already aggregated by
     data_loader.py (bureau_, prev_, pos_, inst_, cc_ prefixes).
     They add interaction/ratio signal that univariate IV filtering misses.
+
+    Optionally accepts raw instalment-level data to compute time-series features
+    (streaks, trends, recent vs historical). If df_inst is provided, the output
+    DataFrame will include the 5 instalment streak features.
 
     All divisions are guarded: if the denominator is 0 the ratio is set to 0.
     Residual inf values are replaced with 0. Remaining NaN is filled with
@@ -287,7 +433,11 @@ def engineer_secondary_features(df: pd.DataFrame) -> pd.DataFrame:
     Parameters
     ----------
     df : pd.DataFrame
-        DataFrame containing secondary table aggregate columns.
+        DataFrame containing secondary table aggregate columns (indexed by SK_ID_CURR).
+    df_inst : pd.DataFrame | None
+        Optional raw instalment_payments table with SK_ID_CURR, DAYS_INSTALMENT,
+        DAYS_ENTRY_PAYMENT, AMT_INSTALMENT, AMT_PAYMENT columns. If provided,
+        engineer_instalment_streaks() is applied and merged onto df.
 
     Returns
     -------
@@ -308,6 +458,13 @@ def engineer_secondary_features(df: pd.DataFrame) -> pd.DataFrame:
     - pos_overdue_flag: (pos_sk_dpd_max > 0).astype(float)
     - prev_credit_income_ratio: prev_amt_credit_mean / max(AMT_INCOME_TOTAL, 1), clipped to [0, 100]
     - debt_service_ratio: AMT_ANNUITY / (AMT_INCOME_TOTAL / 12), monthly debt burden
+
+    If df_inst is provided:
+    - inst_longest_dpd_streak: max consecutive payments with DPD > 0
+    - inst_months_since_last_dpd: months since most recent DPD; 999 if none
+    - inst_payment_amt_slope: OLS slope of instalment amounts over time
+    - inst_payment_ratio_trend: OLS slope of payment ratio over time
+    - inst_recent_vs_historical_dpd: ratio of recent (last 6) to all DPD mean
     """
     out = df.copy()
 
@@ -541,6 +698,16 @@ def engineer_secondary_features(df: pd.DataFrame) -> pd.DataFrame:
         out["debt_service_coverage"] = (
             out["AMT_INCOME_TOTAL"].clip(lower=0.0) / (out["AMT_ANNUITY"].clip(lower=0.0) + 1.0)
         ).replace([np.inf, -np.inf], 0.0).clip(lower=0.0).fillna(_NAN_SENTINEL)
+
+    # Optional: merge instalment time-series features if raw instalment data is provided
+    if df_inst is not None:
+        inst_streaks = engineer_instalment_streaks(df_inst)
+        out = out.join(inst_streaks, how="left")
+        # Fill any missing streak features (e.g., borrowers with no instalments) with 0.0
+        streak_cols = inst_streaks.columns.tolist()
+        for col in streak_cols:
+            if col in out.columns:
+                out[col] = out[col].fillna(0.0)
 
     return out
 
