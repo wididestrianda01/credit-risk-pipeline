@@ -1,0 +1,17 @@
+{
+  "baseline_gini": 0.5549967819235693,
+  "baseline_n_features": 62,
+  "full_gini": 0.5542812136759645,
+  "full_n_features": 68,
+  "gini_delta": -0.0007155682476047698,
+  "commit_threshold": 0.01,
+  "decision": "revert",
+  "new_streak_features": [
+    "inst_longest_dpd_streak",
+    "inst_months_since_last_dpd",
+    "inst_payment_amt_slope",
+    "inst_payment_ratio_trend",
+    "inst_recent_vs_historical_dpd"
+  ],
+  "method": "fixed_params_no_optuna"
+}
