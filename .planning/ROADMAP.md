@@ -7,6 +7,29 @@
 
 ---
 
+## Milestone 0 — Infrastructure (Phase 01)
+
+### Phase 01 — Fix Project-Wide Infrastructure Issues
+
+**Goal:** Eliminate silent production data corruption during test runs, stabilize import alias, and improve test isolation
+
+**Why this exists:** Three infrastructure issues identified during Phase 04.2.1:
+1. `build_feature_store()` and similar functions use relative paths (`"data/processed/X_features.parquet"`), causing test runs on mock data to overwrite production files
+2. conftest.py `sys.modules` aliasing is undocumented and fragile — no defensive checks
+3. Test isolation is incomplete — no mechanism to prevent production data modification
+
+**Requirements:** None (infrastructure phase)
+
+**Plans:**
+3/3 plans created
+- [x] 01-01-PLAN.md — Hardened feature store path safety (absolute paths, _PROJECT_ROOT constant)
+- [x] 01-02-PLAN.md — Test isolation via conftest fixtures (mock_data_dir fixture)
+- [x] 01-03-PLAN.md — Stabilize credit_engine import alias (defensive checks, validation tests)
+
+**Done condition:** All feature store paths are absolute, test suite runs without modifying production directories, import alias is documented and validated
+
+---
+
 ## Milestone 1 — Tree Model Foundation (Phases 04.2.1–04.2.2)
 
 Establish the correct data pipeline for tree models: raw features without WoE encoding.
@@ -208,6 +231,8 @@ Train and optimize all three tree models on the corrected raw+DFS feature store.
 ## Phase Dependencies
 
 ```
+Phase 01 (infrastructure)
+    ↓
 Phase 04.2.1 → Phase 04.2.2 → Phase 04.2.3 → Phase 04.2.4 → Phase 04.2.5 → Phase 04.2.6
                                                                               ↓
                                                                        Phase 04.3
@@ -217,15 +242,13 @@ Phase 04.2.1 → Phase 04.2.2 → Phase 04.2.3 → Phase 04.2.4 → Phase 04.2.5
                                                                        Phase 06
 ```
 
-All phases are strictly sequential — each builds on prior phase outputs.
+Phase 01 (infrastructure) is a prerequisite for all subsequent phases. Phases 04.2.1–04.2.6 are strictly sequential.
 
 ## Progress Summary
 
 | Phase | Status | Target |
 |-------|--------|--------|
-| Phase 1 — Data loading + EDA | ✅ Complete | — |
-| Phase 2 — WoE feature engineering | ✅ Complete | — |
-| Phase 3 — LR baseline + eval utilities | ✅ Complete | Gini ≥ 0.45 |
+| Phase 01 — Infrastructure | 🔄 Planning complete | Test isolation + path safety |
 | Phase 04.2.1 — Fix raw feature store | ✅ Complete | `X_tree_raw.parquet` (307K×211, 0 NaN, 0 WoE) |
 | Phase 04.2.2 — DFS augmentation | 🔲 Not started | `X_tree_dfs.parquet` (307K, >155) |
 | Phase 04.2.3 — XGBoost HPO | 🔲 Not started | Gini > 0.55 |
@@ -237,16 +260,7 @@ All phases are strictly sequential — each builds on prior phase outputs.
 | Phase 05.2 — Streamlit dashboard | 🔲 Not started | E2E flow works |
 | Phase 06 — LaTeX report | 🔲 Not started | PDF compiles |
 
-### Phase 1: fix project-wide infrastructure issues — credit_engine alias, feature store path safety, test isolation
-
-**Goal:** [To be planned]
-**Requirements**: TBD
-**Depends on:** Phase 0
-**Plans:** 0 plans
-
-Plans:
-- [ ] TBD (run /gsd-plan-phase 1 to break down)
-
 ---
-*Roadmap created: 2026-04-07*
-*Plans added: 2026-04-07*
+
+*Roadmap updated: 2026-04-07*
+*Phase 01 planning complete: 3 plans created*

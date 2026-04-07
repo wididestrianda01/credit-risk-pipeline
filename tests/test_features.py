@@ -1783,7 +1783,7 @@ class TestBuildTreeFeatureStore:
         """
         X, y = tree_store_data
         out_path = str(tmp_path / "X_tree_test.parquet")
-        result = build_tree_feature_store(X, y, output_path=out_path)
+        result = build_tree_feature_store(X, y, output_dir=out_path)
 
         assert isinstance(result, tuple), "Result must be a tuple"
         assert len(result) == 2, "Tuple must have exactly 2 elements"
@@ -1805,7 +1805,7 @@ class TestBuildTreeFeatureStore:
         X_nan.loc[1, "medium_var_feature"] = np.nan
 
         out_path = str(tmp_path / "X_tree_nan_test.parquet")
-        X_out, _ = build_tree_feature_store(X_nan, y, output_path=out_path)
+        X_out, _ = build_tree_feature_store(X_nan, y, output_dir=out_path)
 
         nan_count = X_out.isna().sum().sum()
         assert nan_count == 0, f"Found {nan_count} NaN values; all must be -999 sentinel"
@@ -1819,7 +1819,7 @@ class TestBuildTreeFeatureStore:
         """
         X, y = tree_store_data
         out_path = str(tmp_path / "X_tree_woe_test.parquet")
-        X_out, cols = build_tree_feature_store(X, y, output_path=out_path)
+        X_out, cols = build_tree_feature_store(X, y, output_dir=out_path)
 
         woe_cols = [c for c in X_out.columns if "_woe" in c]
         assert len(woe_cols) == 0, f"WoE columns must be absent; found: {woe_cols}"
@@ -1833,7 +1833,7 @@ class TestBuildTreeFeatureStore:
         """
         X, y = tree_store_data
         out_path = str(tmp_path / "X_tree_dtype_test.parquet")
-        X_out, _ = build_tree_feature_store(X, y, output_path=out_path)
+        X_out, _ = build_tree_feature_store(X, y, output_dir=out_path)
 
         non_numeric = X_out.select_dtypes(exclude=[np.number]).columns.tolist()
         assert len(non_numeric) == 0, f"Non-numeric columns found: {non_numeric}"
@@ -1849,7 +1849,7 @@ class TestBuildTreeFeatureStore:
         assert "constant_feature" in X.columns, "Fixture must include constant_feature"
 
         out_path = str(tmp_path / "X_tree_const_test.parquet")
-        X_out, cols = build_tree_feature_store(X, y, output_path=out_path)
+        X_out, cols = build_tree_feature_store(X, y, output_dir=out_path)
 
         assert "constant_feature" not in X_out.columns, (
             "Constant column must be removed by variance filter"
@@ -1865,7 +1865,7 @@ class TestBuildTreeFeatureStore:
         """
         X, y = tree_store_data
         out_path = str(tmp_path / "X_tree_var_test.parquet")
-        X_out, cols = build_tree_feature_store(X, y, output_path=out_path)
+        X_out, cols = build_tree_feature_store(X, y, output_dir=out_path)
 
         assert X_out.shape[1] >= 1, "At least 1 column must survive variance filter"
         assert "high_var_feature" in X_out.columns, (
@@ -1881,7 +1881,7 @@ class TestBuildTreeFeatureStore:
         """
         X, y = tree_store_data
         out_path = str(tmp_path / "X_tree_shape_test.parquet")
-        X_out, _ = build_tree_feature_store(X, y, output_path=out_path)
+        X_out, _ = build_tree_feature_store(X, y, output_dir=out_path)
 
         assert X_out.shape[0] == len(X), (
             f"Row count must match input: expected {len(X)}, got {X_out.shape[0]}"
@@ -1903,7 +1903,7 @@ class TestBuildTreeFeatureStore:
         # Patch open() only for the pkl write within the function scope via monkeypatch
         # Simpler: call function, then check that the column list file was written
         # We accept the real pkl write to models/ and verify the returned list
-        X_out, cols = build_tree_feature_store(X, y, output_path=out_path)
+        X_out, cols = build_tree_feature_store(X, y, output_dir=out_path)
 
         # The column list returned must be non-empty and match the output columns
         assert cols == list(X_out.columns), (
@@ -1923,7 +1923,7 @@ class TestBuildTreeFeatureStore:
         X_inf.loc[1, "medium_var_feature"] = -np.inf
 
         out_path = str(tmp_path / "X_tree_inf_test.parquet")
-        X_out, _ = build_tree_feature_store(X_inf, y, output_path=out_path)
+        X_out, _ = build_tree_feature_store(X_inf, y, output_dir=out_path)
 
         inf_count = np.isinf(X_out.select_dtypes(include=[np.number])).sum().sum()
         assert inf_count == 0, f"Found {inf_count} inf values; must be replaced with -999"
@@ -1938,7 +1938,7 @@ class TestBuildTreeFeatureStore:
         X, y = tree_store_data
         out_path = str(tmp_path / "X_tree_roundtrip_test.parquet")
 
-        X_built, build_cols = build_tree_feature_store(X, y, output_path=out_path)
+        X_built, build_cols = build_tree_feature_store(X, y, output_dir=out_path)
         X_applied = apply_raw_feature_store(X, build_cols)
 
         assert list(X_applied.columns) == build_cols, (

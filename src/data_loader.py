@@ -45,6 +45,8 @@ from typing import Tuple
 import numpy as np
 import pandas as pd
 
+from src.features import _PROJECT_ROOT
+
 # ---------------------------------------------------------------------------
 # File name constants
 # ---------------------------------------------------------------------------
@@ -254,7 +256,7 @@ def build_training_frame(
 def save_training_frame(
     X: pd.DataFrame,
     y: pd.Series,
-    output_dir: str | Path,
+    output_dir: str | Path | None = None,
 ) -> None:
     """Persist the training matrix and target to parquet.
 
@@ -266,10 +268,15 @@ def save_training_frame(
         Feature matrix returned by ``build_training_frame()``.
     y : pd.Series
         Target series returned by ``build_training_frame()``.
-    output_dir : str or Path
+    output_dir : str | Path, optional
         Directory to write ``X_train.parquet`` and ``y_train.parquet``.
+        If None, defaults to {_PROJECT_ROOT}/data/processed/.
     """
-    output_dir = Path(output_dir)
+    if output_dir is None:
+        output_dir = _PROJECT_ROOT / "data" / "processed"
+    else:
+        output_dir = Path(output_dir)
+
     output_dir.mkdir(parents=True, exist_ok=True)
 
     X.to_parquet(output_dir / "X_train.parquet", index=True)

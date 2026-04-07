@@ -12,12 +12,40 @@ Convention
 - Boolean flags use the suffix `_flag`.
 """
 
+import os
 import pickle
 import warnings
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+
+def _get_project_root() -> Path:
+    """
+    Locate the project root by finding the directory containing 'src/' and 'tests/'.
+
+    Returns
+    -------
+    Path
+        Absolute path to project root. Raises FileNotFoundError if root not found
+        (should never happen in normal execution).
+
+    Notes
+    -----
+    This function is defensive — it walks up from the current module until it finds
+    a directory containing both src/ and tests/ subdirectories. This allows feature
+    engineering functions to work correctly regardless of what working directory
+    the caller is in.
+    """
+    current = Path(__file__).parent  # src/ directory
+    for candidate in [current.parent] + list(current.parent.parents):
+        if (candidate / "src").is_dir() and (candidate / "tests").is_dir():
+            return candidate
+    raise FileNotFoundError("Could not locate project root (expected to find src/ and tests/)")
+
+
+_PROJECT_ROOT = _get_project_root()
 
 # Sentinel value used for DAYS_EMPLOYED when the applicant is unemployed.
 # Home Credit encodes unemployment as 365243 (a large positive number) instead
@@ -1125,6 +1153,7 @@ def build_feature_store(
     y: pd.Series,
     min_iv: float = _IV_WEAK,
     bins: int = 10,
+    output_dir: str | Path | None = None,
 ) -> tuple[pd.DataFrame, dict]:
     """
     Build the final feature store: engineer features, apply IV filter, WoE
@@ -1145,6 +1174,9 @@ def build_feature_store(
         Minimum Information Value threshold for feature selection (default 0.02).
     bins : int, optional
         Number of quantile bins per feature (default 10).
+    output_dir : str | Path, optional
+        Directory to save feature store artifacts. If None, defaults to
+        {_PROJECT_ROOT}/data/processed/. Must exist or will be created.
 
     Returns
     -------
@@ -1163,6 +1195,13 @@ def build_feature_store(
     **Data leakage prevention:** ``woe_mappings`` contains only bin edges
     derived from training data.  Never call ``pd.qcut`` on test data.
     """
+    if output_dir is None:
+        output_dir = _PROJECT_ROOT / "data" / "processed"
+    else:
+        output_dir = Path(output_dir)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     X_eng = engineer_application_features(X) if "AMT_CREDIT" in X.columns else X.copy()
     print(f"Raw features: {X_eng.shape[1]}")
 
@@ -1225,10 +1264,10 @@ def build_feature_store(
             print(f"After correlation dedup (|r| > {_CORR_THRESHOLD}): {X_final.shape[1]}")
 
     # Persist artifacts
-    Path("data/processed").mkdir(parents=True, exist_ok=True)
-    Path("models").mkdir(parents=True, exist_ok=True)
-    X_final.to_parquet("data/processed/X_features.parquet", index=False)
-    with open("models/woe_mappings.pkl", "wb") as fh:
+    X_final.to_parquet(output_dir / "X_features.parquet", index=False)
+    models_dir = _PROJECT_ROOT / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    with open(models_dir / "woe_mappings.pkl", "wb") as fh:
         pickle.dump(woe_mappings, fh)
 
     return X_final, woe_mappings
@@ -1392,7 +1431,7 @@ def select_features_by_iv(
 def build_tree_feature_store(
     X: pd.DataFrame,
     y: pd.Series,
-    output_path: str = "data/processed/X_tree_raw.parquet",
+    output_dir: str | Path | None = None,
 ) -> tuple[pd.DataFrame, list[str]]:
     """
     Build raw (non-WoE) feature store for tree-based models (XGBoost, LightGBM, CatBoost).
@@ -1412,9 +1451,9 @@ def build_tree_feature_store(
     y : pd.Series
         Binary target (1 = default, 0 = non-default), aligned with X.
         Used internally for feature engineering only; not for IV filtering.
-    output_path : str, optional
-        Path to save the raw feature matrix as parquet
-        (default "data/processed/X_tree_raw.parquet").
+    output_dir : str | Path, optional
+        Directory to save the raw feature matrix and feature columns list.
+        If None, defaults to {_PROJECT_ROOT}/data/processed/.
 
     Returns
     -------
@@ -1437,6 +1476,15 @@ def build_tree_feature_store(
 
     **No WoE binning:** All values remain as raw floats (or -999 for missing).
     """
+    if output_dir is None:
+        output_dir = _PROJECT_ROOT / "data" / "processed"
+    else:
+        output_dir = Path(output_dir)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    models_dir = _PROJECT_ROOT / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+
     X_eng = engineer_application_features(X) if "AMT_CREDIT" in X.columns else X.copy()
     X_eng = engineer_secondary_features(X_eng)
 
@@ -1468,11 +1516,9 @@ def build_tree_feature_store(
     # No correlation dedup for tree models — preserve raw signal
 
     # Persist artifacts
-    Path("data/processed").mkdir(parents=True, exist_ok=True)
-    Path("models").mkdir(parents=True, exist_ok=True)
-    X_final.to_parquet(output_path, index=False)
+    X_final.to_parquet(output_dir / "X_tree_raw.parquet", index=False)
     feature_columns = list(X_final.columns)
-    with open("models/raw_feature_columns.pkl", "wb") as fh:
+    with open(models_dir / "raw_feature_columns.pkl", "wb") as fh:
         pickle.dump(feature_columns, fh)
 
     return X_final, feature_columns
@@ -1712,9 +1758,9 @@ def compute_knn_target_encoding(
 
 
 def build_combined_feature_store(
-    output_path: Path | str = "data/processed/X_combined_features.parquet",
-    dfs_eval_path: Path | str = "reports/dfs_eval_results.json",
-    imputer_path: Path | str = "models/ext_source_imputation_lgb.pkl",
+    output_path: Path | str | None = None,
+    dfs_eval_path: Path | str | None = None,
+    imputer_path: Path | str | None = None,
 ) -> pd.DataFrame:
     """
     Build combined feature store by merging raw + imputed EXT_SOURCE_3 + conditional DFS.
@@ -1727,12 +1773,15 @@ def build_combined_feature_store(
 
     Parameters
     ----------
-    output_path : Path | str, default "data/processed/X_combined_features.parquet"
+    output_path : Path | str, optional
         Output path for combined feature store parquet file.
-    dfs_eval_path : Path | str, default "reports/dfs_eval_results.json"
+        If None, defaults to {_PROJECT_ROOT}/data/processed/X_combined_features.parquet.
+    dfs_eval_path : Path | str, optional
         Path to DFS evaluation results JSON.
-    imputer_path : Path | str, default "models/ext_source_imputation_lgb.pkl"
+        If None, defaults to {_PROJECT_ROOT}/reports/dfs_eval_results.json.
+    imputer_path : Path | str, optional
         Path to fitted EXT_SOURCE_3 imputer model.
+        If None, defaults to {_PROJECT_ROOT}/models/ext_source_imputation_lgb.pkl.
 
     Returns
     -------
@@ -1756,12 +1805,23 @@ def build_combined_feature_store(
 
     from credit_engine.model import apply_ext_source_imputer
 
-    output_path = Path(output_path)
-    dfs_eval_path = Path(dfs_eval_path)
-    imputer_path = Path(imputer_path)
+    if output_path is None:
+        output_path = _PROJECT_ROOT / "data" / "processed" / "X_combined_features.parquet"
+    else:
+        output_path = Path(output_path)
+
+    if dfs_eval_path is None:
+        dfs_eval_path = _PROJECT_ROOT / "reports" / "dfs_eval_results.json"
+    else:
+        dfs_eval_path = Path(dfs_eval_path)
+
+    if imputer_path is None:
+        imputer_path = _PROJECT_ROOT / "models" / "ext_source_imputation_lgb.pkl"
+    else:
+        imputer_path = Path(imputer_path)
 
     # Step 1: Load X_raw (307,511 × 62)
-    X_raw = pd.read_parquet("data/processed/X_raw_features.parquet")
+    X_raw = pd.read_parquet(_PROJECT_ROOT / "data" / "processed" / "X_raw_features.parquet")
     assert (
         X_raw.shape[0] == 307511
     ), f"Raw features shape mismatch: expected 307511 rows, got {X_raw.shape[0]}"
@@ -1795,7 +1855,7 @@ def build_combined_feature_store(
     if dfs_decision == "commit":
         from credit_engine.auto_features import apply_featuretools_feature_store
 
-        X_dfs = apply_featuretools_feature_store("data/processed/X_featuretools.parquet")
+        X_dfs = apply_featuretools_feature_store(_PROJECT_ROOT / "data" / "processed" / "X_featuretools.parquet")
         # Ensure index alignment
         assert (
             X_dfs.shape[0] == 307511
