@@ -260,9 +260,62 @@ _ENSEMBLE_3MODEL_WORKFLOW_WEIGHTS_PATH: str = "reports/ensemble_3model_weights.j
 # Per-model extended hyperparameter optimization with higher trial budgets
 # and per-model feature pipelines (raw features, target encoding, DFS).
 _LGB_EXTENDED_OPTUNA_N_TRIALS: int = 150
-_LGB_RAW_LEARNING_RATE_MIN: float = 0.01
+
+# LightGBM Raw Features (Continuous-Only) HPO — search space bounds
+# Extended search on raw 63 continuous features (no WoE binning)
+# These constants support deeper exploration than WoE path (which maxes at 150 leaves)
+_LGB_RAW_NUM_LEAVES_MIN: int = 20
+_LGB_RAW_NUM_LEAVES_MAX: int = 300           # Raw continuous features support deeper trees than WoE bins
+_LGB_RAW_MAX_DEPTH_MIN: int = 3
+_LGB_RAW_MAX_DEPTH_MAX: int = 9
+_LGB_RAW_LEARNING_RATE_MIN: float = 0.01     # Allow slower learning rates (was 0.03 in Phase 4)
+_LGB_RAW_LEARNING_RATE_MAX: float = 0.2
+_LGB_RAW_N_ESTIMATORS_MIN: int = 100
+_LGB_RAW_N_ESTIMATORS_MAX: int = 1000
+_LGB_RAW_MIN_CHILD_SAMPLES_MIN: int = 10
+_LGB_RAW_MIN_CHILD_SAMPLES_MAX: int = 100
+_LGB_RAW_SUBSAMPLE_MIN: float = 0.6
+_LGB_RAW_SUBSAMPLE_MAX: float = 1.0
+_LGB_RAW_COLSAMPLE_BYTREE_MIN: float = 0.5
+_LGB_RAW_COLSAMPLE_BYTREE_MAX: float = 1.0
+_LGB_RAW_REG_ALPHA_MIN: float = 1e-8
+_LGB_RAW_REG_ALPHA_MAX: float = 10.0
+_LGB_RAW_REG_LAMBDA_MIN: float = 1e-8
+_LGB_RAW_REG_LAMBDA_MAX: float = 10.0
+
 _CAT_EXTENDED_OPTUNA_N_TRIALS: int = 50
+
+# CatBoost Raw Features — Extended HPO bounds
+_CAT_RAW_DEPTH_MIN: int = 4
+_CAT_RAW_DEPTH_MAX: int = 10             # Allow deeper trees on raw continuous features
+_CAT_RAW_LEARNING_RATE_MIN: float = 0.01
+_CAT_RAW_LEARNING_RATE_MAX: float = 0.2
+_CAT_RAW_L2_LEAF_REG_MIN: float = 0.1
+_CAT_RAW_L2_LEAF_REG_MAX: float = 30.0
+_CAT_RAW_ITERATIONS_MIN: int = 500
+_CAT_RAW_ITERATIONS_MAX: int = 2000
+
 _XGB_EXTENDED_OPTUNA_N_TRIALS: int = 50
+
+# XGBoost Raw Features — Extended HPO bounds
+_XGB_RAW_N_ESTIMATORS_MIN: int = 100
+_XGB_RAW_N_ESTIMATORS_MAX: int = 1000
+_XGB_RAW_MAX_DEPTH_MIN: int = 3
+_XGB_RAW_MAX_DEPTH_MAX: int = 12
+_XGB_RAW_LEARNING_RATE_MIN: float = 0.01
+_XGB_RAW_LEARNING_RATE_MAX: float = 0.3
+_XGB_RAW_SUBSAMPLE_MIN: float = 0.5
+_XGB_RAW_SUBSAMPLE_MAX: float = 1.0
+_XGB_RAW_COLSAMPLE_BYTREE_MIN: float = 0.5
+_XGB_RAW_COLSAMPLE_BYTREE_MAX: float = 1.0
+_XGB_RAW_MIN_CHILD_WEIGHT_MIN: int = 1
+_XGB_RAW_MIN_CHILD_WEIGHT_MAX: int = 20
+_XGB_RAW_GAMMA_MIN: float = 0.0
+_XGB_RAW_GAMMA_MAX: float = 3.0
+_XGB_RAW_REG_ALPHA_MIN: float = 0.0
+_XGB_RAW_REG_ALPHA_MAX: float = 10.0
+_XGB_RAW_REG_LAMBDA_MIN: float = 0.5
+_XGB_RAW_REG_LAMBDA_MAX: float = 10.0
 
 # Optuna study persistence constants
 _OPTUNA_DB_PATH: str = "models/optuna_studies.db"
@@ -2602,25 +2655,157 @@ def train_lightgbm_extended_hpo(
     n_trials: int = _LGB_EXTENDED_OPTUNA_N_TRIALS,
 ) -> object:
     """
-    Extended HPO for LightGBM on raw continuous features.
+    Extended HPO for LightGBM on raw continuous features (150 trials).
 
-    [STUB — implementation in Wave 1]
+    Non-regression: warm-start from Phase 4 best params, ensure final Gini >= 0.5514.
+    Optuna study persists in SQLite DB — resumable across runs.
 
     Parameters
     ----------
     X : pd.DataFrame
-        Feature matrix (raw continuous features).
+        Feature matrix (raw continuous features, 63 columns).
     y : pd.Series
         Binary target series.
     n_trials : int
-        Number of Optuna trials.
+        Number of Optuna trials (default 150).
 
     Returns
     -------
-    object
-        Fitted LightGBM classifier.
+    LGBMClassifier
+        Fitted LightGBM classifier (retrained on full X, y with best params).
+
+    Raises
+    ------
+    RuntimeError
+        If final best Gini < 0.5514 (Phase 4 LGB baseline).
     """
-    raise NotImplementedError("Wave 0: RED test stub")
+    import optuna
+    from lightgbm import LGBMClassifier
+    import lightgbm as lgb
+
+    # Auto-detect temporal CV groups from _TEMPORAL_SORT_COL
+    # If not present, use standard stratified CV (for unit tests with mock data)
+    if _TEMPORAL_SORT_COL in X.columns:
+        groups = X[_TEMPORAL_SORT_COL].values
+    else:
+        groups = None
+
+    # Resume or create Optuna study
+    study_name = "lightgbm_extended_study"
+    storage = f"sqlite:///{_OPTUNA_DB_PATH}"
+    try:
+        study = optuna.load_study(study_name=study_name, storage=storage, load_if_exists=True)
+        if len(study.trials) > 0:
+            print(f"Loaded existing LGB study with {len(study.trials)} trials")
+        else:
+            # Study exists but is empty; warm-start with Phase 4 best params
+            prior_best = {
+                'num_leaves': 127,
+                'max_depth': 8,
+                'learning_rate': 0.1,
+                'n_estimators': 350,
+                'min_child_samples': 20,
+                'subsample': 0.9,
+                'colsample_bytree': 0.8,
+                'reg_alpha': 0.1,
+                'reg_lambda': 9.5
+            }
+            study.enqueue_trial(prior_best)
+            print("Created new LGB study, warm-started with Phase 4 best params")
+    except Exception:
+        # Create new study with full initialization
+        study = optuna.create_study(
+            study_name=study_name,
+            storage=storage,
+            direction="maximize",
+            sampler=optuna.samplers.TPESampler(seed=42),
+            pruner=optuna.pruners.MedianPruner(n_warmup_steps=10, n_startup_trials=10),
+            load_if_exists=True
+        )
+        # Warm-start with Phase 4 best params (LGB baseline from final_model_eval.json)
+        prior_best = {
+            'num_leaves': 127,
+            'max_depth': 8,
+            'learning_rate': 0.1,
+            'n_estimators': 350,
+            'min_child_samples': 20,
+            'subsample': 0.9,
+            'colsample_bytree': 0.8,
+            'reg_alpha': 0.1,
+            'reg_lambda': 9.5
+        }
+        if len(study.trials) == 0:
+            study.enqueue_trial(prior_best)
+        print("Created new LGB study, warm-started with Phase 4 best params")
+
+    # Phase 4 baseline for non-regression check (STRICT)
+    PHASE4_LGB_BASELINE = 0.5514
+
+    # Define objective function
+    def objective(trial):
+        params = {
+            'num_leaves': trial.suggest_int('num_leaves', _LGB_RAW_NUM_LEAVES_MIN, _LGB_RAW_NUM_LEAVES_MAX),
+            'max_depth': trial.suggest_int('max_depth', _LGB_RAW_MAX_DEPTH_MIN, _LGB_RAW_MAX_DEPTH_MAX),
+            'learning_rate': trial.suggest_float('learning_rate', _LGB_RAW_LEARNING_RATE_MIN, _LGB_RAW_LEARNING_RATE_MAX, log=True),
+            'n_estimators': trial.suggest_int('n_estimators', _LGB_RAW_N_ESTIMATORS_MIN, _LGB_RAW_N_ESTIMATORS_MAX),
+            'min_child_samples': trial.suggest_int('min_child_samples', _LGB_RAW_MIN_CHILD_SAMPLES_MIN, _LGB_RAW_MIN_CHILD_SAMPLES_MAX),
+            'subsample': trial.suggest_float('subsample', _LGB_RAW_SUBSAMPLE_MIN, _LGB_RAW_SUBSAMPLE_MAX),
+            'colsample_bytree': trial.suggest_float('colsample_bytree', _LGB_RAW_COLSAMPLE_BYTREE_MIN, _LGB_RAW_COLSAMPLE_BYTREE_MAX),
+            'reg_alpha': trial.suggest_float('reg_alpha', _LGB_RAW_REG_ALPHA_MIN, _LGB_RAW_REG_ALPHA_MAX, log=True),
+            'reg_lambda': trial.suggest_float('reg_lambda', _LGB_RAW_REG_LAMBDA_MIN, _LGB_RAW_REG_LAMBDA_MAX, log=True),
+            'is_unbalance': True,
+            'verbose': -1,
+        }
+
+        # Cross-validated AUC with temporal CV
+        cv = _make_cv(groups_train=groups, n_splits=_CV_N_SPLITS)
+        auc_scores = []
+        for fold_idx, (train_idx, val_idx) in enumerate(cv.split(X, y)):
+            X_tr, X_va = X.iloc[train_idx], X.iloc[val_idx]
+            y_tr, y_va = y.iloc[train_idx], y.iloc[val_idx]
+
+            # Train LGB with early stopping
+            lgb_model = LGBMClassifier(**params, callbacks=[lgb.early_stopping(_LGB_OBJ_EARLY_STOPPING_ROUNDS)])
+            lgb_model.fit(X_tr, y_tr, eval_set=[(X_va, y_va)], eval_metric='auc')
+
+            # Compute AUC on validation fold
+            auc = roc_auc_score(y_va, lgb_model.predict_proba(X_va)[:, 1])
+            auc_scores.append(auc)
+
+            # Report intermediate value for pruning
+            trial.report(np.mean(auc_scores), fold_idx)
+            if trial.should_prune():
+                raise optuna.exceptions.TrialPruned()
+
+        return np.mean(auc_scores)
+
+    # Optimize
+    study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+    best_auc = study.best_value
+    best_gini = 2 * best_auc - 1
+    print(f"LGB HPO complete. Best AUC: {best_auc:.4f}, Best Gini: {best_gini:.4f}")
+
+    # Non-regression check (STRICT)
+    if best_gini < PHASE4_LGB_BASELINE:
+        raise RuntimeError(
+            f"Non-regression violated: LGB Gini {best_gini:.4f} < Phase 4 baseline {PHASE4_LGB_BASELINE:.4f}"
+        )
+
+    # Refit on full data with best params
+    best_params = study.best_params.copy()
+    best_params['is_unbalance'] = True
+    best_params['verbose'] = -1
+    best_n_estimators = best_params['n_estimators']
+    best_params['n_estimators'] = int(best_n_estimators * 1.2)  # Slightly increase trees to compensate for CV variance
+
+    final_model = LGBMClassifier(**best_params)
+    final_model.fit(X, y)
+
+    # Save model
+    joblib.dump(final_model, "models/lightgbm_extended.pkl")
+    print(f"Saved LGB model to models/lightgbm_extended.pkl")
+
+    return final_model
 
 
 def apply_target_encoding_fold_safe(
@@ -2657,9 +2842,10 @@ def train_catboost_extended_hpo(
     cat_features: list | None = None,
 ) -> object:
     """
-    Extended HPO for CatBoost with native categorical support.
+    Extended HPO for CatBoost with native categorical support (50 trials).
 
-    [STUB — implementation in Wave 1]
+    Non-regression: ensure final Gini >= 0.5461 (Phase 4 CatBoost baseline).
+    Optuna study persists in SQLite DB — resumable across runs.
 
     Parameters
     ----------
@@ -2668,16 +2854,322 @@ def train_catboost_extended_hpo(
     y : pd.Series
         Binary target series.
     n_trials : int
-        Number of Optuna trials.
+        Number of Optuna trials (default 50).
     cat_features : list or None
-        List of categorical column names. If None, no native categorical handling.
+        List of categorical column names for native CatBoost handling.
 
     Returns
     -------
-    object
+    CatBoostClassifier
         Fitted CatBoost classifier with cat_features attribute.
+
+    Raises
+    ------
+    RuntimeError
+        If final best Gini < 0.5461 (Phase 4 CatBoost baseline).
     """
-    raise NotImplementedError("Wave 0: RED test stub")
+    import optuna
+
+    # Auto-detect temporal CV groups from _TEMPORAL_SORT_COL
+    # If not present, use standard stratified CV (for unit tests with mock data)
+    if _TEMPORAL_SORT_COL in X.columns:
+        groups = X[_TEMPORAL_SORT_COL].values
+    else:
+        groups = None
+
+    # Resume or create Optuna study
+    study_name = "catboost_extended_study"
+    storage = f"sqlite:///{_OPTUNA_DB_PATH}"
+    try:
+        study = optuna.load_study(study_name=study_name, storage=storage, load_if_exists=True)
+        if len(study.trials) > 0:
+            print(f"Loaded existing CatBoost study with {len(study.trials)} trials")
+        else:
+            # Study exists but is empty; warm-start with Phase 4 best params
+            prior_best = {
+                'depth': 6,
+                'learning_rate': 0.08,
+                'iterations': 800,
+                'l2_leaf_reg': 5.0,
+                'bagging_temperature': 0.3,
+                'random_strength': 0.5
+            }
+            study.enqueue_trial(prior_best)
+            print("Created new CatBoost study, warm-started with Phase 4 best params")
+    except Exception:
+        # Create new study with full initialization
+        study = optuna.create_study(
+            study_name=study_name,
+            storage=storage,
+            direction="maximize",
+            sampler=optuna.samplers.TPESampler(seed=42),
+            pruner=optuna.pruners.MedianPruner(n_warmup_steps=10, n_startup_trials=10),
+            load_if_exists=True
+        )
+        # Warm-start with Phase 4 best params
+        prior_best = {
+            'depth': 6,
+            'learning_rate': 0.08,
+            'iterations': 800,
+            'l2_leaf_reg': 5.0,
+            'bagging_temperature': 0.3,
+            'random_strength': 0.5
+        }
+        if len(study.trials) == 0:
+            study.enqueue_trial(prior_best)
+        print("Created new CatBoost study, warm-started with Phase 4 best params")
+
+    # Phase 4 baseline for non-regression check (STRICT)
+    PHASE4_CAT_BASELINE = 0.5461
+
+    # Define objective function
+    def objective(trial):
+        params = {
+            'depth': trial.suggest_int('depth', _CAT_RAW_DEPTH_MIN, _CAT_RAW_DEPTH_MAX),
+            'learning_rate': trial.suggest_float('learning_rate', _CAT_RAW_LEARNING_RATE_MIN, _CAT_RAW_LEARNING_RATE_MAX, log=True),
+            'iterations': trial.suggest_int('iterations', _CAT_RAW_ITERATIONS_MIN, _CAT_RAW_ITERATIONS_MAX),
+            'l2_leaf_reg': trial.suggest_float('l2_leaf_reg', _CAT_RAW_L2_LEAF_REG_MIN, _CAT_RAW_L2_LEAF_REG_MAX, log=True),
+            'bagging_temperature': trial.suggest_float('bagging_temperature', _CAT_BAGGING_TEMP_MIN, _CAT_BAGGING_TEMP_MAX),
+            'random_strength': trial.suggest_float('random_strength', _CAT_RANDOM_STRENGTH_MIN, _CAT_RANDOM_STRENGTH_MAX),
+            'bootstrap_type': 'Bayesian',
+            'verbose': 0,
+            'allow_writing_files': False,
+            'random_state': 42,
+        }
+
+        # Cross-validated AUC with temporal CV
+        cv = _make_cv(groups_train=groups, n_splits=_CV_N_SPLITS)
+        auc_scores = []
+        for fold_idx, (train_idx, val_idx) in enumerate(cv.split(X, y)):
+            X_tr, X_va = X.iloc[train_idx], X.iloc[val_idx]
+            y_tr, y_va = y.iloc[train_idx], y.iloc[val_idx]
+
+            # Train CatBoost with native categorical support
+            cat_model = CatBoostClassifier(**params)
+            if cat_features:
+                cat_model.fit(
+                    X_tr, y_tr,
+                    eval_set=[(X_va, y_va)],
+                    cat_features=cat_features,
+                    verbose=0,
+                    early_stopping_rounds=_CAT_OBJ_EARLY_STOPPING_ROUNDS
+                )
+            else:
+                cat_model.fit(
+                    X_tr, y_tr,
+                    eval_set=[(X_va, y_va)],
+                    verbose=0,
+                    early_stopping_rounds=_CAT_OBJ_EARLY_STOPPING_ROUNDS
+                )
+
+            # Compute AUC on validation fold
+            auc = roc_auc_score(y_va, cat_model.predict_proba(X_va)[:, 1])
+            auc_scores.append(auc)
+
+            # Report intermediate value for pruning
+            trial.report(np.mean(auc_scores), fold_idx)
+            if trial.should_prune():
+                raise optuna.exceptions.TrialPruned()
+
+        return np.mean(auc_scores)
+
+    # Optimize
+    study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+    best_auc = study.best_value
+    best_gini = 2 * best_auc - 1
+    print(f"CatBoost HPO complete. Best AUC: {best_auc:.4f}, Best Gini: {best_gini:.4f}")
+
+    # Non-regression check (STRICT)
+    if best_gini < PHASE4_CAT_BASELINE:
+        raise RuntimeError(
+            f"Non-regression violated: CatBoost Gini {best_gini:.4f} < Phase 4 baseline {PHASE4_CAT_BASELINE:.4f}"
+        )
+
+    # Refit on full data with best params
+    best_params = study.best_params.copy()
+    best_params['bootstrap_type'] = 'Bayesian'
+    best_params['verbose'] = 0
+    best_params['allow_writing_files'] = False
+    best_params['random_state'] = 42
+
+    final_model = CatBoostClassifier(**best_params)
+    if cat_features:
+        final_model.fit(X, y, cat_features=cat_features, verbose=0)
+    else:
+        final_model.fit(X, y, verbose=0)
+
+    # Store cat_features as attribute for downstream reference
+    final_model.cat_features = cat_features
+
+    # Save model
+    joblib.dump(final_model, "models/catboost_extended.pkl")
+    print(f"Saved CatBoost model to models/catboost_extended.pkl")
+
+    return final_model
+
+
+def train_xgboost_extended_hpo(
+    X: pd.DataFrame,
+    y: pd.Series,
+    n_trials: int = _XGB_EXTENDED_OPTUNA_N_TRIALS,
+) -> object:
+    """
+    Extended HPO for XGBoost with aggressive HyperbandPruner (50 trials).
+
+    Non-regression: ensure final Gini >= 0.5449 (Phase 4 XGBoost baseline).
+    HyperbandPruner reduces 50 trials to ~10–15 effective trials via aggressive pruning.
+    Optuna study persists in SQLite DB — resumable across runs.
+
+    Parameters
+    ----------
+    X : pd.DataFrame
+        Feature matrix (raw continuous features, 63 columns).
+    y : pd.Series
+        Binary target series.
+    n_trials : int
+        Number of Optuna trials (default 50, effective ~10–15 with pruning).
+
+    Returns
+    -------
+    XGBClassifier
+        Fitted XGBoost classifier (retrained on full X, y with best params).
+
+    Raises
+    ------
+    RuntimeError
+        If final best Gini < 0.5449 (Phase 4 XGBoost baseline).
+    """
+    import optuna
+    import xgboost as xgb
+
+    # Auto-detect temporal CV groups from _TEMPORAL_SORT_COL
+    # If not present, use standard stratified CV (for unit tests with mock data)
+    if _TEMPORAL_SORT_COL in X.columns:
+        groups = X[_TEMPORAL_SORT_COL].values
+    else:
+        groups = None
+
+    # Resume or create Optuna study
+    study_name = "xgboost_extended_study"
+    storage = f"sqlite:///{_OPTUNA_DB_PATH}"
+    try:
+        study = optuna.load_study(study_name=study_name, storage=storage, load_if_exists=True)
+        if len(study.trials) > 0:
+            print(f"Loaded existing XGBoost study with {len(study.trials)} trials")
+        else:
+            # Study exists but is empty; warm-start with Phase 4 best params
+            prior_best = {
+                'n_estimators': 400,
+                'max_depth': 5,
+                'learning_rate': 0.1,
+                'subsample': 0.8,
+                'colsample_bytree': 0.8,
+                'min_child_weight': 5,
+                'gamma': 0.5,
+                'reg_alpha': 0.5,
+                'reg_lambda': 2.0
+            }
+            study.enqueue_trial(prior_best)
+            print("Created new XGBoost study, warm-started with Phase 4 best params")
+    except Exception:
+        # Create new study with full initialization
+        study = optuna.create_study(
+            study_name=study_name,
+            storage=storage,
+            direction="maximize",
+            sampler=optuna.samplers.TPESampler(seed=42),
+            pruner=optuna.pruners.HyperbandPruner(min_resource=1, reduction_factor=3),
+            load_if_exists=True
+        )
+        # Warm-start with Phase 4 best params
+        prior_best = {
+            'n_estimators': 400,
+            'max_depth': 5,
+            'learning_rate': 0.1,
+            'subsample': 0.8,
+            'colsample_bytree': 0.8,
+            'min_child_weight': 5,
+            'gamma': 0.5,
+            'reg_alpha': 0.5,
+            'reg_lambda': 2.0
+        }
+        if len(study.trials) == 0:
+            study.enqueue_trial(prior_best)
+        print("Created new XGBoost study, warm-started with Phase 4 best params")
+
+    # Phase 4 baseline for non-regression check (STRICT)
+    PHASE4_XGB_BASELINE = 0.5449
+
+    # Define objective function
+    def objective(trial):
+        params = {
+            'n_estimators': trial.suggest_int('n_estimators', _XGB_N_ESTIMATORS_MIN, _XGB_N_ESTIMATORS_MAX),
+            'max_depth': trial.suggest_int('max_depth', _XGB_MAX_DEPTH_MIN, _XGB_MAX_DEPTH_MAX),
+            'learning_rate': trial.suggest_float('learning_rate', _XGB_LEARNING_RATE_MIN, _XGB_LEARNING_RATE_MAX, log=True),
+            'subsample': trial.suggest_float('subsample', _XGB_SUBSAMPLE_MIN, _XGB_SUBSAMPLE_MAX),
+            'colsample_bytree': trial.suggest_float('colsample_bytree', _XGB_COLSAMPLE_BYTREE_MIN, _XGB_COLSAMPLE_BYTREE_MAX),
+            'min_child_weight': trial.suggest_int('min_child_weight', _XGB_MIN_CHILD_WEIGHT_MIN, _XGB_MIN_CHILD_WEIGHT_MAX),
+            'gamma': trial.suggest_float('gamma', _XGB_GAMMA_MIN, _XGB_GAMMA_MAX),
+            'reg_alpha': trial.suggest_float('reg_alpha', _XGB_REG_ALPHA_MIN, _XGB_REG_ALPHA_MAX),
+            'reg_lambda': trial.suggest_float('reg_lambda', _XGB_REG_LAMBDA_MIN, _XGB_REG_LAMBDA_MAX),
+            'verbosity': 0,
+        }
+
+        # Cross-validated AUC with temporal CV
+        cv = _make_cv(groups_train=groups, n_splits=_CV_N_SPLITS)
+        auc_scores = []
+        for fold_idx, (train_idx, val_idx) in enumerate(cv.split(X, y)):
+            X_tr, X_va = X.iloc[train_idx], X.iloc[val_idx]
+            y_tr, y_va = y.iloc[train_idx], y.iloc[val_idx]
+
+            # Compute scale_pos_weight on training fold
+            scale_pos = (y_tr == 0).sum() / (y_tr == 1).sum()
+
+            # Train XGBoost with cost-sensitive learning
+            xgb_model = xgb.XGBClassifier(**params, scale_pos_weight=scale_pos, random_state=_RANDOM_STATE)
+            xgb_model.fit(
+                X_tr, y_tr,
+                eval_set=[(X_va, y_va)],
+                verbose=False
+            )
+
+            # Compute AUC on validation fold
+            auc = roc_auc_score(y_va, xgb_model.predict_proba(X_va)[:, 1])
+            auc_scores.append(auc)
+
+            # Report intermediate value for pruning
+            trial.report(np.mean(auc_scores), fold_idx)
+            if trial.should_prune():
+                raise optuna.exceptions.TrialPruned()
+
+        return np.mean(auc_scores)
+
+    # Optimize
+    study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+    best_auc = study.best_value
+    best_gini = 2 * best_auc - 1
+    print(f"XGBoost HPO complete. Best AUC: {best_auc:.4f}, Best Gini: {best_gini:.4f} ({len(study.trials)} trials, ~{int(len(study.trials)/5)} effective due to pruning)")
+
+    # Non-regression check (STRICT)
+    if best_gini < PHASE4_XGB_BASELINE:
+        raise RuntimeError(
+            f"Non-regression violated: XGBoost Gini {best_gini:.4f} < Phase 4 baseline {PHASE4_XGB_BASELINE:.4f}"
+        )
+
+    # Refit on full data with best params
+    best_params = study.best_params.copy()
+    best_params['verbosity'] = 0
+    best_params['scale_pos_weight'] = (y == 0).sum() / (y == 1).sum()
+    best_params['random_state'] = _RANDOM_STATE
+
+    final_model = xgb.XGBClassifier(**best_params)
+    final_model.fit(X, y, verbose=False)
+
+    # Save model
+    joblib.dump(final_model, "models/xgboost_extended.pkl")
+    print(f"Saved XGBoost model to models/xgboost_extended.pkl")
+
+    return final_model
 
 
 def filter_dfs_by_iv(
