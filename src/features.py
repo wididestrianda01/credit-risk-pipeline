@@ -1389,18 +1389,21 @@ def select_features_by_iv(
 # ---------------------------------------------------------------------------
 
 
-def build_raw_feature_store(
+def build_tree_feature_store(
     X: pd.DataFrame,
     y: pd.Series,
-    min_iv: float = _IV_WEAK,
-    output_path: str = "data/processed/X_raw_features.parquet",
+    output_path: str = "data/processed/X_tree_raw.parquet",
 ) -> tuple[pd.DataFrame, list[str]]:
     """
-    Build raw (non-WoE) feature store for gradient boosting models.
+    Build raw (non-WoE) feature store for tree-based models (XGBoost, LightGBM, CatBoost).
 
-    Applies the same pipeline as build_feature_store (engineering, IV filter,
-    variance filter, correlation dedup) but SKIPS WoE transformation entirely.
-    Raw continuous values are preserved, allowing tree models to find optimal splits.
+    Applies a simple pipeline: raw feature engineering → numeric filtering → variance filtering.
+    Does NOT apply WoE binning or IV filtering. Raw continuous values are preserved,
+    allowing tree models to find optimal splits via gradient descent.
+
+    This differs from build_feature_store (which applies WoE for logistic regression)
+    and from build_raw_feature_store (which applied IV filtering). For trees, we want
+    maximum signal from raw continuous distributions.
 
     Parameters
     ----------
@@ -1408,29 +1411,31 @@ def build_raw_feature_store(
         Raw application DataFrame (joined 7-table frame from load_data).
     y : pd.Series
         Binary target (1 = default, 0 = non-default), aligned with X.
-    min_iv : float, optional
-        Minimum Information Value threshold for feature selection (default 0.02).
+        Used internally for feature engineering only; not for IV filtering.
     output_path : str, optional
         Path to save the raw feature matrix as parquet
-        (default "data/processed/X_raw_features.parquet").
+        (default "data/processed/X_tree_raw.parquet").
 
     Returns
     -------
     X_final : pd.DataFrame
-        Raw (continuous-valued) feature matrix after IV, variance, and
-        correlation filtering. Contains no NaN values (sentinel -999 used).
+        Raw (continuous-valued) feature matrix after variance filtering only.
+        Contains no NaN values (sentinel -999 used). Shape: (307511, N>=100).
     feature_columns : list[str]
         Column names in X_final, to be passed to apply_raw_feature_store.
         Also saved to models/raw_feature_columns.pkl.
 
     Notes
     -----
-    **Data leakage prevention:** IV thresholds are fit only on training data.
-    Never call select_features_by_iv on test data. Use apply_raw_feature_store.
+    **Data leakage prevention:** Feature engineering is fit only on training data.
+    Never call this function on test data. Use apply_raw_feature_store for inference.
 
-    **WoE skipped:** Unlike build_feature_store, this function does NOT apply
-    WoE binning. All values remain as raw floats (or -999 for missing).
-    This is better for gradient boosting which benefits from continuous distributions.
+    **Variance filter only:** Unlike build_feature_store (WoE + IV) and build_raw_feature_store
+    (IV + variance + correlation), this function skips IV and correlation filtering entirely.
+    Trees handle correlated features well and can exploit subtle signal in low-IV features.
+    This preserves the maximum continuous gradient signal.
+
+    **No WoE binning:** All values remain as raw floats (or -999 for missing).
     """
     X_eng = engineer_application_features(X) if "AMT_CREDIT" in X.columns else X.copy()
     X_eng = engineer_secondary_features(X_eng)
@@ -1440,15 +1445,13 @@ def build_raw_feature_store(
     numeric_cols = X_eng.select_dtypes(include=[np.number]).columns.tolist()
     X_numeric = X_eng[numeric_cols].copy()
 
-    # Replace inf/nan sentinel
+    # Replace inf/nan with sentinel
     X_filled = X_numeric.copy()
     X_filled = X_filled.replace([np.inf, -np.inf], np.nan)
     X_filled = X_filled.fillna(_NAN_SENTINEL)
 
-    # IV filter
-    iv_features = select_features_by_iv(X_filled, y, min_iv=min_iv, bins=10)
-    X_iv = X_filled[list(iv_features.keys())].copy()
-    print(f"After IV filter (IV >= {min_iv}): {X_iv.shape[1]}")
+    # Skip IV filter for tree models — preserve all numeric columns with variance
+    X_iv = X_filled.copy()
 
     # Variance filter: drop constant columns then bottom 5% by variance
     variances = X_iv.var()
@@ -1462,31 +1465,7 @@ def build_raw_feature_store(
 
     print(f"After variance filter: {X_final.shape[1]}")
 
-    # Correlation deduplication: for pairs with |r| > 0.90, drop the lower-IV feature.
-    _CORR_THRESHOLD: float = 0.90
-    if X_final.shape[1] > 1:
-        corr_matrix = X_final.corr().abs()
-        upper_tri = corr_matrix.where(
-            np.triu(np.ones(corr_matrix.shape, dtype=bool), k=1)
-        )
-        cols_to_drop: set[str] = set()
-        # Sort pairs by correlation descending so highest-redundancy is handled first
-        high_pairs = (
-            upper_tri.stack()
-            .loc[lambda s: s > _CORR_THRESHOLD]
-            .sort_values(ascending=False)
-        )
-        iv_lookup = iv_features  # dict {feature: iv} from select_features_by_iv
-        for (col_a, col_b), _ in high_pairs.items():
-            if col_a in cols_to_drop or col_b in cols_to_drop:
-                continue
-            # Keep the feature with higher IV; drop the other
-            iv_a = iv_lookup.get(col_a, 0.0)
-            iv_b = iv_lookup.get(col_b, 0.0)
-            cols_to_drop.add(col_b if iv_a >= iv_b else col_a)
-        if cols_to_drop:
-            X_final = X_final.drop(columns=list(cols_to_drop))
-            print(f"After correlation dedup (|r| > {_CORR_THRESHOLD}): {X_final.shape[1]}")
+    # No correlation dedup for tree models — preserve raw signal
 
     # Persist artifacts
     Path("data/processed").mkdir(parents=True, exist_ok=True)
@@ -1506,7 +1485,7 @@ def apply_raw_feature_store(
     """
     Apply stored raw feature selection to inference data.
 
-    Uses feature column list from build_raw_feature_store. No re-fitting occurs.
+    Uses feature column list from build_tree_feature_store. No re-fitting occurs.
     Missing columns are filled with _NAN_SENTINEL (-999). All inf values replaced
     with nan then filled with sentinel.
 
@@ -1515,7 +1494,7 @@ def apply_raw_feature_store(
     X : pd.DataFrame
         Raw or partially-processed inference DataFrame.
     feature_columns : list[str]
-        Column list from build_raw_feature_store (or loaded from
+        Column list from build_tree_feature_store (or loaded from
         models/raw_feature_columns.pkl).
 
     Returns
