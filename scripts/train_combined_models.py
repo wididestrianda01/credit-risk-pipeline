@@ -42,9 +42,15 @@ from credit_engine.utils import evaluate_model, gini_coefficient
 # Constants
 # ---------------------------------------------------------------------------
 
+import os
+
 _DATA_DIR = "data/"
 _MODELS_DIR = "models/"
 _REPORTS_DIR = "reports/"
+
+# HPO trial counts (can be overridden via environment variables for testing)
+_XGB_N_TRIALS = int(os.environ.get("XGB_N_TRIALS", "50"))
+_CAT_N_TRIALS = int(os.environ.get("CAT_N_TRIALS", "100"))
 
 _XGB_COMBINED_MODEL_PATH = f"{_MODELS_DIR}xgboost_combined.pkl"
 _XGB_COMBINED_CAL_MODEL_PATH = f"{_MODELS_DIR}xgboost_combined_calibrated.pkl"
@@ -93,11 +99,11 @@ def train_xgboost_combined(X_combined: pd.DataFrame, y_train: pd.Series) -> tupl
     xgb_model, xgb_metrics, X_test, y_test, xgb_best_params
     """
     print("\n" + "=" * 70)
-    print("TASK 2: Train XGBoost on combined store (Optuna HPO, 50 trials)")
+    print(f"TASK 2: Train XGBoost on combined store (Optuna HPO, {_XGB_N_TRIALS} trials)")
     print("=" * 70)
 
     xgb_model, xgb_metrics, X_test, y_test, xgb_best_params = train_xgboost_optuna(
-        X_combined, y_train, n_trials=50
+        X_combined, y_train, n_trials=_XGB_N_TRIALS
     )
 
     # Evaluate uncalibrated
@@ -215,9 +221,9 @@ def train_catboost_combined(
         print(f"    {col}: {dtype_str} {'✓' if is_category else '✗'}")
 
     # Run Optuna HPO with 100 trials
-    print("\nRunning CatBoost Optuna HPO (100 trials)...")
+    print(f"\nRunning CatBoost Optuna HPO ({_CAT_N_TRIALS} trials)...")
     cat_model, cat_metrics, X_test, y_test, cat_best_params = train_catboost_optuna(
-        X_combined_cat, y_train, n_trials=100
+        X_combined_cat, y_train, n_trials=_CAT_N_TRIALS
     )
 
     # Evaluate uncalibrated
