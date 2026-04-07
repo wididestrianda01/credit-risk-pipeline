@@ -47,7 +47,7 @@ from credit_engine.model import (
 # ============================================================================
 
 OPTUNA_DB_PATH = "sqlite:///models/optuna_studies.db"
-OPTUNA_STUDY_NAME = "xgb_optuna_study"
+OPTUNA_STUDY_NAME = "xgboost_extended_study"  # Matches LGB/CatBoost naming from Phase 04.1
 TOTAL_TRIALS_TARGET = 100
 N_TRIALS_STARTUP = 5
 RANDOM_STATE = 42
