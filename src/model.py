@@ -188,6 +188,10 @@ _CAT_BAGGING_TEMP_MAX: float = 1.0
 _CAT_RANDOM_STRENGTH_MIN: float = 0.0
 _CAT_RANDOM_STRENGTH_MAX: float = 1.0
 _CAT_BOOTSTRAP_TYPE: str = "Bayesian"   # bagging_temperature only valid with Bayesian bootstrap
+_CAT_ITERATIONS: int = 1000
+_CAT_OBJ_EARLY_STOPPING_ROUNDS: int = 30   # fast config triage inside Optuna
+_CAT_EARLY_STOPPING_ROUNDS: int = 50        # full patience for final refit
+_CAT_FINAL_VAL_SIZE: float = 0.2
 _CAT_OPTUNA_N_TRIALS: int = 100
 _CAT_MODEL_PATH: str = "models/catboost_combined.pkl"
 _CAT_PARAMS_PATH: str = "models/catboost_params.json"
@@ -2063,8 +2067,17 @@ def train_catboost_optuna(
         X_arr = X_train.to_numpy()
         y_arr = y_train.to_numpy()
         for train_idx, val_idx in cv.split(X_train, y_train):
-            model_fold = CatBoostClassifier(**params)
-            model_fold.fit(X_arr[train_idx], y_arr[train_idx], verbose=False)
+            model_fold = CatBoostClassifier(
+                **params,
+                iterations=_CAT_ITERATIONS,
+                early_stopping_rounds=_CAT_OBJ_EARLY_STOPPING_ROUNDS,
+            )
+            model_fold.fit(
+                X_arr[train_idx],
+                y_arr[train_idx],
+                eval_set=(X_arr[val_idx], y_arr[val_idx]),
+                verbose=False,
+            )
             val_prob = model_fold.predict_proba(X_arr[val_idx])[:, 1]
             fold_aucs.append(roc_auc_score(y_arr[val_idx], val_prob))
 
@@ -2074,7 +2087,9 @@ def train_catboost_optuna(
     study.optimize(_objective, n_trials=n_trials, show_progress_bar=False)
     best_params = study.best_params
 
-    # Final model — refit on full X_train with best params
+    # Final model — two-stage refit mirroring the LightGBM pattern:
+    # Stage 1: early stopping on 80/20 split to find optimal iterations.
+    # Stage 2: refit on 100% of X_train with that iteration count.
     final_params = {
         **best_params,
         "bootstrap_type": _CAT_BOOTSTRAP_TYPE,
@@ -2082,8 +2097,28 @@ def train_catboost_optuna(
         "random_seed": seed,
         "verbose": 0,
         "allow_writing_files": False,
+        "iterations": _CAT_ITERATIONS,
+        "early_stopping_rounds": _CAT_EARLY_STOPPING_ROUNDS,
     }
-    model = CatBoostClassifier(**final_params)
+    X_tr, X_val_es, y_tr, y_val_es = train_test_split(
+        X_train, y_train,
+        test_size=_CAT_FINAL_VAL_SIZE,
+        stratify=y_train,
+        random_state=_RANDOM_STATE,
+    )
+    stage1_model = CatBoostClassifier(**final_params)
+    stage1_model.fit(
+        X_tr.to_numpy(), y_tr.to_numpy(),
+        eval_set=(X_val_es.to_numpy(), y_val_es.to_numpy()),
+        verbose=False,
+    )
+    best_iterations = stage1_model.best_iteration_ or _CAT_ITERATIONS
+
+    # Stage 2: no early stopping — uses the early-stopped iteration count
+    final_params_s2 = {**final_params}
+    final_params_s2.pop("early_stopping_rounds")
+    final_params_s2["iterations"] = best_iterations
+    model = CatBoostClassifier(**final_params_s2)
     model.fit(X_train.to_numpy(), y_train.to_numpy(), verbose=False)
 
     metrics = evaluate_model(model, X_test, y_test, model_name="CatBoost")

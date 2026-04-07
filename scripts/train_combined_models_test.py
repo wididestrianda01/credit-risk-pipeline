@@ -258,7 +258,7 @@ def calibrate_catboost_combined(
         raise AssertionError(f"BrierSkill {brier_skill:.4f} <= 0; gate failed")
 
     # Evaluate calibrated model
-    cal_metrics = evaluate_model(cat_model, X_test, y_test, "CatBoost (combined, calibrated)")
+    cal_metrics = evaluate_model(cat_calibrated, X_test, y_test, "CatBoost (combined, calibrated)")
     cat_cal_gini = cal_metrics["Gini"]
 
     gini_delta = uncal_metrics["Gini"] - cat_cal_gini
