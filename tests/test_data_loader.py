@@ -454,20 +454,20 @@ def test_build_training_frame_drops_high_missingness_columns(data_dir, tmp_path)
 # ---------------------------------------------------------------------------
 
 
-def test_save_training_frame_creates_parquet_files(data_dir, tmp_path):
+def test_save_training_frame_creates_parquet_files(data_dir, mock_data_dir):
     """save_training_frame writes X_train.parquet and y_train.parquet."""
     X, y = build_training_frame(data_dir)
-    out_dir = tmp_path / "processed"
+    out_dir = mock_data_dir / "data" / "processed"
     save_training_frame(X, y, out_dir)
 
     assert (out_dir / "X_train.parquet").exists()
     assert (out_dir / "y_train.parquet").exists()
 
 
-def test_save_training_frame_roundtrip(data_dir, tmp_path):
+def test_save_training_frame_roundtrip(data_dir, mock_data_dir):
     """Data survives a parquet write-read round-trip."""
     X, y = build_training_frame(data_dir)
-    out_dir = tmp_path / "processed"
+    out_dir = mock_data_dir / "data" / "processed"
     save_training_frame(X, y, out_dir)
 
     X_loaded = pd.read_parquet(out_dir / "X_train.parquet")
