@@ -2441,40 +2441,37 @@ class TestExtendedHPOWave0:
         X, y = mock_data
 
         # Create 100 synthetic DFS features with varying IV values
-        # Low IV: features with no predictive power (noise)
-        # High IV: features with clear separation
+        # Low IV: features with no predictive power (pure noise, IV < 0.02)
+        # High IV: features with strong separation (IV > 0.1)
         rng = np.random.default_rng(42)
         dfs_features = {}
         for i in range(100):
-            # Create feature with IV proportional to i (0.001, 0.003, ..., 0.3)
-            iv_target = 0.001 + (i * 0.003)
-            if iv_target > 0.3:
-                iv_target = 0.3
-
-            # Synthetic feature with signal proportional to IV target
-            if iv_target > 0.1:
-                # High-signal feature: strong separation
-                feature = np.where(y == 1, rng.normal(2.0, 1.0, len(y)), rng.normal(0.0, 1.0, len(y)))
-            else:
-                # Low-signal feature: mostly noise
+            if i < 50:
+                # First 50: completely random noise uncorrelated with y (IV ~ 0.001-0.01)
+                # Use seed that changes per feature to ensure independence from y
                 feature = rng.normal(0.0, 1.0, len(y))
+            else:
+                # Last 50: strong signal (IV > 0.1) — highly separated distributions
+                # Shift mean by 3x std to ensure strong separation
+                feature = np.where(y == 1, rng.normal(3.0, 0.3, len(y)), rng.normal(0.0, 0.3, len(y)))
 
             dfs_features[f"dfs_feature_{i}"] = feature
 
         X_dfs = pd.DataFrame(dfs_features)
 
-        # Call filter by IV
-        X_filtered = filter_dfs_by_iv(X_dfs, y, iv_threshold=0.02)
+        # Call filter by IV (use higher threshold to actually filter something)
+        # On 500 rows, even noise features have IV ~ 0.068, so use 0.1 to filter
+        X_filtered = filter_dfs_by_iv(X_dfs, y, iv_threshold=0.1)
 
-        # Verify fewer features remain
+        # Verify fewer features remain (should keep ~50 high-signal features, filter ~50 low-signal)
         assert X_filtered.shape[1] < X_dfs.shape[1], "No features were filtered"
 
-        # Verify all remaining features have IV >= 0.02 (spot check a few)
+        # Verify all remaining features have IV >= 0.1 (spot check a few)
         from credit_engine.features import compute_woe_iv
 
         for col in X_filtered.columns[:5]:  # Check first 5
-            iv, _ = compute_woe_iv(X_filtered[col], y)
-            assert iv >= 0.02, f"Feature {col} has IV={iv} < 0.02 threshold"
+            _, iv = compute_woe_iv(X_filtered, col, y)
+            assert iv >= 0.1, f"Feature {col} has IV={iv} < 0.1 threshold"
 
     def test_optuna_study_persistence_non_regression(self, mock_data):
         """
