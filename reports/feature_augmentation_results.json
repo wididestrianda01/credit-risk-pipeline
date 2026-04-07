@@ -1,0 +1,59 @@
+{
+  "phase": "04.2",
+  "plan": "03",
+  "status": "partial",
+  "notes": "Full augmentation suite (rank_norm, poly, pseudo, target_enc) × (XGB, LGB, CatBoost) was launched but killed after 25+ hours. Bottleneck: CatBoost + poly augmentation requires exact SHAP on 197K rows × 5 folds (O(n×T×L) per fold). The LGB+target_encoding result below is from the per-model feature matrix preparation (Phase 04.1-03 / Plan 03 task 3). Poly and pseudo augmentation results are not available for this phase.",
+  "computation_kill_reason": "catboost_poly_shap_too_slow_25h_elapsed",
+  "completed_strategies": [
+    {
+      "model": "lgb",
+      "augmentation": "target_enc",
+      "baseline_gini": 0.5086097215155352,
+      "augmented_gini": 0.5149725320869845,
+      "delta_gini": 0.006362810571449273,
+      "status": "complete",
+      "source": "reports/feature_pipeline_comparison.json"
+    }
+  ],
+  "comparison_table": [
+    {
+      "model": "lgb",
+      "augmentation": "target_enc",
+      "gini": 0.5149725320869845,
+      "delta_gini": 0.006362810571449273,
+      "status": "complete",
+      "notes": "LGB with target encoding on 4 high-cardinality categoricals"
+    },
+    {
+      "model": "lgb",
+      "augmentation": "rank_norm",
+      "gini": null,
+      "delta_gini": null,
+      "status": "killed",
+      "notes": "killed with poly — computation killed after 25h"
+    },
+    {
+      "model": "xgb",
+      "augmentation": "rank_norm",
+      "gini": null,
+      "delta_gini": null,
+      "status": "killed",
+      "notes": "killed with poly — computation killed after 25h"
+    },
+    {
+      "model": "catboost",
+      "augmentation": "poly",
+      "gini": null,
+      "delta_gini": null,
+      "status": "killed",
+      "notes": "exact SHAP on 197K rows × 5 folds cost estimated 48+ hours"
+    }
+  ],
+  "available_result_summary": {
+    "best_completed_augmentation": "lgb+target_enc",
+    "best_delta": 0.006362810571449273,
+    "n_completed": 1,
+    "n_total_planned": 12,
+    "coverage": "8.3%"
+  }
+}
