@@ -558,20 +558,20 @@ def test_build_feature_store_woe_mappings_structure(feature_store_data, mock_dat
         )
 
 
-def test_build_feature_store_woe_mappings_keys_match_columns(feature_store_data):
+def test_build_feature_store_woe_mappings_keys_match_columns(feature_store_data, mock_data_dir):
     """woe_mappings keys must exactly match X_features column names."""
     X, y = feature_store_data
-    X_out, woe_map = build_feature_store(X, y)
+    X_out, woe_map = build_feature_store(X, y, output_dir=mock_data_dir / "data" / "processed")
 
     assert set(woe_map.keys()) == set(X_out.columns), (
         f"woe_mappings keys {set(woe_map.keys())} != X_features columns {set(X_out.columns)}"
     )
 
 
-def test_build_feature_store_constant_feature_dropped(feature_store_data):
+def test_build_feature_store_constant_feature_dropped(feature_store_data, mock_data_dir):
     """Constant columns (variance == 0) must be absent from X_features and woe_mappings."""
     X, y = feature_store_data
-    X_out, woe_map = build_feature_store(X, y)
+    X_out, woe_map = build_feature_store(X, y, output_dir=mock_data_dir / "data" / "processed")
 
     assert "constant_feature" not in X_out.columns, (
         "constant_feature has zero variance and must be dropped"
@@ -581,14 +581,14 @@ def test_build_feature_store_constant_feature_dropped(feature_store_data):
     )
 
 
-def test_build_feature_store_pickle_round_trip(feature_store_data, tmp_path):
+def test_build_feature_store_pickle_round_trip(feature_store_data, mock_data_dir):
     """Pickle save and load must preserve all woe_mappings entries exactly."""
     import pickle
 
     X, y = feature_store_data
-    _, woe_map = build_feature_store(X, y)
+    _, woe_map = build_feature_store(X, y, output_dir=mock_data_dir / "data" / "processed")
 
-    pkl_path = tmp_path / "woe_mappings.pkl"
+    pkl_path = mock_data_dir / "models" / "woe_mappings.pkl"
     with open(pkl_path, "wb") as f:
         pickle.dump(woe_map, f)
     with open(pkl_path, "rb") as f:
@@ -604,13 +604,13 @@ def test_build_feature_store_pickle_round_trip(feature_store_data, tmp_path):
         )
 
 
-def test_apply_feature_store_transforms_correctly(feature_store_data):
+def test_apply_feature_store_transforms_correctly(feature_store_data, mock_data_dir):
     """
     Re-applying woe_mappings to the training data must produce only valid WoE
     values (finite floats or the -999 sentinel), with no NaN.
     """
     X, y = feature_store_data
-    X_train_out, woe_map = build_feature_store(X, y)
+    X_train_out, woe_map = build_feature_store(X, y, output_dir=mock_data_dir / "data" / "processed")
 
     # Use a fresh copy of X (same data) to simulate inference
     X_infer = X[list(woe_map.keys())].copy()
@@ -622,13 +622,13 @@ def test_apply_feature_store_transforms_correctly(feature_store_data):
     )
 
 
-def test_apply_feature_store_handles_ood_values(feature_store_data):
+def test_apply_feature_store_handles_ood_values(feature_store_data, mock_data_dir):
     """
     Values outside training bin edges are out-of-distribution (OOD).
     apply_feature_store must fill them with _NAN_SENTINEL (-999), not leave NaN.
     """
     X, y = feature_store_data
-    _, woe_map = build_feature_store(X, y)
+    _, woe_map = build_feature_store(X, y, output_dir=mock_data_dir / "data" / "processed")
 
     # Build a DataFrame with deliberately extreme values (outside any training range)
     ood_X = pd.DataFrame(
@@ -641,10 +641,10 @@ def test_apply_feature_store_handles_ood_values(feature_store_data):
     )
 
 
-def test_apply_feature_store_does_not_mutate_input(feature_store_data):
+def test_apply_feature_store_does_not_mutate_input(feature_store_data, mock_data_dir):
     """apply_feature_store must return a new DataFrame without mutating the input."""
     X, y = feature_store_data
-    _, woe_map = build_feature_store(X, y)
+    _, woe_map = build_feature_store(X, y, output_dir=mock_data_dir / "data" / "processed")
 
     X_infer = X[list(woe_map.keys())].copy()
     original_values = X_infer.copy()
@@ -675,7 +675,7 @@ def test_credit_income_ratio_correct(application_fixture):
     assert result["CREDIT_INCOME_RATIO"].iloc[0] == pytest.approx(5.0)
 
 
-def test_apply_feature_store_matches_train(feature_store_data):
+def test_apply_feature_store_matches_train(feature_store_data, mock_data_dir):
     """
     apply_feature_store (inference path) must return the same columns as training
     and produce no NaN values — even on a separate held-out set.
@@ -687,7 +687,7 @@ def test_apply_feature_store_matches_train(feature_store_data):
     and unseen bin edges — any silent NaN here breaks the downstream model.
     """
     X, y = feature_store_data
-    X_train_out, woe_map = build_feature_store(X, y)
+    X_train_out, woe_map = build_feature_store(X, y, output_dir=mock_data_dir / "data" / "processed")
 
     rng = np.random.default_rng(99)
     X_test = pd.DataFrame(
