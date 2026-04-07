@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """
-train_combined_models.py
-------------------------
-Train XGBoost and CatBoost on the 63-feature combined store with Optuna HPO.
-Calibrate both models via Platt scaling (FrozenEstimator pattern).
-Persist all four artifacts: xgboost_combined.pkl, xgboost_combined_calibrated.pkl,
-catboost_combined.pkl, catboost_combined_calibrated.pkl.
+train_combined_models_test.py
+-----------------------------
+Minimal test version of combined model training with 1 trial each.
+For validation/verification purposes only. Use train_combined_models.py
+for production (50 and 100 trials).
 
 Usage
 -----
-python scripts/train_combined_models.py
+python scripts/train_combined_models_test.py
 """
 
 from __future__ import annotations
@@ -48,12 +47,9 @@ _DATA_DIR = "data/"
 _MODELS_DIR = "models/"
 _REPORTS_DIR = "reports/"
 
-# HPO trial counts (can be overridden via environment variables for testing)
-_XGB_N_TRIALS = int(os.environ.get("XGB_N_TRIALS", "50"))
-_CAT_N_TRIALS = int(os.environ.get("CAT_N_TRIALS", "100"))
-
-# CV folds can be reduced for faster testing via FAST_MODE=1
-_FAST_MODE = os.environ.get("FAST_MODE", "0") == "1"
+# Test configuration: 1 trial each (just to validate the pipeline)
+_XGB_N_TRIALS = 1
+_CAT_N_TRIALS = 1
 
 _XGB_COMBINED_MODEL_PATH = f"{_MODELS_DIR}xgboost_combined.pkl"
 _XGB_COMBINED_CAL_MODEL_PATH = f"{_MODELS_DIR}xgboost_combined_calibrated.pkl"
@@ -94,34 +90,14 @@ def load_combined_store() -> tuple[pd.DataFrame, pd.Series]:
 
 
 def train_xgboost_combined(X_combined: pd.DataFrame, y_train: pd.Series) -> tuple:
-    """
-    Train XGBoost on combined 63-feature store with Optuna HPO (50 trials).
-
-    Returns
-    -------
-    xgb_model, xgb_metrics, X_test, y_test, xgb_best_params
-    """
+    """Train XGBoost on combined 63-feature store with minimal Optuna trials (TEST VERSION)."""
     print("\n" + "=" * 70)
-    print(f"TASK 2: Train XGBoost on combined store (Optuna HPO, {_XGB_N_TRIALS} trials)")
-    if _FAST_MODE:
-        print("  [FAST_MODE enabled: using 2-fold CV for quick iteration]")
+    print(f"TASK 2: Train XGBoost on combined store (Optuna HPO, {_XGB_N_TRIALS} trial for testing)")
     print("=" * 70)
 
-    # Monkey-patch CV folds for fast mode testing
-    if _FAST_MODE:
-        import src.model as model_module
-        original_cv_n_splits = model_module._XGB_CV_N_SPLITS
-        model_module._XGB_CV_N_SPLITS = 2
-        try:
-            xgb_model, xgb_metrics, X_test, y_test, xgb_best_params = train_xgboost_optuna(
-                X_combined, y_train, n_trials=_XGB_N_TRIALS
-            )
-        finally:
-            model_module._XGB_CV_N_SPLITS = original_cv_n_splits
-    else:
-        xgb_model, xgb_metrics, X_test, y_test, xgb_best_params = train_xgboost_optuna(
-            X_combined, y_train, n_trials=_XGB_N_TRIALS
-        )
+    xgb_model, xgb_metrics, X_test, y_test, xgb_best_params = train_xgboost_optuna(
+        X_combined, y_train, n_trials=_XGB_N_TRIALS
+    )
 
     # Evaluate uncalibrated
     uncal_metrics = evaluate_model(xgb_model, X_test, y_test, "XGBoost (combined, uncalibrated)")
@@ -153,13 +129,7 @@ def calibrate_xgboost_combined(
     y_test: pd.Series,
     uncal_metrics: dict,
 ) -> tuple:
-    """
-    Apply Platt scaling calibration to XGBoost model.
-
-    Returns
-    -------
-    xgb_calibrated, cal_metrics, brier_uncal, brier_cal
-    """
+    """Apply Platt scaling calibration to XGBoost model."""
     print("\n" + "=" * 70)
     print("TASK 3: Calibrate XGBoost via Platt scaling (FrozenEstimator)")
     print("=" * 70)
@@ -206,16 +176,9 @@ def calibrate_xgboost_combined(
 def train_catboost_combined(
     X_combined: pd.DataFrame, y_train: pd.Series
 ) -> tuple:
-    """
-    Train CatBoost on combined 63-feature store with native categorical features.
-    Uses prepare_catboost_features() to swap WoE cols back to raw strings.
-
-    Returns
-    -------
-    cat_model, cat_metrics, X_test, y_test, cat_best_params
-    """
+    """Train CatBoost on combined 63-feature store (TEST VERSION)."""
     print("\n" + "=" * 70)
-    print("TASK 4: Train CatBoost on combined store (100 trials, native categoricals)")
+    print(f"TASK 4: Train CatBoost on combined store ({_CAT_N_TRIALS} trial for testing, native categoricals)")
     print("=" * 70)
 
     # Load raw DataFrame for categorical column lookup
@@ -237,23 +200,11 @@ def train_catboost_combined(
         is_category = dtype_str.startswith("category")
         print(f"    {col}: {dtype_str} {'✓' if is_category else '✗'}")
 
-    # Run Optuna HPO with 100 trials
-    print(f"\nRunning CatBoost Optuna HPO ({_CAT_N_TRIALS} trials)...")
-    if _FAST_MODE:
-        print("  [FAST_MODE enabled: using 2-fold CV for quick iteration]")
-        import src.model as model_module
-        original_cv_n_splits = model_module._CAT_CV_N_SPLITS
-        model_module._CAT_CV_N_SPLITS = 2
-        try:
-            cat_model, cat_metrics, X_test, y_test, cat_best_params = train_catboost_optuna(
-                X_combined_cat, y_train, n_trials=_CAT_N_TRIALS
-            )
-        finally:
-            model_module._CAT_CV_N_SPLITS = original_cv_n_splits
-    else:
-        cat_model, cat_metrics, X_test, y_test, cat_best_params = train_catboost_optuna(
-            X_combined_cat, y_train, n_trials=_CAT_N_TRIALS
-        )
+    # Run Optuna HPO with minimal trials
+    print(f"\nRunning CatBoost Optuna HPO ({_CAT_N_TRIALS} trial for testing)...")
+    cat_model, cat_metrics, X_test, y_test, cat_best_params = train_catboost_optuna(
+        X_combined_cat, y_train, n_trials=_CAT_N_TRIALS
+    )
 
     # Evaluate uncalibrated
     uncal_metrics = evaluate_model(cat_model, X_test, y_test, "CatBoost (combined, uncalibrated)")
@@ -285,13 +236,7 @@ def calibrate_catboost_combined(
     y_test: pd.Series,
     uncal_metrics: dict,
 ) -> tuple:
-    """
-    Apply Platt scaling calibration to CatBoost model.
-
-    Returns
-    -------
-    cat_calibrated, cal_metrics, brier_uncal, brier_cal
-    """
+    """Apply Platt scaling calibration to CatBoost model."""
     print("\n" + "=" * 70)
     print("TASK 5: Calibrate CatBoost via Platt scaling (FrozenEstimator)")
     print("=" * 70)
@@ -338,7 +283,7 @@ def calibrate_catboost_combined(
 def main() -> None:
     """Execute all training and calibration tasks."""
     print("\n" + "=" * 70)
-    print("PHASE 4 PLAN 02: Combined Model Training & Calibration")
+    print("PHASE 4 PLAN 02: Combined Model Training & Calibration (TEST VERSION)")
     print("=" * 70)
 
     # Task 1: Load data
@@ -366,7 +311,7 @@ def main() -> None:
 
     # Summary
     print("\n" + "=" * 70)
-    print("SUMMARY: All Models Trained & Calibrated")
+    print("SUMMARY: All Models Trained & Calibrated (TEST VERSION)")
     print("=" * 70)
 
     print(f"\nXGBoost (combined):")
@@ -409,7 +354,7 @@ def main() -> None:
     print(f"✓ Results saved to {_CAT_COMBINED_RESULTS_PATH}")
 
     print("\n" + "=" * 70)
-    print("DONE: Phase 4 Plan 02 execution complete")
+    print("DONE: Phase 4 Plan 02 execution complete (TEST VERSION)")
     print("=" * 70 + "\n")
 
 
