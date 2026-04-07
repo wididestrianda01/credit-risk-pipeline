@@ -511,36 +511,38 @@ def feature_store_data() -> tuple[pd.DataFrame, pd.Series]:
     return df, target
 
 
-def test_build_feature_store_reduces_features(feature_store_data):
+def test_build_feature_store_reduces_features(feature_store_data, mock_data_dir):
     """
     Final feature count must be less than the raw input count.
     IV filter removes low-IV features; variance filter removes constant ones.
     """
     X, y = feature_store_data
-    X_out, woe_map = build_feature_store(X, y)
+    X_out, woe_map = build_feature_store(X, y, output_dir=mock_data_dir / "data" / "processed")
 
     assert X_out.shape[1] < X.shape[1], (
         f"Expected fewer features after filtering: got {X_out.shape[1]}, raw was {X.shape[1]}"
     )
+    # Verify it wrote to test directory, not production
+    assert (mock_data_dir / "data" / "processed").exists()
 
 
-def test_build_feature_store_no_nan_in_output(feature_store_data):
+def test_build_feature_store_no_nan_in_output(feature_store_data, mock_data_dir):
     """No NaN values must appear in the final WoE-transformed feature matrix."""
     X, y = feature_store_data
-    X_out, _ = build_feature_store(X, y)
+    X_out, _ = build_feature_store(X, y, output_dir=mock_data_dir / "data" / "processed")
 
     assert not X_out.isna().any().any(), (
         "X_features must not contain NaN after WoE transformation and sentinel filling"
     )
 
 
-def test_build_feature_store_woe_mappings_structure(feature_store_data):
+def test_build_feature_store_woe_mappings_structure(feature_store_data, mock_data_dir):
     """
     woe_mappings must be a dict of dicts, each containing 'bin_edges' (list)
     and 'bin_woe_values' (dict mapping bin label string -> float).
     """
     X, y = feature_store_data
-    _, woe_map = build_feature_store(X, y)
+    _, woe_map = build_feature_store(X, y, output_dir=mock_data_dir / "data" / "processed")
 
     assert isinstance(woe_map, dict), "woe_mappings must be a dict"
     assert len(woe_map) > 0, "woe_mappings must not be empty"
