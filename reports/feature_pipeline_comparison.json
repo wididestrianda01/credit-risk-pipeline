@@ -1,0 +1,41 @@
+{
+  "lightgbm": {
+    "raw_gini": 0.5086097215155352,
+    "te_gini": 0.5149725320869845,
+    "selected": "target_encoded",
+    "final_gini": 0.5149725320869845,
+    "te_delta": 0.006362810571449273
+  },
+  "xgboost": {
+    "pipeline": "raw_continuous_63",
+    "shape": [
+      246008,
+      63
+    ]
+  },
+  "catboost": {
+    "pipeline": "raw_continuous_63_plus_native_categorical_4",
+    "shape": [
+      246008,
+      67
+    ]
+  },
+  "dfs": {
+    "status": "deferred",
+    "reason": "memory_intensive_on_full_dataset"
+  },
+  "feature_matrix_shapes": {
+    "X_lgb_features": [
+      246008,
+      67
+    ],
+    "X_xgb_features": [
+      246008,
+      63
+    ],
+    "X_cat_features": [
+      246008,
+      67
+    ]
+  }
+}
