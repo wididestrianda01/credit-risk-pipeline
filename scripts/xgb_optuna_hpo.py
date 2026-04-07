@@ -47,13 +47,16 @@ from credit_engine.model import (
 # ============================================================================
 
 OPTUNA_DB_PATH = "sqlite:///models/optuna_studies.db"
-OPTUNA_STUDY_NAME = "xgboost_extended_study"  # Matches LGB/CatBoost naming from Phase 04.1
+OPTUNA_STUDY_NAME = "xgb_raw_hpo"  # Fresh study; xgboost_extended_study had label misalignment
 TOTAL_TRIALS_TARGET = 100
 N_TRIALS_STARTUP = 5
 RANDOM_STATE = 42
 
-# Feature and target paths
-X_FEATURES_PATH = "data/processed/X_xgb_features.parquet"
+# Feature and target paths — load X_raw_features (full 307K) and reconstruct
+# the same 80/20 split as prepare_feature_pipelines.py used. This ensures
+# correct index alignment: X_xgb_features.parquet was saved with index=False,
+# destroying the original shuffled index and making y.iloc[:246008] wrong.
+X_RAW_FEATURES_PATH = "data/processed/X_raw_features.parquet"
 Y_TRAIN_PATH = "data/processed/y_train.parquet"
 
 # Output paths
@@ -69,23 +72,24 @@ def main():
     """Run XGBoost 100-trial Bayesian HPO with Optuna persistence."""
 
     print("[XGBoost HPO] Loading feature data...")
-    X = pd.read_parquet(X_FEATURES_PATH)
+    # Load full raw feature matrix (307K rows) and reconstruct the same 80/20
+    # split that prepare_feature_pipelines.py used. X_xgb_features.parquet was
+    # saved with index=False, losing original shuffled indices; using it with
+    # y.iloc[:246008] silently misaligns features and labels, producing AUC≈0.5.
+    X_raw = pd.read_parquet(X_RAW_FEATURES_PATH)
     y = pd.read_parquet(Y_TRAIN_PATH).squeeze()
 
-    # Align shapes: X_xgb_features is a subset (246008 rows), match y to it
-    y = y.iloc[:X.shape[0]]
-
-    print(f"  X shape: {X.shape}")
+    print(f"  X_raw shape: {X_raw.shape}")
     print(f"  y shape: {y.shape}")
     print(f"  Default rate: {y.sum() / len(y):.4f}")
 
     # =========================================================================
-    # Split data for HPO
+    # Split data for HPO — reconstructs prepare_feature_pipelines.py split
     # =========================================================================
 
-    print(f"\n[XGBoost HPO] Performing train/test split...")
+    print(f"\n[XGBoost HPO] Performing train/test split (seed=42, stratify=y)...")
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, stratify=y, random_state=RANDOM_STATE
+        X_raw, y, test_size=0.2, stratify=y, random_state=RANDOM_STATE
     )
     print(f"  X_train shape: {X_train.shape}")
     print(f"  X_test shape: {X_test.shape}")
