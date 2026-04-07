@@ -242,6 +242,19 @@ _ENSEMBLE_XGB_DEFAULTS: dict = {
     "random_state": 42,
     "eval_metric": "auc",
 }
+_ENSEMBLE_CAT_DEFAULTS: dict = {
+    "depth": 6,
+    "learning_rate": 0.05,
+    "iterations": 300,
+    "l2_leaf_reg": 3.0,
+    "bootstrap_type": "Bayesian",
+    "bagging_temperature": 0.5,
+    "random_strength": 0.5,
+    "verbose": 0,
+    "allow_writing_files": False,
+}
+_ENSEMBLE_3MODEL_WORKFLOW_MODEL_PATH: str = "models/ensemble_3model_best.pkl"
+_ENSEMBLE_3MODEL_WORKFLOW_WEIGHTS_PATH: str = "reports/ensemble_3model_weights.json"
 
 
 # ---------------------------------------------------------------------------
@@ -1768,12 +1781,156 @@ def train_ensemble(
     return ensemble_model, metrics
 
 
+def train_ensemble_3model(
+    X: pd.DataFrame,
+    y: pd.Series,
+    lgb_params: dict | None = None,
+    xgb_params: dict | None = None,
+    cat_params: dict | None = None,
+    n_splits: int = 5,
+    method: Literal["average", "logistic"] = "logistic",
+    groups: np.ndarray | None = None,
+) -> tuple:
+    """
+    Train 3-model OOF ensemble (LGB + XGB + CatBoost) with logistic meta-learner.
+
+    Parameters
+    ----------
+    X : pd.DataFrame
+        Feature matrix (63 raw continuous columns).
+    y : pd.Series
+        Binary target labels.
+    lgb_params : dict, optional
+        LightGBM hyperparameters. Defaults to _ENSEMBLE_LGB_DEFAULTS.
+    xgb_params : dict, optional
+        XGBoost hyperparameters. Defaults to _ENSEMBLE_XGB_DEFAULTS.
+    cat_params : dict, optional
+        CatBoost hyperparameters. Defaults to _ENSEMBLE_CAT_DEFAULTS.
+    n_splits : int, default 5
+        Number of CV folds for OOF generation.
+    method : {"average", "logistic"}, default "logistic"
+        Ensemble combination method.
+        - "logistic": Logistic Regression meta-learner (L2, C=1.0)
+        - "average": Simple mean of 3 OOF columns
+    groups : np.ndarray, optional
+        Sample group labels for grouped CV. If None and
+        _TEMPORAL_SORT_COL is in X.columns, auto-detected.
+
+    Returns
+    -------
+    tuple
+        (ensemble_model, metrics_dict, X_test, y_test, base_gini_dict)
+        Where base_gini_dict = {"lgb": lgb_gini, "xgb": xgb_gini, "cat": cat_gini}
+    """
+    import lightgbm as lgb
+    import xgboost as xgb
+
+    if lgb_params is None:
+        lgb_params = _ENSEMBLE_LGB_DEFAULTS.copy()
+    if xgb_params is None:
+        xgb_params = _ENSEMBLE_XGB_DEFAULTS.copy()
+    if cat_params is None:
+        cat_params = _ENSEMBLE_CAT_DEFAULTS.copy()
+
+    # --- Train / holdout split (80 / 20) ---
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y,
+        test_size=_TEST_SIZE,
+        stratify=y,
+        random_state=_RANDOM_STATE,
+    )
+
+    n_train = len(X_train)
+    oof_lgb = np.zeros(n_train)
+    oof_xgb = np.zeros(n_train)
+    oof_cat = np.zeros(n_train)
+
+    # --- Auto-detect temporal groups ---
+    if groups is None and _TEMPORAL_SORT_COL in X_train.columns:
+        groups_train = X_train[_TEMPORAL_SORT_COL].to_numpy()
+    else:
+        groups_train = groups
+    cv = _make_cv(groups_train, n_splits=n_splits)
+
+    for _fold_idx, (train_idx, val_idx) in enumerate(cv.split(X_train, y_train)):
+        X_fold_train = X_train.iloc[train_idx]
+        y_fold_train = y_train.iloc[train_idx]
+        X_fold_val = X_train.iloc[val_idx]
+
+        n_neg = (y_fold_train == 0).sum()
+        n_pos = (y_fold_train == 1).sum()
+        scale_pos_weight = float(n_neg) / float(n_pos) if n_pos > 0 else 1.0
+
+        # LightGBM
+        lgb_params_fold = {**lgb_params, "scale_pos_weight": scale_pos_weight}
+        lgb_fold = lgb.LGBMClassifier(**lgb_params_fold)
+        lgb_fold.fit(X_fold_train, y_fold_train)
+        oof_lgb[val_idx] = lgb_fold.predict_proba(X_fold_val)[:, 1]
+
+        # XGBoost
+        xgb_params_fold = {**xgb_params, "scale_pos_weight": scale_pos_weight}
+        xgb_fold = xgb.XGBClassifier(**xgb_params_fold)
+        xgb_fold.fit(X_fold_train, y_fold_train)
+        oof_xgb[val_idx] = xgb_fold.predict_proba(X_fold_val)[:, 1]
+
+        # CatBoost
+        cat_params_fold = {**cat_params, "scale_pos_weight": scale_pos_weight}
+        cat_fold = CatBoostClassifier(**cat_params_fold)
+        cat_fold.fit(X_fold_train.to_numpy(), y_fold_train.to_numpy(), verbose=False)
+        oof_cat[val_idx] = cat_fold.predict_proba(X_fold_val.to_numpy())[:, 1]
+
+    # --- Train final base models on full training set ---
+    n_neg_train = (y_train == 0).sum()
+    n_pos_train = (y_train == 1).sum()
+    scale_pos_weight_train = float(n_neg_train) / float(n_pos_train) if n_pos_train > 0 else 1.0
+
+    lgb_params_final = {**lgb_params, "scale_pos_weight": scale_pos_weight_train}
+    lgb_final = lgb.LGBMClassifier(**lgb_params_final)
+    lgb_final.fit(X_train, y_train)
+
+    xgb_params_final = {**xgb_params, "scale_pos_weight": scale_pos_weight_train}
+    xgb_final = xgb.XGBClassifier(**xgb_params_final)
+    xgb_final.fit(X_train, y_train)
+
+    cat_params_final = {**cat_params, "scale_pos_weight": scale_pos_weight_train}
+    cat_final = CatBoostClassifier(**cat_params_final)
+    cat_final.fit(X_train.to_numpy(), y_train.to_numpy(), verbose=False)
+
+    # --- Evaluate individual base models ---
+    lgb_metrics = evaluate_model(lgb_final, X_test, y_test, "LightGBM")
+    xgb_metrics = evaluate_model(xgb_final, X_test, y_test, "XGBoost")
+    cat_metrics = evaluate_model(cat_final, X_test, y_test, "CatBoost")
+    base_gini_dict = {
+        "lgb": float(lgb_metrics["Gini"]),
+        "xgb": float(xgb_metrics["Gini"]),
+        "cat": float(cat_metrics["Gini"]),
+    }
+
+    # --- Create ensemble model ---
+    if method == "average":
+        ensemble_model = _AverageEnsemble3(lgb_final, xgb_final, cat_final)
+    elif method == "logistic":
+        X_meta = np.column_stack([oof_lgb, oof_xgb, oof_cat])
+        meta_lr = LogisticRegression(C=1.0, max_iter=1000, random_state=_RANDOM_STATE)
+        meta_lr.fit(X_meta, y_train)
+        ensemble_model = _LogisticEnsemble3(lgb_final, xgb_final, cat_final, meta_lr)
+    else:
+        raise ValueError(f"method must be 'average' or 'logistic', got '{method}'")
+
+    # --- Evaluate ensemble on holdout ---
+    metrics_dict = evaluate_model(ensemble_model, X_test, y_test, f"Ensemble3 ({method})")
+
+    return ensemble_model, metrics_dict, X_test, y_test, base_gini_dict
+
+
 def run_ensemble_workflow(
     X: pd.DataFrame,
     y: pd.Series,
     X_raw: pd.DataFrame | None = None,
     lgb_params: dict | None = None,
     xgb_params: dict | None = None,
+    cat_model: "CatBoostClassifier | None" = None,
+    cat_params: dict | None = None,
     method: Literal["average", "logistic"] = "logistic",
 ) -> dict:
     """
@@ -1798,14 +1955,21 @@ def run_ensemble_workflow(
         LightGBM hyperparameters. Defaults to _ENSEMBLE_LGB_DEFAULTS.
     xgb_params : dict, optional
         XGBoost hyperparameters. Defaults to _ENSEMBLE_XGB_DEFAULTS.
+    cat_model : CatBoostClassifier, optional
+        When provided, routes to the 3-model ensemble path (LGB + XGB + CatBoost).
+        When None (default), uses the existing 2-model path (LGB + XGB).
+    cat_params : dict, optional
+        CatBoost hyperparameters. Defaults to _ENSEMBLE_CAT_DEFAULTS.
+        Only used when cat_model is not None.
     method : {'average', 'logistic'}, default='logistic'
-        Meta-learner type passed to train_ensemble().
+        Meta-learner type passed to train_ensemble() or train_ensemble_3model().
 
     Returns
     -------
     result : dict
         Keys: lgb_gini, xgb_gini, ensemble_gini, improvement, persisted.
-        ``improvement`` = ensemble_gini − max(lgb_gini, xgb_gini).
+        When cat_model is provided, also includes cat_gini.
+        ``improvement`` = ensemble_gini − max(lgb_gini, xgb_gini[, cat_gini]).
         ``persisted`` is True when the ensemble was written to disk.
     """
     import json as _json
@@ -1817,36 +1981,68 @@ def run_ensemble_workflow(
     if xgb_params is None:
         xgb_params = _ENSEMBLE_XGB_DEFAULTS.copy()
 
-    # Determine which feature matrix to use for tree models
+    if cat_model is not None:
+        # 3-model path: LGB + XGB + CatBoost OOF stacking
+        ensemble, metrics_dict, X_test, y_test, base_gini = train_ensemble_3model(
+            X, y,
+            lgb_params=lgb_params,
+            xgb_params=xgb_params,
+            cat_params=cat_params,
+            method=method,
+        )
+        ensemble_gini = float(metrics_dict["Gini"])
+        lgb_gini = base_gini["lgb"]
+        xgb_gini = base_gini["xgb"]
+        cat_gini = base_gini["cat"]
+        best_single_gini = max(lgb_gini, xgb_gini, cat_gini)
+        improvement = ensemble_gini - best_single_gini
+        persisted = improvement >= _ENSEMBLE_PERSIST_THRESHOLD
+        if persisted:
+            save_model(ensemble, _ENSEMBLE_3MODEL_WORKFLOW_MODEL_PATH)
+            weights_payload = {
+                "lgb_gini": lgb_gini,
+                "xgb_gini": xgb_gini,
+                "cat_gini": cat_gini,
+                "ensemble_gini": ensemble_gini,
+                "improvement": improvement,
+                "method": method,
+            }
+            weights_path = Path(_ENSEMBLE_3MODEL_WORKFLOW_WEIGHTS_PATH)
+            weights_path.parent.mkdir(parents=True, exist_ok=True)
+            with weights_path.open("w") as fh:
+                _json.dump(weights_payload, fh, indent=2)
+        return {
+            "lgb_gini": lgb_gini,
+            "xgb_gini": xgb_gini,
+            "cat_gini": cat_gini,
+            "ensemble_gini": ensemble_gini,
+            "improvement": improvement,
+            "persisted": persisted,
+        }
+
+    # 2-model path (backward compatible) — unchanged
     X_tree = X_raw if X_raw is not None else X
 
-    # Shared 80/20 split — identical seed guarantees all three use the same X_test.
-    # Split using X_tree (which may be X_raw or X)
     X_tree_train, X_tree_test, y_train, y_test = train_test_split(
         X_tree, y, test_size=_TEST_SIZE, stratify=y, random_state=_RANDOM_STATE
     )
 
-    # Compute scale_pos_weight from training data for imbalance handling
     n_neg = int((y_train == 0).sum())
     n_pos = int((y_train == 1).sum())
     scale_pos_weight = float(n_neg) / float(n_pos) if n_pos > 0 else 1.0
 
-    # --- Train LightGBM base model (on X_tree) ---
     lgb_params_final = {**lgb_params, "scale_pos_weight": scale_pos_weight}
     lgb_model = lgb.LGBMClassifier(**lgb_params_final)
     lgb_model.fit(X_tree_train, y_train)
     lgb_metrics = evaluate_model(lgb_model, X_tree_test, y_test, "LightGBM")
     lgb_gini: float = float(lgb_metrics["Gini"])
 
-    # --- Train XGBoost base model (on X_tree) ---
     xgb_params_final = {**xgb_params, "scale_pos_weight": scale_pos_weight}
     xgb_model = xgb.XGBClassifier(**xgb_params_final)
     xgb_model.fit(X_tree_train, y_train)
     xgb_metrics = evaluate_model(xgb_model, X_tree_test, y_test, "XGBoost")
     xgb_gini: float = float(xgb_metrics["Gini"])
 
-    # --- Train stacked ensemble on original X/y (train_ensemble does its own internal split) ---
-    # Meta-learner always receives X (WoE features for logistic regression)
     ensemble_model, ensemble_metrics = train_ensemble(
         X, y, lgb_params=lgb_params, xgb_params=xgb_params, method=method
     )
@@ -1922,6 +2118,80 @@ class _LogisticEnsemble:
         p_lgb = self.lgb_model.predict_proba(X)[:, 1]
         p_xgb = self.xgb_model.predict_proba(X)[:, 1]
         X_meta = np.column_stack([p_lgb, p_xgb])
+        return self.meta_lr.predict_proba(X_meta)
+
+
+class _AverageEnsemble3:
+    """Simple probability average of three fitted estimators (LGB + XGB + CatBoost)."""
+
+    def __init__(self, lgb_model: object, xgb_model: object, cat_model: object):
+        """Initialize with pre-fitted base models."""
+        self.lgb_model = lgb_model
+        self.xgb_model = xgb_model
+        self.cat_model = cat_model
+
+    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        """
+        Predict class probabilities via simple averaging of three base models.
+
+        Parameters
+        ----------
+        X : pd.DataFrame
+            Feature matrix.
+
+        Returns
+        -------
+        proba : np.ndarray
+            Shape (n_samples, 2) with columns [P(y=0), P(y=1)].
+        """
+        p_lgb = self.lgb_model.predict_proba(X)[:, 1]
+        p_xgb = self.xgb_model.predict_proba(X)[:, 1]
+        X_np = X.to_numpy() if isinstance(X, pd.DataFrame) else X
+        p_cat = self.cat_model.predict_proba(X_np)[:, 1]
+        avg = (p_lgb + p_xgb + p_cat) / 3.0
+        return np.column_stack([1 - avg, avg])
+
+
+class _LogisticEnsemble3:
+    """
+    Stacked ensemble with logistic meta-learner — 3 base models (LGB + XGB + CatBoost).
+
+    Meta-learner trained on np.column_stack([oof_lgb, oof_xgb, oof_cat]) with L2
+    regularisation (C=1.0).
+    """
+
+    def __init__(
+        self,
+        lgb_model: object,
+        xgb_model: object,
+        cat_model: object,
+        meta_lr: LogisticRegression,
+    ):
+        """Initialize with pre-fitted base models and meta-learner."""
+        self.lgb_model = lgb_model
+        self.xgb_model = xgb_model
+        self.cat_model = cat_model
+        self.meta_lr = meta_lr
+
+    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        """
+        Predict class probabilities via stacked logistic meta-learner (3 inputs).
+
+        Parameters
+        ----------
+        X : pd.DataFrame
+            Feature matrix.
+
+        Returns
+        -------
+        proba : np.ndarray
+            Shape (n_samples, 2) with columns [P(y=0), P(y=1)].
+        """
+        p_lgb = self.lgb_model.predict_proba(X)[:, 1]
+        p_xgb = self.xgb_model.predict_proba(X)[:, 1]
+        X_np = X.to_numpy() if isinstance(X, pd.DataFrame) else X
+        p_cat = self.cat_model.predict_proba(X_np)[:, 1]
+        X_meta = np.column_stack([p_lgb, p_xgb, p_cat])
         return self.meta_lr.predict_proba(X_meta)
 
 
