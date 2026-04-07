@@ -237,6 +237,16 @@ All phases are strictly sequential — each builds on prior phase outputs.
 | Phase 05.2 — Streamlit dashboard | 🔲 Not started | E2E flow works |
 | Phase 06 — LaTeX report | 🔲 Not started | PDF compiles |
 
+### Phase 1: fix project-wide infrastructure issues — credit_engine alias, feature store path safety, test isolation
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 0
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 1 to break down)
+
 ---
 *Roadmap created: 2026-04-07*
 *Plans added: 2026-04-07*
