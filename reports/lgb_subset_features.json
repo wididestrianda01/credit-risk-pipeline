@@ -1,0 +1,156 @@
+{
+  "method": "gain_importance_from_lightgbm_combined_full",
+  "n_selected": 30,
+  "features": [
+    {
+      "name": "EXT_SOURCE_MEDIAN",
+      "gain": 5.0,
+      "rank": 1
+    },
+    {
+      "name": "EXT_SOURCE_PROD_23",
+      "gain": 4.0,
+      "rank": 2
+    },
+    {
+      "name": "EXT_SOURCE_STD",
+      "gain": 4.0,
+      "rank": 3
+    },
+    {
+      "name": "AGE_YEARS",
+      "gain": 3.0,
+      "rank": 4
+    },
+    {
+      "name": "prev_credit_to_app_ratio_mean",
+      "gain": 3.0,
+      "rank": 5
+    },
+    {
+      "name": "inst_late_dpd_ratio",
+      "gain": 2.0,
+      "rank": 6
+    },
+    {
+      "name": "EXT_SOURCE_PROD_12",
+      "gain": 1.0,
+      "rank": 7
+    },
+    {
+      "name": "EXT_SOURCE_3",
+      "gain": 1.0,
+      "rank": 8
+    },
+    {
+      "name": "EXT_SOURCE_1",
+      "gain": 1.0,
+      "rank": 9
+    },
+    {
+      "name": "CREDIT_TERM",
+      "gain": 1.0,
+      "rank": 10
+    },
+    {
+      "name": "prev_days_decision_mean",
+      "gain": 1.0,
+      "rank": 11
+    },
+    {
+      "name": "prev_refused_cnt",
+      "gain": 1.0,
+      "rank": 12
+    },
+    {
+      "name": "prev_days_decision_min",
+      "gain": 1.0,
+      "rank": 13
+    },
+    {
+      "name": "cc_atm_drawing_mean",
+      "gain": 1.0,
+      "rank": 14
+    },
+    {
+      "name": "AMT_ANNUITY",
+      "gain": 1.0,
+      "rank": 15
+    },
+    {
+      "name": "bureau_max_overdue_amt",
+      "gain": 1.0,
+      "rank": 16
+    },
+    {
+      "name": "EXT_SCORE_FLOOR",
+      "gain": 0.0,
+      "rank": 17
+    },
+    {
+      "name": "EXT_SOURCE_MAX",
+      "gain": 0.0,
+      "rank": 18
+    },
+    {
+      "name": "EXT_SOURCE_2",
+      "gain": 0.0,
+      "rank": 19
+    },
+    {
+      "name": "EXT_SOURCE_RATIO_23",
+      "gain": 0.0,
+      "rank": 20
+    },
+    {
+      "name": "EXT_SOURCE_RATIO_12",
+      "gain": 0.0,
+      "rank": 21
+    },
+    {
+      "name": "bureau_days_credit_mean",
+      "gain": 0.0,
+      "rank": 22
+    },
+    {
+      "name": "DAYS_EMPLOYED",
+      "gain": 0.0,
+      "rank": 23
+    },
+    {
+      "name": "YEARS_EMPLOYED",
+      "gain": 0.0,
+      "rank": 24
+    },
+    {
+      "name": "AMT_GOODS_PRICE",
+      "gain": 0.0,
+      "rank": 25
+    },
+    {
+      "name": "bureau_days_credit_max",
+      "gain": 0.0,
+      "rank": 26
+    },
+    {
+      "name": "bureau_days_credit_min",
+      "gain": 0.0,
+      "rank": 27
+    },
+    {
+      "name": "inst_months_since_last_late",
+      "gain": 0.0,
+      "rank": 28
+    },
+    {
+      "name": "bureau_debt_ratio",
+      "gain": 0.0,
+      "rank": 29
+    },
+    {
+      "name": "cc_utilization_mean",
+      "gain": 0.0,
+      "rank": 30
+    }
+  ]
+}

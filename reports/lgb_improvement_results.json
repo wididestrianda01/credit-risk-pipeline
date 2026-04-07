@@ -12,5 +12,18 @@
     "test_set_size": 61503,
     "feature_count": 63,
     "timestamp": "2026-04-07T07:11:22.368539"
+  },
+  "subset_store_result": {
+    "model": "lightgbm_combined_subset",
+    "n_trials": 50,
+    "n_features": 30,
+    "gini": 0.4263838093795842,
+    "auc": 0.7131919046897921,
+    "ks": 0.3315927827168403,
+    "brier_skill": 0.010045733702808035,
+    "gini_delta_vs_full": -0.009804063016088493,
+    "num_leaves": 188,
+    "learning_rate": 0.04757848081684632,
+    "n_estimators": 932
   }
 }
