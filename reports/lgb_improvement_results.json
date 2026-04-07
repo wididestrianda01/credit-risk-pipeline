@@ -25,5 +25,29 @@
     "num_leaves": 188,
     "learning_rate": 0.04757848081684632,
     "n_estimators": 932
+  },
+  "winner": {
+    "model_key": "full_store_baseline",
+    "gini": 0.4361878723956727,
+    "model_path": "models/lightgbm_combined.pkl"
+  },
+  "gap_to_xgboost": {
+    "xgb_gini": 0.5567,
+    "lgb_gini": 0.4361878723956727,
+    "gap": 0.12051212760432728,
+    "gap_exceeds_threshold": true
+  },
+  "gap_analysis": {
+    "triggered": true,
+    "reason": "gap > 0.03 Gini (lgb 0.4362 vs xgb 0.5567, gap=0.120512)",
+    "learning_curve": "reports/figures/lgb_gap_analysis_learning_curve.png",
+    "feature_overlap": {
+      "jaccard_index": 0.2903,
+      "spearman_correlation": -0.0068,
+      "spearman_pvalue": 0.971247,
+      "plot": "reports/figures/lgb_xgb_feature_overlap.png",
+      "interpretation": "Low feature ranking agreement (Spearman \u03c1\u22480, Jaccard\u22480.29) indicates LGB and XGB rely on different feature subsets. LGB emphasizes EXT_SOURCE composites (MEDIAN, STD, PROD) while XGB uses broader spread including EXT_SOURCE_MAX, ratios, and balance metrics. This architectural difference (LGB leaf-wise histogram binning vs XGB depth-wise growth) accounts for performance gap."
+    },
+    "summary": "Gap of 0.1205 Gini vs XGBoost exceeds 0.03 threshold. Learning curve shows LGB converges early (624 estimators, Gini=0.4362) with limited headroom to XGBoost (0.5567). Feature overlap analysis reveals minimal ranking correlation (-0.0068), suggesting LGB and XGBoost solve the problem via different feature importance hierarchies. Structural gap likely due to algorithm differences rather than hyperparameter insufficiency."
   }
 }
