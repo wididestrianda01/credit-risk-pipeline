@@ -1,6 +1,7 @@
 """conftest.py — adds repo root to sys.path and exposes src/ as credit_engine."""
 
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -94,3 +95,53 @@ def baseline_X_raw() -> pd.DataFrame:
         X.loc[missing_mask, "raw_feature_0"] = -999.0
 
     return X
+
+
+# ---------------------------------------------------------------------------
+# Session-Scoped Fixtures: Test Data Isolation
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def mock_data_dir() -> Path:
+    """
+    Session-scoped temporary directory for test feature store writes.
+
+    Provides a temporary directory that tests can pass to feature store functions
+    via the `output_dir` parameter. This directory is automatically deleted after
+    the test session completes.
+
+    Yields
+    ------
+    Path
+        Absolute path to a temporary directory with data/processed/ and models/ subdirectories.
+
+    Usage
+    -----
+    In a test function:
+
+        def test_build_features(mock_data_dir):
+            X = pd.DataFrame({"A": [1, 2, 3]})
+            y = pd.Series([0, 1, 0])
+            X_out, _ = build_feature_store(X, y, output_dir=mock_data_dir / "data" / "processed")
+            assert (mock_data_dir / "data" / "processed" / "X_features.parquet").exists()
+    """
+    with tempfile.TemporaryDirectory(prefix="test_credit_engine_") as tmpdir:
+        tmppath = Path(tmpdir)
+        # Pre-create subdirectories expected by feature store functions
+        (tmppath / "data" / "processed").mkdir(parents=True, exist_ok=True)
+        (tmppath / "models").mkdir(parents=True, exist_ok=True)
+        yield tmppath
+
+
+@pytest.fixture(scope="session")
+def mock_data_subdir(mock_data_dir: Path) -> Path:
+    """
+    Shortcut fixture that returns the data/processed/ subdirectory of mock_data_dir.
+
+    Useful when a test wants to pass the data/ directory directly:
+
+        def test_something(mock_data_subdir):
+            X_out, _ = build_feature_store(X, y, output_dir=mock_data_subdir)
+    """
+    return mock_data_dir / "data" / "processed"
