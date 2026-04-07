@@ -1,0 +1,82 @@
+{
+  "evaluation_date": "2026-04-07",
+  "test_split": {
+    "combined_train_size": 246008,
+    "combined_test_size": 61503,
+    "woe_test_size": 61503,
+    "random_state": 42,
+    "stratified": true,
+    "test_size_fraction": 0.2
+  },
+  "models": {
+    "LR": {
+      "path": "models/logistic_baseline.pkl",
+      "feature_set": "77 WoE-encoded (legacy benchmark \u2014 D-03 exception)",
+      "calibrated": false,
+      "n_features": 77
+    },
+    "LGB": {
+      "path": "models/lightgbm_combined.pkl",
+      "feature_set": "63 raw continuous",
+      "calibrated": false,
+      "n_features": 63
+    },
+    "XGB": {
+      "path": "models/xgboost_combined_calibrated.pkl",
+      "feature_set": "63 raw continuous",
+      "calibrated": true,
+      "calibration_method": "Platt (sigmoid, FrozenEstimator)",
+      "n_features": 63
+    },
+    "CatBoost": {
+      "path": "models/catboost_combined_calibrated.pkl",
+      "feature_set": "63 raw continuous (4 categorical native: CODE_GENDER, NAME_EDUCATION_TYPE, NAME_INCOME_TYPE, ORGANIZATION_TYPE)",
+      "calibrated": true,
+      "calibration_method": "Platt (sigmoid, FrozenEstimator)",
+      "n_features": 63
+    }
+  },
+  "metrics_per_model": {
+    "LR": {
+      "Model": "Logistic Regression",
+      "AUC-ROC": 0.7588309506885672,
+      "Gini": 0.5176619013771344,
+      "KS": 0.38910641496738446,
+      "Brier": 0.06789118189001843,
+      "BrierSkill": 0.08515761891249207,
+      "AvgPrecision": 0.24116698138151255
+    },
+    "LGB": {
+      "Model": "LightGBM",
+      "AUC-ROC": 0.7180939361978363,
+      "Gini": 0.4361878723956727,
+      "KS": 0.33089350167291165,
+      "Brier": 0.0734517881191387,
+      "BrierSkill": 0.010227736984978586,
+      "AvgPrecision": 0.17634319809286925
+    },
+    "XGB": {
+      "Model": "XGBoost",
+      "AUC-ROC": 0.7676376807520697,
+      "Gini": 0.5352753615041395,
+      "KS": 0.4017602790797388,
+      "Brier": 0.0673717005390874,
+      "BrierSkill": 0.0921576967250447,
+      "AvgPrecision": 0.2602002818635075
+    },
+    "CatBoost": {
+      "Model": "CatBoost",
+      "AUC-ROC": 0.7722921784694211,
+      "Gini": 0.5445843569388422,
+      "KS": 0.40648524602708186,
+      "Brier": 0.06688860009823544,
+      "BrierSkill": 0.09866753710946163,
+      "AvgPrecision": 0.2721736108285787
+    }
+  },
+  "best_model": "CatBoost",
+  "best_gini": 0.5445843569388422,
+  "gini_target": 0.6,
+  "gap_to_target": 0.05541564306115776,
+  "note_lr_legacy": "LR trained on 77 WoE-encoded features (legacy benchmark). All other models trained on 63 raw continuous features (X_combined). LR not retrained per D-03 planning decision; enters comparison table as an interpretable IRB-compatible benchmark using a different test split. Gini values are not directly comparable to LGB/XGB/CatBoost for D-01 models."
+}
