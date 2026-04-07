@@ -320,6 +320,25 @@ _XGB_RAW_REG_LAMBDA_MAX: float = 10.0
 # Optuna study persistence constants
 _OPTUNA_DB_PATH: str = "models/optuna_studies.db"
 
+# Optuna Studies Database Metadata
+# ============================================================================
+# Storage: SQLite database at models/optuna_studies.db
+# Purpose: Non-regression HPO continuation for XGBoost, LightGBM, CatBoost
+#
+# Studies:
+#   - lightgbm_extended_study: LightGBM Optuna trials (maximize AUC)
+#   - catboost_extended_study: CatBoost Optuna trials (maximize AUC)
+#   - xgboost_extended_study: XGBoost Optuna trials (maximize AUC)
+#
+# Non-Regression Protocol:
+#   1. All studies persist from Phase 04.1 onward
+#   2. XGBoost study seeded with trial 0 from Phase 04.1 best params
+#   3. Subsequent trials must beat or tie seed trial baseline (non-regression)
+#   4. DO NOT delete or restart studies — continuation only
+#   5. If a study reaches completion status, call load_study(..., load_if_exists=True)
+#    to resume from where it left off
+# ============================================================================
+
 
 # ---------------------------------------------------------------------------
 # _AverageEnsemble — simple probability average of two base models
