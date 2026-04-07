@@ -188,8 +188,8 @@ _CAT_BAGGING_TEMP_MAX: float = 1.0
 _CAT_RANDOM_STRENGTH_MIN: float = 0.0
 _CAT_RANDOM_STRENGTH_MAX: float = 1.0
 _CAT_BOOTSTRAP_TYPE: str = "Bayesian"   # bagging_temperature only valid with Bayesian bootstrap
-_CAT_OPTUNA_N_TRIALS: int = 50
-_CAT_MODEL_PATH: str = "models/catboost_best.pkl"
+_CAT_OPTUNA_N_TRIALS: int = 100
+_CAT_MODEL_PATH: str = "models/catboost_combined.pkl"
 _CAT_PARAMS_PATH: str = "models/catboost_params.json"
 _CAT_FIGURE_PATH: str = "reports/figures/catboost_roc_pr.png"
 # Raw categorical column names that CatBoost can consume natively.

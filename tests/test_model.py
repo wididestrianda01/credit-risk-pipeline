@@ -2236,3 +2236,45 @@ class TestCombinedStore:
         assert (
             X_combined.shape[0] == y.shape[0]
         ), f"Row mismatch: X_combined has {X_combined.shape[0]} rows, y has {y.shape[0]} rows"
+
+
+class TestComparisonTable:
+    """4-model comparison table: LR, LGB, XGB, CatBoost."""
+
+    @pytest.mark.skip(reason="MISSING — Plan 02 implementation pending")
+    def test_load_all_four_models(self):
+        """Load all four trained models and verify they exist."""
+        pass
+
+    @pytest.mark.skip(reason="MISSING — Plan 02 implementation pending")
+    def test_comparison_metrics_match(self):
+        """Evaluate all models on identical test set and aggregate metrics."""
+        pass
+
+
+class TestEnsemble3Model:
+    """3-model OOF ensemble: LGB + XGB + CatBoost."""
+
+    @pytest.mark.skip(reason="MISSING — Plan 03 implementation pending")
+    def test_train_ensemble_3model_logistic(self):
+        """Train 3-model ensemble with logistic meta-learner."""
+        pass
+
+    @pytest.mark.skip(reason="MISSING — Plan 03 implementation pending")
+    def test_train_ensemble_3model_persist_gate(self):
+        """Persist ensemble if improvement ≥ 0.005 Gini."""
+        pass
+
+
+class TestGini060Gate:
+    """Gini ≥ 0.60 validation gate."""
+
+    @pytest.mark.skip(reason="MISSING — Plan 04 implementation pending")
+    def test_gini_gate_evaluate(self):
+        """Verify final model evaluation metrics recorded."""
+        pass
+
+    @pytest.mark.skip(reason="MISSING — Plan 04 implementation pending")
+    def test_gini_gate_trigger_phase_45(self):
+        """Record Phase 4.5 decision if Gini < 0.60."""
+        pass
