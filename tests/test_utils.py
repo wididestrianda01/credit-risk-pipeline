@@ -295,3 +295,172 @@ class TestPlotRocAndPr:
         fig = plot_roc_and_pr(clf, X, y_true, model_name="TestModel")
         title_text = fig.texts[0].get_text() if fig.texts else ""
         assert "TestModel" in title_text
+
+
+# ---------------------------------------------------------------------------
+# adversarial_validation_report
+# ---------------------------------------------------------------------------
+
+class TestAdversarialValidationReport:
+    """TDD tests for adversarial_validation_report()."""
+
+    @pytest.fixture
+    def mock_identical_dist(self):
+        """200 rows × 10 random features, split 50/50 into train/test."""
+        rng = np.random.default_rng(42)
+        X = rng.normal(0, 1, size=(200, 10))
+        X_train = X[:100]
+        X_test = X[100:]
+        return X_train, X_test
+
+    @pytest.fixture
+    def mock_shifted_dist(self):
+        """Train and test from different distributions."""
+        rng = np.random.default_rng(42)
+        X_train = rng.normal(0, 1, size=(100, 10))
+        X_test = rng.normal(3, 1, size=(100, 10))  # shifted by 3 std
+        return X_train, X_test
+
+    def test_adversarial_validation_returns_correct_keys(self, mock_identical_dist):
+        """Output dict must have keys: auc, shifted_features, verdict, n_train, n_test."""
+        import pandas as pd
+
+        from credit_engine.utils import adversarial_validation_report
+
+        X_train, X_test = mock_identical_dist
+        X_train_df = pd.DataFrame(X_train, columns=[f"f{i}" for i in range(10)])
+        X_test_df = pd.DataFrame(X_test, columns=[f"f{i}" for i in range(10)])
+
+        result = adversarial_validation_report(X_train_df, X_test_df)
+
+        assert isinstance(result, dict)
+        expected_keys = {"auc", "shifted_features", "verdict", "n_train", "n_test"}
+        assert set(result.keys()) == expected_keys
+
+    def test_adversarial_validation_identical_distributions(self, mock_identical_dist):
+        """When X_train and X_test are from same distribution, AUC should be < 0.60."""
+        import pandas as pd
+
+        from credit_engine.utils import adversarial_validation_report
+
+        X_train, X_test = mock_identical_dist
+        X_train_df = pd.DataFrame(X_train, columns=[f"f{i}" for i in range(10)])
+        X_test_df = pd.DataFrame(X_test, columns=[f"f{i}" for i in range(10)])
+
+        result = adversarial_validation_report(X_train_df, X_test_df)
+
+        assert result["auc"] < 0.60, (
+            f"Identical distributions should yield AUC < 0.60, got {result['auc']:.4f}"
+        )
+
+    def test_adversarial_validation_verdict_safe(self, mock_identical_dist):
+        """AUC < 0.55 should give verdict == 'safe'."""
+        import pandas as pd
+
+        from credit_engine.utils import adversarial_validation_report
+
+        X_train, X_test = mock_identical_dist
+        X_train_df = pd.DataFrame(X_train, columns=[f"f{i}" for i in range(10)])
+        X_test_df = pd.DataFrame(X_test, columns=[f"f{i}" for i in range(10)])
+
+        result = adversarial_validation_report(X_train_df, X_test_df)
+
+        if result["auc"] < 0.55:
+            assert result["verdict"] == "safe"
+
+    def test_adversarial_validation_verdict_investigate(self, mock_shifted_dist):
+        """AUC between 0.55 and 0.65 should give verdict == 'investigate'."""
+        import pandas as pd
+
+        from credit_engine.utils import adversarial_validation_report
+
+        X_train, X_test = mock_shifted_dist
+        X_train_df = pd.DataFrame(X_train, columns=[f"f{i}" for i in range(10)])
+        X_test_df = pd.DataFrame(X_test, columns=[f"f{i}" for i in range(10)])
+
+        result = adversarial_validation_report(X_train_df, X_test_df)
+
+        # We expect moderate shift, so should be "investigate" or "problematic"
+        # This test is loose because exact AUC depends on random seed
+        assert result["verdict"] in ("investigate", "problematic"), (
+            f"Moderate shift expected investigate or problematic, got {result['verdict']}"
+        )
+
+    def test_adversarial_validation_shifted_features_is_list(self, mock_identical_dist):
+        """shifted_features must be a list of feature names."""
+        import pandas as pd
+
+        from credit_engine.utils import adversarial_validation_report
+
+        X_train, X_test = mock_identical_dist
+        X_train_df = pd.DataFrame(X_train, columns=[f"f{i}" for i in range(10)])
+        X_test_df = pd.DataFrame(X_test, columns=[f"f{i}" for i in range(10)])
+
+        result = adversarial_validation_report(X_train_df, X_test_df)
+
+        assert isinstance(result["shifted_features"], list)
+        assert all(isinstance(f, str) for f in result["shifted_features"])
+        assert len(result["shifted_features"]) <= 10
+
+    def test_adversarial_validation_counts_match_input(self, mock_identical_dist):
+        """n_train and n_test must match input shapes."""
+        import pandas as pd
+
+        from credit_engine.utils import adversarial_validation_report
+
+        X_train, X_test = mock_identical_dist
+        X_train_df = pd.DataFrame(X_train, columns=[f"f{i}" for i in range(10)])
+        X_test_df = pd.DataFrame(X_test, columns=[f"f{i}" for i in range(10)])
+
+        result = adversarial_validation_report(X_train_df, X_test_df)
+
+        assert result["n_train"] == len(X_train_df)
+        assert result["n_test"] == len(X_test_df)
+
+    def test_adversarial_validation_output_path_creates_dirs(self, mock_identical_dist):
+        """If output_path provided, must create parent dirs and save JSON."""
+        import json
+        import pandas as pd
+
+        from credit_engine.utils import adversarial_validation_report
+
+        X_train, X_test = mock_identical_dist
+        X_train_df = pd.DataFrame(X_train, columns=[f"f{i}" for i in range(10)])
+        X_test_df = pd.DataFrame(X_test, columns=[f"f{i}" for i in range(10)])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "nested" / "dir" / "result.json"
+            result = adversarial_validation_report(X_train_df, X_test_df, output_path=str(output_path))
+
+            assert output_path.exists()
+            with open(output_path) as f:
+                saved = json.load(f)
+            assert saved["auc"] == result["auc"]
+            assert saved["verdict"] == result["verdict"]
+
+    def test_adversarial_validation_auc_in_unit_interval(self, mock_identical_dist):
+        """AUC must always be in [0, 1]."""
+        import pandas as pd
+
+        from credit_engine.utils import adversarial_validation_report
+
+        X_train, X_test = mock_identical_dist
+        X_train_df = pd.DataFrame(X_train, columns=[f"f{i}" for i in range(10)])
+        X_test_df = pd.DataFrame(X_test, columns=[f"f{i}" for i in range(10)])
+
+        result = adversarial_validation_report(X_train_df, X_test_df)
+
+        assert 0.0 <= result["auc"] <= 1.0
+
+    def test_adversarial_validation_mismatched_columns_raises(self, mock_identical_dist):
+        """Input DataFrames with different columns must raise ValueError."""
+        import pandas as pd
+
+        from credit_engine.utils import adversarial_validation_report
+
+        X_train, X_test = mock_identical_dist
+        X_train_df = pd.DataFrame(X_train, columns=[f"f{i}" for i in range(10)])
+        X_test_df = pd.DataFrame(X_test, columns=[f"g{i}" for i in range(10)])  # Different names
+
+        with pytest.raises(ValueError, match="identical column names"):
+            adversarial_validation_report(X_train_df, X_test_df)

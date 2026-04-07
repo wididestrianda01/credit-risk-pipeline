@@ -25,10 +25,13 @@ Gini > 0.75: target for this pipeline
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+import lightgbm as lgb
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from scipy.stats import ks_2samp
 from sklearn.metrics import (
     average_precision_score,
@@ -37,6 +40,7 @@ from sklearn.metrics import (
     roc_auc_score,
     roc_curve,
 )
+from sklearn.model_selection import StratifiedKFold
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -47,6 +51,10 @@ _KS_STRONG: float = 0.40  # KS ≥ this: strong separation (Basel III benchmark)
 _PLOT_FIGSIZE: tuple[int, int] = (12, 5)
 _PLOT_DPI: int = 300
 _PREVALENCE_LABEL: str = "Baseline (prevalence)"
+
+# Adversarial validation thresholds
+_ADV_SAFE_THRESHOLD: float = 0.55      # AUC < this: distributions are safe
+_ADV_PROBLEMATIC_THRESHOLD: float = 0.65  # AUC >= this: distributions differ significantly
 
 
 # ---------------------------------------------------------------------------
@@ -333,6 +341,174 @@ def plot_roc_and_pr(
         fig.savefig(save_path, dpi=_PLOT_DPI, bbox_inches="tight")
 
     return fig
+
+
+# ---------------------------------------------------------------------------
+# Adversarial Validation
+# ---------------------------------------------------------------------------
+
+def adversarial_validation_report(
+    X_train: pd.DataFrame,
+    X_test: pd.DataFrame,
+    output_path: str | None = None,
+    n_top_features: int = 10,
+) -> dict:
+    """
+    Train a LightGBM classifier to separate train from test rows.
+
+    The adversarial validation procedure detects distribution shift or data leakage
+    by training a binary classifier to distinguish training rows (label=0) from
+    test rows (label=1). AUC close to 0.5 indicates similar distributions (safe).
+    AUC > 0.65 indicates significant differences (investigate for leakage or shift).
+
+    This is a standard diagnostic in ML competitions and production monitoring:
+    it reveals whether the train/test split preserves the underlying feature
+    distributions, or if temporal drift, leakage, or synthetic/external test data
+    has altered the feature landscape.
+
+    Parameters
+    ----------
+    X_train : pd.DataFrame
+        Training feature matrix (n_train rows, d columns).
+    X_test : pd.DataFrame
+        Test feature matrix (n_test rows, d columns). Must have identical
+        column names and dtypes as X_train.
+    output_path : str | None, optional
+        If provided, save the results dict as JSON to this path.
+        Parent directories are created automatically if missing.
+    n_top_features : int, optional
+        Number of top shifted features (by LGB importance) to return.
+        Default: 10.
+
+    Returns
+    -------
+    dict
+        Keys:
+        - ``auc`` : float — Mean 5-fold cross-validation AUC of the train vs test
+          classifier. Range: [0, 1]. Values near 0.5 indicate safe (similar)
+          distributions; values > 0.65 indicate potential leakage or shift.
+        - ``shifted_features`` : list[str] — Top N feature names ranked by
+          feature_importances_ from a model trained on the full combined dataset.
+        - ``verdict`` : str — One of: "safe" (AUC < 0.55), "investigate"
+          (0.55 <= AUC < 0.65), "problematic" (AUC >= 0.65).
+        - ``n_train`` : int — Number of training rows.
+        - ``n_test`` : int — Number of test rows.
+
+    Notes
+    -----
+    **Implementation:**
+    1. Combine X_train (label 0) and X_test (label 1) into a single DataFrame.
+    2. Train a lightweight LightGBM classifier: 100 estimators, 31 leaves,
+       learning rate 0.05, random seed 42.
+    3. Compute mean AUC via 5-fold stratified cross-validation.
+    4. Train a final model on the full dataset to extract feature importance.
+    5. Determine verdict based on AUC thresholds (see Parameters).
+    6. If output_path is not None, save the results dict as JSON.
+
+    **Interpretation:**
+    - AUC ≈ 0.5: Train and test are indistinguishable; no shift detected.
+    - 0.55 ≤ AUC < 0.65: Moderate shift; investigate but not critical.
+    - AUC ≥ 0.65: Significant shift or leakage; requires investigation.
+
+    **Use cases:**
+    - Detect temporal drift in production models.
+    - Identify leakage in competition datasets.
+    - Validate that train/test splits preserve distribution (e.g., stratified
+      temporal split vs random split).
+    - Monitor whether retraining data differs from historical data.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> X_train = pd.DataFrame(np.random.randn(100, 5), columns=[f"f{i}" for i in range(5)])
+    >>> X_test = pd.DataFrame(np.random.randn(50, 5), columns=[f"f{i}" for i in range(5)])
+    >>> result = adversarial_validation_report(X_train, X_test)
+    >>> print(f"AUC: {result['auc']:.4f}, Verdict: {result['verdict']}")
+    """
+    # Validate input shapes and columns
+    if X_train.shape[1] != X_test.shape[1]:
+        raise ValueError(
+            f"X_train and X_test must have the same number of columns. "
+            f"Got {X_train.shape[1]} and {X_test.shape[1]}."
+        )
+    if not (X_train.columns == X_test.columns).all():
+        raise ValueError(
+            "X_train and X_test must have identical column names."
+        )
+
+    n_train = len(X_train)
+    n_test = len(X_test)
+
+    # Combine and create binary labels: 0 = train, 1 = test
+    X_combined = pd.concat([X_train, X_test], ignore_index=True)
+    y_combined = np.concatenate([np.zeros(n_train), np.ones(n_test)]).astype(int)
+
+    # --- 5-fold CV to estimate mean AUC ---
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    auc_scores = []
+
+    for train_idx, val_idx in skf.split(X_combined, y_combined):
+        X_train_fold = X_combined.iloc[train_idx]
+        X_val_fold = X_combined.iloc[val_idx]
+        y_train_fold = y_combined[train_idx]
+        y_val_fold = y_combined[val_idx]
+
+        # Train LGB on this fold
+        lgb_model = lgb.LGBMClassifier(
+            n_estimators=100,
+            num_leaves=31,
+            learning_rate=0.05,
+            random_state=42,
+            verbose=-1,
+        )
+        lgb_model.fit(X_train_fold, y_train_fold)
+
+        # Predict on validation fold and compute AUC
+        y_pred_proba = lgb_model.predict_proba(X_val_fold)[:, 1]
+        auc = roc_auc_score(y_val_fold, y_pred_proba)
+        auc_scores.append(auc)
+
+    mean_auc = float(np.mean(auc_scores))
+
+    # --- Train final model on full dataset for feature importance ---
+    lgb_final = lgb.LGBMClassifier(
+        n_estimators=100,
+        num_leaves=31,
+        learning_rate=0.05,
+        random_state=42,
+        verbose=-1,
+    )
+    lgb_final.fit(X_combined, y_combined)
+
+    # Get feature importances and select top N
+    importances = lgb_final.feature_importances_
+    top_indices = np.argsort(importances)[::-1][:n_top_features]
+    shifted_features = [X_combined.columns[i] for i in top_indices]
+
+    # Determine verdict based on AUC thresholds
+    if mean_auc < _ADV_SAFE_THRESHOLD:
+        verdict = "safe"
+    elif mean_auc < _ADV_PROBLEMATIC_THRESHOLD:
+        verdict = "investigate"
+    else:
+        verdict = "problematic"
+
+    result = {
+        "auc": mean_auc,
+        "shifted_features": shifted_features,
+        "verdict": verdict,
+        "n_train": n_train,
+        "n_test": n_test,
+    }
+
+    # Save to JSON if path provided
+    if output_path is not None:
+        output_path_obj = Path(output_path)
+        output_path_obj.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path_obj, "w") as f:
+            json.dump(result, f, indent=2)
+
+    return result
 
 
 # ---------------------------------------------------------------------------
