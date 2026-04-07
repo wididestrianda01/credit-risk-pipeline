@@ -1947,3 +1947,255 @@ class TestBuildTreeFeatureStore:
             "apply_raw_feature_store must return exact column list from build"
         )
         assert X_applied.shape[0] == X.shape[0], "Row count must be preserved in apply"
+
+
+# ---------------------------------------------------------------------------
+# Tests: engineer_time_features (Wave 2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def synthetic_bureau_tables(tmp_path) -> Path:
+    """
+    Create synthetic bureau and bureau_balance CSVs in a temporary directory.
+
+    Generates data for 10 unique SK_ID_CURR applicants with varying amounts of
+    secondary table data to exercise edge cases (0, 1, >1 rows per customer).
+
+    Returns
+    -------
+    Path
+        Temporary directory containing bureau.csv and bureau_balance.csv.
+    """
+    # Create bureau.csv
+    bureau_data = {
+        "SK_ID_CURR": [1001, 1001, 1002, 1003, 1003, 1004, 1005, 1005, 1005, 1006],
+        "SK_ID_BUREAU": [2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010],
+        "DAYS_CREDIT": [-365, -730, -180, -500, -1000, -90, -300, -600, -900, -200],
+        "CREDIT_ACTIVE": ["Active", "Closed", "Active", "Active", "Closed", "Active", "Active", "Closed", "Active", "Active"],
+    }
+    bureau_df = pd.DataFrame(bureau_data)
+    bureau_df.to_csv(tmp_path / "bureau.csv", index=False)
+
+    # Create bureau_balance.csv
+    bureau_balance_data = {
+        "SK_ID_BUREAU": [
+            # SK_ID_BUREAU 2001 (SK_ID_CURR 1001): 4 rows with STATUS ['0', '0', '1', '2']
+            2001, 2001, 2001, 2001,
+            # SK_ID_BUREAU 2002 (SK_ID_CURR 1001): 2 rows with STATUS ['C', '1']
+            2002, 2002,
+            # SK_ID_BUREAU 2003 (SK_ID_CURR 1002): 3 rows with STATUS ['0', '0', '0']
+            2003, 2003, 2003,
+            # SK_ID_BUREAU 2004 (SK_ID_CURR 1003): 2 rows with STATUS ['1', '1']
+            2004, 2004,
+            # SK_ID_BUREAU 2005 (SK_ID_CURR 1003): 1 row with STATUS ['0']
+            2005,
+            # SK_ID_BUREAU 2006 (SK_ID_CURR 1004): 3 rows with STATUS ['0', '0', '0']
+            2006, 2006, 2006,
+            # SK_ID_BUREAU 2007 (SK_ID_CURR 1005): 2 rows with STATUS ['2', '3']
+            2007, 2007,
+            # SK_ID_BUREAU 2008 (SK_ID_CURR 1005): 2 rows with STATUS ['0', '0']
+            2008, 2008,
+            # SK_ID_BUREAU 2009 (SK_ID_CURR 1005): 1 row with STATUS ['4']
+            2009,
+            # SK_ID_BUREAU 2010 (SK_ID_CURR 1006): 0 rows (applicant with no balance records)
+        ],
+        "MONTHS_BALANCE": [
+            # 2001: -1, -2, -3, -4
+            -1, -2, -3, -4,
+            # 2002: -1, -2
+            -1, -2,
+            # 2003: -1, -2, -3
+            -1, -2, -3,
+            # 2004: -1, -2
+            -1, -2,
+            # 2005: -1
+            -1,
+            # 2006: -1, -2, -3
+            -1, -2, -3,
+            # 2007: -1, -2
+            -1, -2,
+            # 2008: -1, -2
+            -1, -2,
+            # 2009: -1
+            -1,
+        ],
+        "STATUS": [
+            # 2001: 0, 0, 1, 2
+            "0", "0", "1", "2",
+            # 2002: C, 1
+            "C", "1",
+            # 2003: 0, 0, 0
+            "0", "0", "0",
+            # 2004: 1, 1
+            "1", "1",
+            # 2005: 0
+            "0",
+            # 2006: 0, 0, 0
+            "0", "0", "0",
+            # 2007: 2, 3
+            "2", "3",
+            # 2008: 0, 0
+            "0", "0",
+            # 2009: 4
+            "4",
+        ],
+    }
+    bureau_balance_df = pd.DataFrame(bureau_balance_data)
+    bureau_balance_df.to_csv(tmp_path / "bureau_balance.csv", index=False)
+
+    return tmp_path
+
+
+class TestEngineerTimeFeatures:
+    """Unit and integration tests for engineer_time_features function."""
+
+    def test_engineer_time_features_bbal_dpd_rate_3m(self, synthetic_bureau_tables):
+        """
+        Test that bbal_dpd_rate_3m is correctly calculated.
+
+        SK_ID_CURR 1001:
+          - Bureau 2001 (MONTHS_BALANCE: -1, -2, -3, -4; STATUS: 0, 0, 1, 2)
+            In 3m window (>= -3): rows at -1, -2, -3 have STATUS 0, 0, 1 → 1 DPD
+          - Bureau 2002 (MONTHS_BALANCE: -1, -2; STATUS: C, 1)
+            In 3m window (>= -3): 2 rows with STATUS C, 1 → 1 DPD
+          - Combined: 5 rows in 3m, 2 DPD → rate = 2/5 = 0.4
+
+        SK_ID_CURR 1002: all STATUS = 0 (clean) → rate = 0.0
+        SK_ID_CURR 1003: Bureau 2004 has 2 rows [-1, -2] with STATUS [1, 1] (both DPD),
+                         Bureau 2005 has 1 row [-1] with STATUS [0] (clean)
+                         → 3 rows in 3m, 2 DPD → rate = 2/3 ≈ 0.667
+        """
+        from credit_engine.features import engineer_time_features
+
+        result = engineer_time_features(synthetic_bureau_tables)
+
+        # SK_ID_CURR 1001: 5 rows in 3m, 2 DPD (STATUS 1, 2) → 2/5 = 0.4
+        assert result.loc[1001, "bbal_dpd_rate_3m"] == pytest.approx(0.4, abs=1e-3), (
+            f"SK_ID_CURR 1001: expected 0.4, got {result.loc[1001, 'bbal_dpd_rate_3m']}"
+        )
+
+        # SK_ID_CURR 1002: all STATUS = 0 → rate = 0.0
+        assert result.loc[1002, "bbal_dpd_rate_3m"] == pytest.approx(0.0, abs=1e-3)
+
+        # SK_ID_CURR 1003: 3 rows (2 DPD + 1 clean) → rate = 2/3 ≈ 0.667
+        assert result.loc[1003, "bbal_dpd_rate_3m"] == pytest.approx(2/3, abs=1e-3)
+
+    def test_engineer_time_features_bbal_months_since_last_dpd(self, synthetic_bureau_tables):
+        """
+        Test that bbal_months_since_last_dpd is correctly calculated.
+
+        The function finds the MIN(MONTHS_BALANCE) among all delinquent rows
+        (min because MONTHS_BALANCE is negative; min = oldest = most in the past),
+        then negates it to get "months ago".
+
+        SK_ID_CURR 1001:
+          - Bureau 2001 DPD: MONTHS_BALANCE [-3, -4] with STATUS [1, 2]
+          - Bureau 2002 DPD: MONTHS_BALANCE [-1] with STATUS [1]
+          - Min MONTHS_BALANCE = -4 → -(-4) = 4.0 months ago
+
+        SK_ID_CURR 1002: no DPD → -999 sentinel
+
+        SK_ID_CURR 1003:
+          - Bureau 2004 DPD: MONTHS_BALANCE [-1, -2] with STATUS [1, 1]
+          - Min MONTHS_BALANCE = -2 → -(-2) = 2.0 months ago
+        """
+        from credit_engine.features import engineer_time_features
+
+        result = engineer_time_features(synthetic_bureau_tables)
+
+        # SK_ID_CURR 1001: min DPD at -4 → 4.0 months ago
+        assert result.loc[1001, "bbal_months_since_last_dpd"] == pytest.approx(4.0, abs=1e-3)
+
+        # SK_ID_CURR 1002: no DPD → sentinel
+        assert result.loc[1002, "bbal_months_since_last_dpd"] == pytest.approx(-999.0, abs=1e-3)
+
+        # SK_ID_CURR 1003: min DPD at -2 → 2.0 months ago
+        assert result.loc[1003, "bbal_months_since_last_dpd"] == pytest.approx(2.0, abs=1e-3)
+
+    def test_engineer_time_features_bureau_credit_age_mean(self, synthetic_bureau_tables):
+        """
+        Test that bureau_credit_age_mean is correctly calculated in years.
+
+        The function converts DAYS_CREDIT to years using 365.25 as the divisor.
+
+        SK_ID_CURR 1001: DAYS_CREDIT = [-365, -730]
+          → ages = [365/365.25, 730/365.25] = [0.99932, 1.99863]
+          → mean ≈ 1.4989 years
+
+        SK_ID_CURR 1002: DAYS_CREDIT = [-180]
+          → age = 180/365.25 ≈ 0.4923 years
+
+        SK_ID_CURR 1006: DAYS_CREDIT = [-200]
+          → age = 200/365.25 ≈ 0.5475 years
+        """
+        from credit_engine.features import engineer_time_features
+
+        result = engineer_time_features(synthetic_bureau_tables)
+
+        # SK_ID_CURR 1001: mean of (365/365.25 + 730/365.25) / 2 ≈ 1.499
+        expected_1001 = (365.0 / 365.25 + 730.0 / 365.25) / 2.0
+        assert result.loc[1001, "bureau_credit_age_mean"] == pytest.approx(expected_1001, abs=1e-3)
+
+        # SK_ID_CURR 1002: 180 / 365.25 ≈ 0.492
+        assert result.loc[1002, "bureau_credit_age_mean"] == pytest.approx(180.0 / 365.25, abs=1e-3)
+
+        # SK_ID_CURR 1006: 200 / 365.25 ≈ 0.548
+        assert result.loc[1006, "bureau_credit_age_mean"] == pytest.approx(200.0 / 365.25, abs=1e-3)
+
+    def test_engineer_time_features_returns_dataframe(self, synthetic_bureau_tables):
+        """
+        Test that engineer_time_features returns the correct DataFrame structure.
+
+        Assert:
+        - Return type is pd.DataFrame
+        - Index name is "SK_ID_CURR"
+        - Exactly 3 columns
+        - No NaN values (all should be -999 sentinel)
+        - All columns are numeric
+        """
+        from credit_engine.features import engineer_time_features
+
+        result = engineer_time_features(synthetic_bureau_tables)
+
+        assert isinstance(result, pd.DataFrame)
+        assert result.index.name == "SK_ID_CURR"
+        assert result.shape[1] == 3, f"Expected 3 columns, got {result.shape[1]}"
+
+        # Check column names
+        expected_cols = {"bbal_dpd_rate_3m", "bbal_months_since_last_dpd", "bureau_credit_age_mean"}
+        assert set(result.columns) == expected_cols
+
+        # No NaN values
+        assert result.isna().sum().sum() == 0, "Should have no NaN values (use -999 sentinel)"
+
+        # All numeric
+        assert result.select_dtypes(include=[np.number]).shape[1] == 3, "All columns must be numeric"
+
+    def test_engineer_time_features_on_real_data(self):
+        """
+        Integration test: run engineer_time_features on real data if available.
+
+        Skips gracefully if data/bureau.csv not found.
+        """
+        from credit_engine.features import engineer_time_features
+
+        data_dir = Path("data")
+        if not (data_dir / "bureau.csv").exists() or not (data_dir / "bureau_balance.csv").exists():
+            pytest.skip("Real data files not found in data/ directory")
+
+        result = engineer_time_features(data_dir)
+
+        # Shape: rows should match unique SK_ID_CURR in bureau
+        assert result.shape[1] == 3, "Should have 3 columns"
+        assert result.shape[0] > 100, "Should have at least 100 applicants in real data"
+
+        # No NaN
+        assert result.isna().sum().sum() == 0, "No NaN values allowed"
+
+        # All numeric
+        assert result.select_dtypes(include=[np.number]).shape[1] == 3, "All numeric"
+
+        # Index is SK_ID_CURR
+        assert result.index.name == "SK_ID_CURR"
+        assert result.index.is_unique, "SK_ID_CURR should be unique index"
