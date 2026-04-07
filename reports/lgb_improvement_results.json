@@ -1,0 +1,16 @@
+{
+  "full_store_baseline": {
+    "model": "lightgbm_combined_full",
+    "n_trials": 10,
+    "gini": 0.4361878723956727,
+    "auc": 0.7180939361978363,
+    "ks": 0.33089350167291165,
+    "brier_skill": 0.010227736984978586,
+    "n_estimators": 624,
+    "num_leaves": 120,
+    "learning_rate": 0.09078848540867472,
+    "test_set_size": 61503,
+    "feature_count": 63,
+    "timestamp": "2026-04-07T07:11:22.368539"
+  }
+}
