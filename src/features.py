@@ -1577,6 +1577,117 @@ def apply_raw_feature_store(
     return X_out
 
 
+def engineer_time_features(data_dir: Path | str) -> pd.DataFrame:
+    """
+    Compute time-window features from raw secondary tables.
+
+    Generates 3 net-new features not already present in X_train.parquet:
+    - bbal_dpd_rate_3m: DPD rate in last 3 months (MONTHS_BALANCE >= -3)
+    - bbal_months_since_last_dpd: months since last delinquent status in bureau_balance
+    - bureau_credit_age_mean: average credit account age in years
+
+    Parameters
+    ----------
+    data_dir : Path | str
+        Directory containing bureau.csv and bureau_balance.csv (and installments_payments.csv
+        for potential future use).
+
+    Returns
+    -------
+    pd.DataFrame
+        Index = SK_ID_CURR; Columns = 3 features listed above.
+        Missing applicants (not in source tables) are filled with _NAN_SENTINEL (-999).
+
+    Notes
+    -----
+    Data loading: CSVs are loaded from data_dir; no use of load_data().
+    Missing handling: Applicants without records in source tables get -999 sentinel.
+    DPD status codes: In bureau_balance STATUS, values 1-5 indicate delinquency;
+    C, X, 0 are clean/closed/unknown.
+    """
+    data_dir = Path(data_dir)
+
+    # Load raw tables
+    bbal = pd.read_csv(data_dir / "bureau_balance.csv")
+    bureau = pd.read_csv(data_dir / "bureau.csv")
+
+    # -----------------------------------------------------------------------
+    # Feature 1: bbal_dpd_rate_3m
+    # DPD rate in last 3 months (MONTHS_BALANCE >= -3)
+    # -----------------------------------------------------------------------
+    # Create SK_ID_CURR mapping from bureau
+    bureau_map = bureau[["SK_ID_BUREAU", "SK_ID_CURR"]].drop_duplicates()
+    bbal_with_curr = bbal.merge(bureau_map, on="SK_ID_BUREAU", how="left")
+
+    # Filter to 3-month window
+    bbal_3m = bbal_with_curr[bbal_with_curr["MONTHS_BALANCE"] >= -3].copy()
+
+    # Mark delinquent statuses: STATUS in ['1', '2', '3', '4', '5']
+    bbal_3m["is_dpd"] = bbal_3m["STATUS"].isin(["1", "2", "3", "4", "5"]).astype(float)
+
+    # Compute rate: count(DPD) / count(all) per SK_ID_CURR
+    dpd_3m_counts = (
+        bbal_3m.groupby("SK_ID_CURR")["is_dpd"]
+        .agg(["sum", "count"])
+        .rename(columns={"sum": "dpd_count", "count": "total_count"})
+    )
+    dpd_3m_counts["bbal_dpd_rate_3m"] = (
+        dpd_3m_counts["dpd_count"] / dpd_3m_counts["total_count"]
+    )
+    bbal_dpd_rate_3m = dpd_3m_counts["bbal_dpd_rate_3m"]
+
+    # -----------------------------------------------------------------------
+    # Feature 2: bbal_months_since_last_dpd
+    # Months since last delinquent status in bureau_balance
+    # -----------------------------------------------------------------------
+    # Filter to rows with delinquent status
+    bbal_dpd = bbal_with_curr[
+        bbal_with_curr["STATUS"].isin(["1", "2", "3", "4", "5"])
+    ].copy()
+
+    # For each SK_ID_CURR, find the min(MONTHS_BALANCE) among delinquent rows
+    # (min because MONTHS_BALANCE is negative; min = most recent = closest to 0)
+    # Negate to get "months ago"
+    months_since_dpd = (
+        bbal_dpd.groupby("SK_ID_CURR")["MONTHS_BALANCE"]
+        .apply(lambda x: -x.min() if len(x) > 0 else np.nan)
+        .rename("bbal_months_since_last_dpd")
+    )
+
+    # -----------------------------------------------------------------------
+    # Feature 3: bureau_credit_age_mean
+    # Average credit account age in years (from DAYS_CREDIT)
+    # -----------------------------------------------------------------------
+    # DAYS_CREDIT is negative; convert to absolute value and scale to years
+    bureau_with_age = bureau.copy()
+    bureau_with_age["credit_age_years"] = np.abs(bureau_with_age["DAYS_CREDIT"]) / 365.25
+
+    # Compute mean age per SK_ID_CURR
+    bureau_credit_age_mean = bureau_with_age.groupby("SK_ID_CURR")[
+        "credit_age_years"
+    ].mean()
+    bureau_credit_age_mean = bureau_credit_age_mean.rename("bureau_credit_age_mean")
+
+    # -----------------------------------------------------------------------
+    # Combine into result DataFrame
+    # -----------------------------------------------------------------------
+    # Get all unique SK_ID_CURR from bureau (the master reference)
+    all_curr_ids = bureau["SK_ID_CURR"].unique()
+
+    # Create result DataFrame indexed by SK_ID_CURR
+    result = pd.DataFrame(index=pd.Index(all_curr_ids, name="SK_ID_CURR"))
+
+    # Assign features (will introduce NaN for missing applicants)
+    result["bbal_dpd_rate_3m"] = bbal_dpd_rate_3m
+    result["bbal_months_since_last_dpd"] = months_since_dpd
+    result["bureau_credit_age_mean"] = bureau_credit_age_mean
+
+    # Fill all NaN with sentinel value
+    result = result.fillna(_NAN_SENTINEL)
+
+    return result
+
+
 def compute_knn_target_encoding(
     X_train: pd.DataFrame,
     y_train: pd.Series,
