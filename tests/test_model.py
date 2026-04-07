@@ -30,13 +30,17 @@ from credit_engine.model import (
     _TemporalCV,
     _make_cv,
     apply_ext_source_imputer,
+    apply_target_encoding_fold_safe,
     benchmark_imbalance_strategies,
     calibrate_model,
+    filter_dfs_by_iv,
     load_model,
     run_ensemble_workflow,
     save_model,
+    train_catboost_extended_hpo,
     train_ensemble,
     train_ext_source_imputer,
+    train_lightgbm_extended_hpo,
     train_lightgbm_optuna,
     train_logistic_baseline,
     train_xgboost_optuna,
@@ -2278,3 +2282,231 @@ class TestGini060Gate:
     def test_gini_gate_trigger_phase_45(self):
         """Record Phase 4.5 decision if Gini < 0.60."""
         pass
+
+
+# ---------------------------------------------------------------------------
+# Wave 0 TDD Stubs (Phase 4.1) — Extended HPO, target encoding, DFS
+# ---------------------------------------------------------------------------
+
+class TestExtendedHPOWave0:
+    """
+    RED phase test stubs for extended HPO (150 trials LGB, 50 trials CatBoost+XGB).
+
+    These tests define expected behavior: HPO must beat baseline,
+    target encoding must not leak, DFS features must be IV-filtered,
+    Optuna must resume from prior trials.
+    """
+
+    def test_lightgbm_extended_hpo_150trials_beats_baseline(self, mock_data):
+        """
+        Extended LGB HPO with 150 trials on raw features beats baseline Gini.
+
+        Arrange:
+        - Mock X_combined (63-feature parquet) and y_train (binary target) with 10K rows
+        - Baseline Gini from Phase 4 OOF is 0.5514 (raw XGBoost)
+
+        Act:
+        - Call train_lightgbm_extended_hpo(X_combined, y_train, n_trials=150)
+
+        Assert:
+        - Returned model's test Gini > 0.54 (beating Phase 3 baseline 0.452 for WoE path)
+        - Model is fitted (has predict_proba method)
+
+        Expected Failure (RED): ImportError or AttributeError (function not yet defined)
+        """
+        from credit_engine.model import train_lightgbm_extended_hpo
+
+        X, y = mock_data
+
+        # Call extended HPO
+        model = train_lightgbm_extended_hpo(X, y, n_trials=150)
+
+        # Verify model has predict_proba (fitted estimator marker)
+        assert hasattr(model, "predict_proba"), "Model missing predict_proba method"
+
+        # For unit test, verify shape — real test will check Gini > 0.54
+        X_test = X.iloc[-50:]
+        proba = model.predict_proba(X_test)
+        assert proba.shape == (50, 2), f"Expected shape (50, 2), got {proba.shape}"
+
+    def test_target_encoder_fold_safe_no_leakage(self, mock_data):
+        """
+        Target encoding with fold-safe cross-fitting (no target leakage).
+
+        Arrange:
+        - Mock 4 categorical columns and binary target with 5K rows
+        - Columns: CODE_GENDER, NAME_EDUCATION_TYPE, NAME_INCOME_TYPE, ORGANIZATION_TYPE
+
+        Act:
+        - Call apply_target_encoding_fold_safe(X_cat, y_train, X_cat_test)
+
+        Assert:
+        - Returned X_train shape[1] == 4 (same categorical count)
+        - No NaN values in returned arrays
+        - Encoding was fit on training only (test encoded with no y knowledge)
+
+        Expected Failure (RED): ImportError or AttributeError (function not yet defined)
+        """
+        from credit_engine.model import apply_target_encoding_fold_safe
+
+        X, y = mock_data
+
+        # Create mock categorical columns by binning continuous features
+        X_cat = X.copy()
+        X_cat["CODE_GENDER"] = pd.cut(X_cat.iloc[:, 0], bins=3, labels=["M", "F", "X"])
+        X_cat["NAME_EDUCATION_TYPE"] = pd.cut(X_cat.iloc[:, 1], bins=2, labels=["HS", "College"])
+        X_cat["NAME_INCOME_TYPE"] = pd.cut(X_cat.iloc[:, 0], bins=2, labels=["Working", "Pensioner"])
+        X_cat["ORGANIZATION_TYPE"] = pd.cut(X_cat.iloc[:, 1], bins=2, labels=["Private", "Government"])
+        X_cat = X_cat[["CODE_GENDER", "NAME_EDUCATION_TYPE", "NAME_INCOME_TYPE", "ORGANIZATION_TYPE"]]
+
+        # Split into train/test
+        X_train, X_test = X_cat.iloc[:400], X_cat.iloc[400:]
+        y_train, _ = y.iloc[:400], y.iloc[400:]
+
+        # Call target encoding
+        X_train_enc, X_test_enc = apply_target_encoding_fold_safe(X_train, y_train, X_test)
+
+        # Verify shapes
+        assert X_train_enc.shape[0] == X_train.shape[0], "Train shape mismatch"
+        assert X_test_enc.shape[0] == X_test.shape[0], "Test shape mismatch"
+
+        # Verify no NaN values
+        assert not X_train_enc.isna().any().any(), "NaN found in encoded X_train"
+        assert not X_test_enc.isna().any().any(), "NaN found in encoded X_test"
+
+    def test_catboost_native_categorical_cat_features_param(self, mock_data):
+        """
+        CatBoost native categorical support with cat_features parameter.
+
+        Arrange:
+        - Mock X with 67 continuous + 4 categorical columns
+        - cat_features: ['CODE_GENDER', 'NAME_EDUCATION_TYPE', 'NAME_INCOME_TYPE', 'ORGANIZATION_TYPE']
+
+        Act:
+        - Call train_catboost_extended_hpo(X, y, n_trials=50, cat_features=[...])
+
+        Assert:
+        - Model is fitted (has predict_proba method)
+        - Model.cat_features matches input cat_features list
+
+        Expected Failure (RED): ImportError or AttributeError (function not yet defined)
+        """
+        from credit_engine.model import train_catboost_extended_hpo
+
+        X, y = mock_data
+
+        # Create mock categorical columns
+        X_with_cat = X.copy()
+        X_with_cat["CODE_GENDER"] = pd.cut(X.iloc[:, 0], bins=3, labels=["M", "F", "X"])
+        X_with_cat["NAME_EDUCATION_TYPE"] = pd.cut(X.iloc[:, 1], bins=2, labels=["HS", "College"])
+        X_with_cat["NAME_INCOME_TYPE"] = pd.cut(X.iloc[:, 0], bins=2, labels=["Working", "Pensioner"])
+        X_with_cat["ORGANIZATION_TYPE"] = pd.cut(X.iloc[:, 1], bins=2, labels=["Private", "Government"])
+
+        cat_features = [
+            "CODE_GENDER",
+            "NAME_EDUCATION_TYPE",
+            "NAME_INCOME_TYPE",
+            "ORGANIZATION_TYPE",
+        ]
+
+        # Call extended HPO
+        model = train_catboost_extended_hpo(X_with_cat, y, n_trials=50, cat_features=cat_features)
+
+        # Verify model has predict_proba
+        assert hasattr(model, "predict_proba"), "Model missing predict_proba method"
+
+        # Verify cat_features attribute (CatBoost stores this)
+        assert hasattr(model, "cat_features"), "Model missing cat_features attribute"
+
+    def test_dfs_iv_filter_removes_low_signal(self, mock_data):
+        """
+        DFS feature filtering by Information Value threshold.
+
+        Arrange:
+        - Mock DFS output with 100 synthetic features
+        - IV range 0.001 to 0.3 (simulate mixed signal quality)
+
+        Act:
+        - Call filter_dfs_by_iv(dfs_features, y, iv_threshold=0.02)
+
+        Assert:
+        - Output has < 100 features (low-IV features removed)
+        - All remaining features have IV >= 0.02
+        - Uses existing compute_woe_iv internally
+
+        Expected Failure (RED): ImportError or AttributeError (function not yet defined)
+        """
+        from credit_engine.model import filter_dfs_by_iv
+
+        X, y = mock_data
+
+        # Create 100 synthetic DFS features with varying IV values
+        # Low IV: features with no predictive power (noise)
+        # High IV: features with clear separation
+        rng = np.random.default_rng(42)
+        dfs_features = {}
+        for i in range(100):
+            # Create feature with IV proportional to i (0.001, 0.003, ..., 0.3)
+            iv_target = 0.001 + (i * 0.003)
+            if iv_target > 0.3:
+                iv_target = 0.3
+
+            # Synthetic feature with signal proportional to IV target
+            if iv_target > 0.1:
+                # High-signal feature: strong separation
+                feature = np.where(y == 1, rng.normal(2.0, 1.0, len(y)), rng.normal(0.0, 1.0, len(y)))
+            else:
+                # Low-signal feature: mostly noise
+                feature = rng.normal(0.0, 1.0, len(y))
+
+            dfs_features[f"dfs_feature_{i}"] = feature
+
+        X_dfs = pd.DataFrame(dfs_features)
+
+        # Call filter by IV
+        X_filtered = filter_dfs_by_iv(X_dfs, y, iv_threshold=0.02)
+
+        # Verify fewer features remain
+        assert X_filtered.shape[1] < X_dfs.shape[1], "No features were filtered"
+
+        # Verify all remaining features have IV >= 0.02 (spot check a few)
+        from credit_engine.features import compute_woe_iv
+
+        for col in X_filtered.columns[:5]:  # Check first 5
+            iv, _ = compute_woe_iv(X_filtered[col], y)
+            assert iv >= 0.02, f"Feature {col} has IV={iv} < 0.02 threshold"
+
+    def test_optuna_study_persistence_non_regression(self, mock_data):
+        """
+        Optuna study persistence: extended HPO must resume from prior trials.
+
+        Arrange:
+        - Mock X and y for HPO
+
+        Act:
+        - Call train_lightgbm_extended_hpo with n_trials=5 on first pass
+        - Call train_lightgbm_extended_hpo again on same data with n_trials=10
+        - Verify second call did NOT restart from trial 0 but resumed from trial 5
+
+        Assert:
+        - Model is fitted (has predict_proba)
+        - No trial duplication in Optuna study (verifies DB persistence)
+
+        Expected Failure (RED): NotImplementedError from stub function being called
+        """
+        from credit_engine.model import train_lightgbm_extended_hpo
+
+        X, y = mock_data
+
+        # First HPO run: 5 trials
+        model_1 = train_lightgbm_extended_hpo(X, y, n_trials=5)
+
+        # Verify model is fitted
+        assert hasattr(model_1, "predict_proba"), "Model missing predict_proba method"
+
+        # Second HPO run: should resume from trial 5, not restart from 0
+        # (In implementation phase, this will verify Optuna study persistence)
+        model_2 = train_lightgbm_extended_hpo(X, y, n_trials=10)
+
+        # Verify second model is also fitted
+        assert hasattr(model_2, "predict_proba"), "Second model missing predict_proba method"

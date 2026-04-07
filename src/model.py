@@ -256,6 +256,17 @@ _ENSEMBLE_CAT_DEFAULTS: dict = {
 _ENSEMBLE_3MODEL_WORKFLOW_MODEL_PATH: str = "models/ensemble_3model_best.pkl"
 _ENSEMBLE_3MODEL_WORKFLOW_WEIGHTS_PATH: str = "reports/ensemble_3model_weights.json"
 
+# Extended HPO (Wave 0) — Phase 4.1
+# Per-model extended hyperparameter optimization with higher trial budgets
+# and per-model feature pipelines (raw features, target encoding, DFS).
+_LGB_EXTENDED_OPTUNA_N_TRIALS: int = 150
+_LGB_RAW_LEARNING_RATE_MIN: float = 0.01
+_CAT_EXTENDED_OPTUNA_N_TRIALS: int = 50
+_XGB_EXTENDED_OPTUNA_N_TRIALS: int = 50
+
+# Optuna study persistence constants
+_OPTUNA_DB_PATH: str = "models/optuna_studies.db"
+
 
 # ---------------------------------------------------------------------------
 # _AverageEnsemble — simple probability average of two base models
@@ -2579,6 +2590,121 @@ def apply_ext_source_imputer(
     out.loc[missing_mask, ext_source_col] = y_imputed[missing_mask]
 
     return out
+
+
+# ---------------------------------------------------------------------------
+# Wave 0 Stubs (Phase 4.1) — Extended HPO, target encoding, DFS
+# ---------------------------------------------------------------------------
+
+def train_lightgbm_extended_hpo(
+    X: pd.DataFrame,
+    y: pd.Series,
+    n_trials: int = _LGB_EXTENDED_OPTUNA_N_TRIALS,
+) -> object:
+    """
+    Extended HPO for LightGBM on raw continuous features.
+
+    [STUB — implementation in Wave 1]
+
+    Parameters
+    ----------
+    X : pd.DataFrame
+        Feature matrix (raw continuous features).
+    y : pd.Series
+        Binary target series.
+    n_trials : int
+        Number of Optuna trials.
+
+    Returns
+    -------
+    object
+        Fitted LightGBM classifier.
+    """
+    raise NotImplementedError("Wave 0: RED test stub")
+
+
+def apply_target_encoding_fold_safe(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    X_test: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Fold-safe target encoding for high-cardinality categoricals.
+
+    [STUB — implementation in Wave 2]
+
+    Parameters
+    ----------
+    X_train : pd.DataFrame
+        Training feature matrix with categorical columns.
+    y_train : pd.Series
+        Binary training target.
+    X_test : pd.DataFrame
+        Test feature matrix (same shape[1] as X_train).
+
+    Returns
+    -------
+    tuple[pd.DataFrame, pd.DataFrame]
+        (X_train_encoded, X_test_encoded) with target-encoded categoricals.
+    """
+    raise NotImplementedError("Wave 0: RED test stub")
+
+
+def train_catboost_extended_hpo(
+    X: pd.DataFrame,
+    y: pd.Series,
+    n_trials: int = _CAT_EXTENDED_OPTUNA_N_TRIALS,
+    cat_features: list | None = None,
+) -> object:
+    """
+    Extended HPO for CatBoost with native categorical support.
+
+    [STUB — implementation in Wave 1]
+
+    Parameters
+    ----------
+    X : pd.DataFrame
+        Feature matrix (mixed continuous and categorical).
+    y : pd.Series
+        Binary target series.
+    n_trials : int
+        Number of Optuna trials.
+    cat_features : list or None
+        List of categorical column names. If None, no native categorical handling.
+
+    Returns
+    -------
+    object
+        Fitted CatBoost classifier with cat_features attribute.
+    """
+    raise NotImplementedError("Wave 0: RED test stub")
+
+
+def filter_dfs_by_iv(
+    X_dfs: pd.DataFrame,
+    y: pd.Series,
+    iv_threshold: float = 0.02,
+) -> pd.DataFrame:
+    """
+    Filter DFS features by Information Value threshold.
+
+    [STUB — implementation in Wave 2]
+
+    Parameters
+    ----------
+    X_dfs : pd.DataFrame
+        Feature matrix from DFS (Featuretools auto-generated features).
+    y : pd.Series
+        Binary target series.
+    iv_threshold : float
+        Minimum IV threshold for feature retention.
+
+    Returns
+    -------
+    pd.DataFrame
+        Filtered feature matrix with low-IV features removed.
+    """
+    raise NotImplementedError("Wave 0: RED test stub")
 
 
 # ---------------------------------------------------------------------------
