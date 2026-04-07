@@ -1844,4 +1844,255 @@ def build_combined_feature_store(
     X_combined.to_parquet(output_path, index=False)
     print(f"Saved combined store to {output_path}")
 
+
+# ---------------------------------------------------------------------------
+# Feature Augmentation Utilities (Phase 04.2 Plan 03)
+# ---------------------------------------------------------------------------
+
+
+def rank_normalize_fold_safe(
+    X_train: pd.DataFrame,
+    X_val: pd.DataFrame,
+    exclude_cols: list[str] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Convert features to within-fold percentile ranks [0, 1].
+
+    Fit min/max statistics on X_train only, then apply to both X_train and
+    X_val.  OOD values in X_val are clipped to [0, 1].  Prevents data
+    leakage: validation fold never influences normalization statistics.
+
+    Parameters
+    ----------
+    X_train : pd.DataFrame
+        Training fold feature matrix.
+    X_val : pd.DataFrame
+        Validation fold feature matrix (same columns as X_train).
+    exclude_cols : list[str], optional
+        Column names to skip (e.g., temporal sort column used for CV groups).
+        These columns are passed through unchanged.
+
+    Returns
+    -------
+    tuple[pd.DataFrame, pd.DataFrame]
+        (X_train_ranked, X_val_ranked) — both with values in [0, 1] for
+        normalised columns; shape and column order preserved.
+
+    Notes
+    -----
+    **Constant features:** columns where ``col_max == col_min`` are set to 0.5
+    in both folds (midpoint of the unit interval).
+
+    **OOD clipping:** validation values outside the training range are clipped
+    to [0, 1] so the model always receives bounded inputs.
+
+    **Tree invariance:** gradient-boosted trees (LGB, XGB, CatBoost) are
+    monotone-transform invariant, so rank normalisation does not change split
+    decisions.  The expected Gini delta is ~0 for these models; rank
+    normalisation is tested here to confirm that invariance empirically.
+    """
+    exclude_cols = set(exclude_cols or [])
+    rank_cols = [c for c in X_train.columns if c not in exclude_cols]
+
+    X_train_ranked = X_train.copy()
+    X_val_ranked = X_val.copy()
+
+    for col in rank_cols:
+        col_min = float(X_train[col].min())
+        col_max = float(X_train[col].max())
+        col_range = col_max - col_min
+
+        if col_range == 0:
+            # Constant feature — set both folds to midpoint
+            X_train_ranked[col] = 0.5
+            X_val_ranked[col] = 0.5
+        else:
+            X_train_ranked[col] = (X_train[col] - col_min) / col_range
+            X_val_ranked[col] = ((X_val[col] - col_min) / col_range).clip(0.0, 1.0)
+
+    return X_train_ranked, X_val_ranked
+
+
+def polynomial_interactions_from_shap(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    model: object,
+    top_n: int = 15,
+    iv_gate: float = 0.02,
+) -> tuple[pd.DataFrame, list[tuple[str, str]]]:
+    """
+    Generate degree-2 polynomial interactions between top SHAP features.
+
+    Computes mean |SHAP| importance from a fitted tree model, selects the
+    top-N features, generates all pairwise products, and retains only those
+    with IV >= iv_gate on the training fold.
+
+    Parameters
+    ----------
+    X_train : pd.DataFrame
+        Training fold feature matrix (model must be fitted on this data).
+    y_train : pd.Series
+        Training fold binary target.
+    model : object
+        Fitted tree model with ``predict_proba`` method.  Used to compute
+        SHAP values via ``shap.TreeExplainer``.
+    top_n : int, optional
+        Number of top SHAP features to generate interactions from.
+    iv_gate : float, optional
+        Minimum IV for retaining an interaction column (default 0.02, i.e.,
+        "weak" discriminatory power per Siddiqi thresholds).
+
+    Returns
+    -------
+    X_train_aug : pd.DataFrame
+        Training fold with interaction columns appended.
+    selected_pairs : list[tuple[str, str]]
+        Feature name pairs for interactions that passed the IV gate.
+        Pass to ``apply_polynomial_interactions()`` to transform validation fold.
+
+    Notes
+    -----
+    **Fold safety:** SHAP values and IV statistics are computed exclusively on
+    X_train.  Pass ``selected_pairs`` to ``apply_polynomial_interactions`` to
+    transform the validation fold using the same pairs — no validation data
+    is used to select which interactions to add.
+
+    **Interaction naming:** column ``f"{a}_x_{b}_poly2"`` for each pair (a, b).
+    """
+    import itertools
+
+    import shap
+
+    # Compute SHAP importance on training fold
+    explainer = shap.TreeExplainer(model)
+    shap_values = explainer.shap_values(X_train)
+    if isinstance(shap_values, list):
+        # Multi-output: use class-1 values (default probability)
+        shap_values = shap_values[1]
+
+    shap_importance = np.abs(shap_values).mean(axis=0)
+    top_n_actual = min(top_n, len(X_train.columns))
+    top_indices = np.argsort(shap_importance)[-top_n_actual:][::-1]
+    top_features = [X_train.columns[i] for i in top_indices]
+
+    selected_pairs: list[tuple[str, str]] = []
+    X_train_aug = X_train.copy()
+
+    for feat_a, feat_b in itertools.combinations(top_features, 2):
+        interaction = X_train[feat_a] * X_train[feat_b]
+        col_name = f"{feat_a}_x_{feat_b}_poly2"
+
+        # IV gate: compute IV on a temporary single-column DataFrame
+        tmp_df = pd.DataFrame({col_name: interaction})
+        _, iv_val = compute_woe_iv(tmp_df, col_name, y_train)
+
+        if iv_val >= iv_gate:
+            X_train_aug[col_name] = interaction
+            selected_pairs.append((feat_a, feat_b))
+
+    return X_train_aug, selected_pairs
+
+
+def apply_polynomial_interactions(
+    X: pd.DataFrame,
+    pairs: list[tuple[str, str]],
+) -> pd.DataFrame:
+    """
+    Apply pre-selected polynomial interaction pairs to a feature matrix.
+
+    Companion to ``polynomial_interactions_from_shap()``.  Call this on the
+    validation fold using the ``selected_pairs`` returned by the fit function,
+    ensuring the validation fold receives exactly the same interaction columns
+    as the training fold — no re-selection, no leakage.
+
+    Parameters
+    ----------
+    X : pd.DataFrame
+        Feature matrix to augment (e.g., validation fold).
+    pairs : list[tuple[str, str]]
+        Feature name pairs selected by ``polynomial_interactions_from_shap``.
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy of X with interaction columns appended.  Shape[1] increases by
+        ``len(pairs)``.  Shape[0] and index unchanged.
+    """
+    X_out = X.copy()
+    for feat_a, feat_b in pairs:
+        col_name = f"{feat_a}_x_{feat_b}_poly2"
+        X_out[col_name] = X[feat_a] * X[feat_b]
+    return X_out
+
+
+def pseudo_label_from_predictions(
+    y_pred_proba: np.ndarray,
+    X_source: pd.DataFrame,
+    confidence_threshold: tuple[float, float] = (0.05, 0.95),
+    max_synthetic_rows: int | None = None,
+    random_state: int = 42,
+) -> tuple[pd.DataFrame, pd.Series]:
+    """
+    Create pseudo-labeled rows from high-confidence model predictions.
+
+    Extracts rows from X_source where the predicted probability is below
+    the low threshold (pseudo-label 0) or above the high threshold
+    (pseudo-label 1).  These synthetic rows can be appended to the training
+    fold to augment it with unlabeled data.
+
+    Parameters
+    ----------
+    y_pred_proba : np.ndarray
+        Shape (n,) predicted probabilities from a preliminary model applied
+        to X_source.
+    X_source : pd.DataFrame
+        Feature matrix corresponding to y_pred_proba (e.g., test/holdout set).
+        Must NOT overlap with the validation fold used for evaluation.
+    confidence_threshold : tuple[float, float], optional
+        (low, high) — rows with prob < low → label 0;
+        rows with prob > high → label 1.
+        Default (0.05, 0.95) captures very high-confidence predictions.
+    max_synthetic_rows : int, optional
+        Cap on the number of pseudo-labeled rows returned (memory guard).
+        When set, a random subsample is drawn without replacement.
+    random_state : int, optional
+        Seed for the random subsample when max_synthetic_rows is active.
+
+    Returns
+    -------
+    X_pseudo : pd.DataFrame
+        Feature rows with high-confidence pseudo-labels.  Index reset to
+        integers starting at 0 (avoid index collision when concatenating
+        with training fold).
+    y_pseudo : pd.Series
+        Binary pseudo-labels (0 or 1) aligned with X_pseudo.
+
+    Notes
+    -----
+    **Leakage guard:** X_source must be drawn from a data partition that does
+    not overlap with the OOF validation fold.  Typically this is either the
+    competition test set (no true labels) or a dedicated holdout.  Never use
+    the same rows for pseudo-labels and OOF evaluation.
+    """
+    y_pred_proba = np.asarray(y_pred_proba)
+    high_confidence_mask = (y_pred_proba < confidence_threshold[0]) | (
+        y_pred_proba >= confidence_threshold[1]
+    )
+
+    X_pseudo = X_source.loc[high_confidence_mask].copy()
+    y_pseudo_arr = (y_pred_proba[high_confidence_mask] > 0.5).astype(int)
+    y_pseudo = pd.Series(y_pseudo_arr, name="TARGET")
+
+    if max_synthetic_rows is not None and len(X_pseudo) > max_synthetic_rows:
+        rng = np.random.default_rng(random_state)
+        idx = rng.choice(len(X_pseudo), size=max_synthetic_rows, replace=False)
+        idx_sorted = np.sort(idx)
+        X_pseudo = X_pseudo.iloc[idx_sorted]
+        y_pseudo = y_pseudo.iloc[idx_sorted]
+
+    X_pseudo = X_pseudo.reset_index(drop=True)
+    y_pseudo = y_pseudo.reset_index(drop=True)
+
+    return X_pseudo, y_pseudo
+
     return X_combined
