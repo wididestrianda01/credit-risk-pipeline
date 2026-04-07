@@ -1478,6 +1478,10 @@ def build_tree_feature_store(
     return X_final, feature_columns
 
 
+# Backward-compatibility alias — renamed to build_tree_feature_store in Phase 04.2.1
+build_raw_feature_store = build_tree_feature_store
+
+
 def apply_raw_feature_store(
     X: pd.DataFrame,
     feature_columns: list[str],
