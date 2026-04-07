@@ -1,0 +1,27 @@
+{
+  "variant_a": {
+    "lgb_gini": 0.5329003110208337,
+    "xgb_gini": 0.5239109873469805,
+    "cat_gini": 0.54320665841523,
+    "lr_gini": 0.2773358345918666,
+    "best_base_gini": 0.54320665841523,
+    "ensemble_gini": 0.5499903592224946,
+    "improvement": 0.006783700807264648,
+    "persisted": true
+  },
+  "variant_b": {
+    "lgb_gini": 0.5329003110208337,
+    "xgb_gini": 0.5239109873469805,
+    "cat_gini": 0.54320665841523,
+    "best_base_gini": 0.54320665841523,
+    "ensemble_gini": 0.5519080946684274,
+    "improvement": 0.008701436253197414,
+    "persisted": true,
+    "meta_alpha": 0.1
+  },
+  "winner": "variant_b",
+  "best_ensemble_gini": 0.5519080946684274,
+  "best_improvement": 0.008701436253197414,
+  "persisted": true,
+  "reason": "Variant B Gini 0.5519 > Variant A Gini 0.5500"
+}

@@ -3285,6 +3285,338 @@ def filter_dfs_by_iv(
 
 
 # ---------------------------------------------------------------------------
+# Ensemble Stacking (Wave 3: Ensemble Variants A & B)
+# ---------------------------------------------------------------------------
+
+_ENSEMBLE_PERSIST_THRESHOLD: float = 0.005
+
+
+def train_ensemble_variant_a(
+    X_lgb: pd.DataFrame,
+    X_xgb: pd.DataFrame,
+    X_cat: pd.DataFrame,
+    X_lr: pd.DataFrame,
+    y: pd.Series,
+    test_size: float = 0.2,
+    random_state: int = _RANDOM_STATE,
+) -> tuple[object, dict]:
+    """
+    4-model ensemble: LGB + XGB + CatBoost + Logistic Regression with logistic meta-learner.
+
+    Uses OOF stacking on identical temporal CV folds to avoid meta-learner overfitting.
+
+    Parameters
+    ----------
+    X_lgb, X_xgb, X_cat, X_lr : pd.DataFrame
+        Per-model feature matrices from Wave 2 preparation.
+    y : pd.Series
+        Binary target (0/1).
+    test_size : float
+        Test split fraction (default 0.2).
+    random_state : int
+        Seed for reproducibility.
+
+    Returns
+    -------
+    (meta_model, metrics_dict) where metrics_dict contains:
+        'lgb_gini', 'xgb_gini', 'cat_gini', 'lr_gini', 'best_base_gini', 'ensemble_gini',
+        'improvement', 'persisted'
+    """
+    import lightgbm as lgb_lib
+    import xgboost as xgb_lib
+
+    # Split data (identical split for all models)
+    X_lgb_tr, X_lgb_te, y_tr, y_te = train_test_split(
+        X_lgb, y, test_size=test_size, random_state=random_state, stratify=y
+    )
+    X_xgb_tr, X_xgb_te, _, _ = train_test_split(
+        X_xgb, y, test_size=test_size, random_state=random_state, stratify=y
+    )
+    X_cat_tr, X_cat_te, _, _ = train_test_split(
+        X_cat, y, test_size=test_size, random_state=random_state, stratify=y
+    )
+    X_lr_tr, X_lr_te, _, _ = train_test_split(
+        X_lr, y, test_size=test_size, random_state=random_state, stratify=y
+    )
+
+    # Detect categorical columns for CatBoost
+    cat_cols = [c for c in X_cat_tr.columns if X_cat_tr[c].dtype == "category"]
+
+    # Get temporal CV folds (identical across all models)
+    groups = X_lgb_tr[_TEMPORAL_SORT_COL].values if _TEMPORAL_SORT_COL in X_lgb_tr.columns else None
+    cv = _make_cv(groups_train=groups, n_splits=5)
+
+    # Initialize OOF arrays
+    oof_lgb = np.zeros(len(X_lgb_tr))
+    oof_xgb = np.zeros(len(X_xgb_tr))
+    oof_cat = np.zeros(len(X_cat_tr))
+    oof_lr = np.zeros(len(X_lr_tr))
+
+    # Generate OOF predictions
+    for fold_idx, (train_idx, val_idx) in enumerate(cv.split(X_lgb_tr, y_tr, groups=groups)):
+        print(f"Ensemble Variant A OOF Fold {fold_idx + 1}/5...")
+
+        # LGB
+        X_lgb_f_tr, X_lgb_f_va = X_lgb_tr.iloc[train_idx], X_lgb_tr.iloc[val_idx]
+        y_f_tr, y_f_va = y_tr.iloc[train_idx], y_tr.iloc[val_idx]
+
+        lgb_model = lgb_lib.LGBMClassifier(
+            n_estimators=500, is_unbalance=True, verbose=-1, random_state=random_state
+        )
+        lgb_model.fit(X_lgb_f_tr, y_f_tr)
+        oof_lgb[val_idx] = lgb_model.predict_proba(X_lgb_f_va)[:, 1]
+
+        # XGB
+        X_xgb_f_tr, X_xgb_f_va = X_xgb_tr.iloc[train_idx], X_xgb_tr.iloc[val_idx]
+        xgb_model = xgb_lib.XGBClassifier(
+            n_estimators=500, random_state=random_state, verbosity=0, early_stopping_rounds=20
+        )
+        xgb_model.fit(
+            X_xgb_f_tr,
+            y_f_tr,
+            eval_set=[(X_xgb_f_va, y_f_va)],
+            verbose=False,
+        )
+        oof_xgb[val_idx] = xgb_model.predict_proba(X_xgb_f_va)[:, 1]
+
+        # CatBoost
+        X_cat_f_tr, X_cat_f_va = X_cat_tr.iloc[train_idx], X_cat_tr.iloc[val_idx]
+        cat_model = CatBoostClassifier(iterations=500, verbose=0, allow_writing_files=False)
+        cat_model.fit(
+            X_cat_f_tr,
+            y_f_tr,
+            cat_features=cat_cols,
+            eval_set=[(X_cat_f_va, y_f_va)],
+            early_stopping_rounds=20,
+        )
+        oof_cat[val_idx] = cat_model.predict_proba(X_cat_f_va)[:, 1]
+
+        # LR (WoE-encoded features)
+        X_lr_f_tr, X_lr_f_va = X_lr_tr.iloc[train_idx], X_lr_tr.iloc[val_idx]
+        lr_model = LogisticRegression(
+            C=0.1, solver="lbfgs", max_iter=1000, random_state=random_state
+        )
+        lr_model.fit(X_lr_f_tr, y_f_tr)
+        oof_lr[val_idx] = lr_model.predict_proba(X_lr_f_va)[:, 1]
+
+    # Evaluate base models on test set
+    lgb_test = lgb_lib.LGBMClassifier(
+        n_estimators=500, is_unbalance=True, verbose=-1, random_state=random_state
+    )
+    lgb_test.fit(X_lgb_tr, y_tr)
+    lgb_gini = gini_coefficient(y_te, lgb_test.predict_proba(X_lgb_te)[:, 1])
+
+    xgb_test = xgb_lib.XGBClassifier(n_estimators=500, random_state=random_state, verbosity=0, early_stopping_rounds=20)
+    xgb_test.fit(X_xgb_tr, y_tr, eval_set=[(X_xgb_te, y_te)], verbose=False)
+    xgb_gini = gini_coefficient(y_te, xgb_test.predict_proba(X_xgb_te)[:, 1])
+
+    cat_test = CatBoostClassifier(iterations=500, verbose=0, allow_writing_files=False)
+    cat_test.fit(X_cat_tr, y_tr, cat_features=cat_cols)
+    cat_gini = gini_coefficient(y_te, cat_test.predict_proba(X_cat_te)[:, 1])
+
+    lr_test = LogisticRegression(
+        C=0.1, solver="lbfgs", max_iter=1000, random_state=random_state
+    )
+    lr_test.fit(X_lr_tr, y_tr)
+    lr_gini = gini_coefficient(y_te, lr_test.predict_proba(X_lr_te)[:, 1])
+
+    # Train meta-learner on OOF predictions
+    meta_input = np.column_stack([oof_lgb, oof_xgb, oof_cat, oof_lr])
+    meta_model = LogisticRegression(
+        C=1.0, solver="lbfgs", max_iter=1000, random_state=random_state
+    )
+    meta_model.fit(meta_input, y_tr)
+
+    # Evaluate ensemble on test set
+    test_lgb_pred = lgb_test.predict_proba(X_lgb_te)[:, 1]
+    test_xgb_pred = xgb_test.predict_proba(X_xgb_te)[:, 1]
+    test_cat_pred = cat_test.predict_proba(X_cat_te)[:, 1]
+    test_lr_pred = lr_test.predict_proba(X_lr_te)[:, 1]
+
+    test_meta_input = np.column_stack([test_lgb_pred, test_xgb_pred, test_cat_pred, test_lr_pred])
+    ensemble_pred = meta_model.predict_proba(test_meta_input)[:, 1]
+    ensemble_gini = gini_coefficient(y_te, ensemble_pred)
+
+    # Calculate improvement
+    best_base_gini = max(lgb_gini, xgb_gini, cat_gini, lr_gini)
+    improvement = ensemble_gini - best_base_gini
+    persisted = improvement >= _ENSEMBLE_PERSIST_THRESHOLD
+
+    # Save ensemble if improvement sufficient
+    if persisted:
+        joblib.dump(meta_model, "models/ensemble_variant_a.pkl")
+        print(f"Ensemble Variant A persisted (improvement: {improvement:+.4f})")
+    else:
+        print(
+            f"Ensemble Variant A NOT persisted (improvement: {improvement:+.4f} < {_ENSEMBLE_PERSIST_THRESHOLD})"
+        )
+
+    metrics = {
+        "lgb_gini": float(lgb_gini),
+        "xgb_gini": float(xgb_gini),
+        "cat_gini": float(cat_gini),
+        "lr_gini": float(lr_gini),
+        "best_base_gini": float(best_base_gini),
+        "ensemble_gini": float(ensemble_gini),
+        "improvement": float(improvement),
+        "persisted": persisted,
+    }
+
+    return meta_model, metrics
+
+
+def train_ensemble_variant_b(
+    X_lgb: pd.DataFrame,
+    X_xgb: pd.DataFrame,
+    X_cat: pd.DataFrame,
+    y: pd.Series,
+    test_size: float = 0.2,
+    random_state: int = _RANDOM_STATE,
+) -> tuple[object, dict]:
+    """
+    3-model ensemble: LGB + XGB + CatBoost with Ridge meta-learner.
+
+    Ridge meta-learner preferred for tree-only stacking (simpler, less overfitting risk).
+
+    Parameters
+    ----------
+    X_lgb, X_xgb, X_cat : pd.DataFrame
+        Per-model feature matrices from Wave 2 preparation.
+    y : pd.Series
+        Binary target (0/1).
+    test_size : float
+        Test split fraction (default 0.2).
+    random_state : int
+        Seed for reproducibility.
+
+    Returns
+    -------
+    (meta_model, metrics_dict) with keys: lgb_gini, xgb_gini, cat_gini, best_base_gini,
+                                         ensemble_gini, improvement, persisted, meta_alpha
+    """
+    from sklearn.linear_model import RidgeCV
+
+    import lightgbm as lgb_lib
+    import xgboost as xgb_lib
+
+    # Split data (identical to Variant A for fairness)
+    X_lgb_tr, X_lgb_te, y_tr, y_te = train_test_split(
+        X_lgb, y, test_size=test_size, random_state=random_state, stratify=y
+    )
+    X_xgb_tr, X_xgb_te, _, _ = train_test_split(
+        X_xgb, y, test_size=test_size, random_state=random_state, stratify=y
+    )
+    X_cat_tr, X_cat_te, _, _ = train_test_split(
+        X_cat, y, test_size=test_size, random_state=random_state, stratify=y
+    )
+
+    # Detect categorical columns for CatBoost
+    cat_cols = [c for c in X_cat_tr.columns if X_cat_tr[c].dtype == "category"]
+
+    # OOF generation (identical temporal CV)
+    groups = X_lgb_tr[_TEMPORAL_SORT_COL].values if _TEMPORAL_SORT_COL in X_lgb_tr.columns else None
+    cv = _make_cv(groups_train=groups, n_splits=5)
+
+    oof_lgb = np.zeros(len(X_lgb_tr))
+    oof_xgb = np.zeros(len(X_xgb_tr))
+    oof_cat = np.zeros(len(X_cat_tr))
+
+    for fold_idx, (train_idx, val_idx) in enumerate(cv.split(X_lgb_tr, y_tr, groups=groups)):
+        print(f"Ensemble Variant B OOF Fold {fold_idx + 1}/5...")
+
+        X_lgb_f_tr, X_lgb_f_va = X_lgb_tr.iloc[train_idx], X_lgb_tr.iloc[val_idx]
+        X_xgb_f_tr, X_xgb_f_va = X_xgb_tr.iloc[train_idx], X_xgb_tr.iloc[val_idx]
+        X_cat_f_tr, X_cat_f_va = X_cat_tr.iloc[train_idx], X_cat_tr.iloc[val_idx]
+        y_f_tr = y_tr.iloc[train_idx]
+
+        # LGB
+        lgb_model = lgb_lib.LGBMClassifier(
+            n_estimators=500, is_unbalance=True, verbose=-1, random_state=random_state
+        )
+        lgb_model.fit(X_lgb_f_tr, y_f_tr)
+        oof_lgb[val_idx] = lgb_model.predict_proba(X_lgb_f_va)[:, 1]
+
+        # XGB
+        xgb_model = xgb_lib.XGBClassifier(
+            n_estimators=500, random_state=random_state, verbosity=0, early_stopping_rounds=20
+        )
+        xgb_model.fit(
+            X_xgb_f_tr,
+            y_f_tr,
+            eval_set=[(X_xgb_f_va, y_tr.iloc[val_idx])],
+            verbose=False,
+        )
+        oof_xgb[val_idx] = xgb_model.predict_proba(X_xgb_f_va)[:, 1]
+
+        # CatBoost
+        cat_model = CatBoostClassifier(iterations=500, verbose=0, allow_writing_files=False)
+        cat_model.fit(
+            X_cat_f_tr,
+            y_f_tr,
+            cat_features=cat_cols,
+            eval_set=[(X_cat_f_va, y_tr.iloc[val_idx])],
+            early_stopping_rounds=20,
+        )
+        oof_cat[val_idx] = cat_model.predict_proba(X_cat_f_va)[:, 1]
+
+    # Evaluate base models on test set
+    lgb_test = lgb_lib.LGBMClassifier(
+        n_estimators=500, is_unbalance=True, verbose=-1, random_state=random_state
+    )
+    lgb_test.fit(X_lgb_tr, y_tr)
+    lgb_gini = gini_coefficient(y_te, lgb_test.predict_proba(X_lgb_te)[:, 1])
+
+    xgb_test = xgb_lib.XGBClassifier(n_estimators=500, random_state=random_state, verbosity=0, early_stopping_rounds=20)
+    xgb_test.fit(X_xgb_tr, y_tr, eval_set=[(X_xgb_te, y_te)], verbose=False)
+    xgb_gini = gini_coefficient(y_te, xgb_test.predict_proba(X_xgb_te)[:, 1])
+
+    cat_test = CatBoostClassifier(iterations=500, verbose=0, allow_writing_files=False)
+    cat_test.fit(X_cat_tr, y_tr, cat_features=cat_cols)
+    cat_gini = gini_coefficient(y_te, cat_test.predict_proba(X_cat_te)[:, 1])
+
+    # Train meta-learner (RidgeCV with alpha search)
+    meta_input = np.column_stack([oof_lgb, oof_xgb, oof_cat])
+    meta_model = RidgeCV(alphas=[0.01, 0.1, 1.0, 10.0], cv=5)
+    meta_model.fit(meta_input, y_tr)
+
+    # Evaluate ensemble on test set
+    test_lgb_pred = lgb_test.predict_proba(X_lgb_te)[:, 1]
+    test_xgb_pred = xgb_test.predict_proba(X_xgb_te)[:, 1]
+    test_cat_pred = cat_test.predict_proba(X_cat_te)[:, 1]
+
+    test_meta_input = np.column_stack([test_lgb_pred, test_xgb_pred, test_cat_pred])
+    ensemble_pred = meta_model.predict(test_meta_input)
+    ensemble_pred = np.clip(ensemble_pred, 0, 1)  # Ensure [0, 1] range
+    ensemble_gini = gini_coefficient(y_te, ensemble_pred)
+
+    # Improvement and persistence
+    best_base_gini = max(lgb_gini, xgb_gini, cat_gini)
+    improvement = ensemble_gini - best_base_gini
+    persisted = improvement >= _ENSEMBLE_PERSIST_THRESHOLD
+
+    if persisted:
+        joblib.dump(meta_model, "models/ensemble_variant_b.pkl")
+        print(f"Ensemble Variant B persisted (improvement: {improvement:+.4f})")
+    else:
+        print(
+            f"Ensemble Variant B NOT persisted (improvement: {improvement:+.4f} < {_ENSEMBLE_PERSIST_THRESHOLD})"
+        )
+
+    metrics = {
+        "lgb_gini": float(lgb_gini),
+        "xgb_gini": float(xgb_gini),
+        "cat_gini": float(cat_gini),
+        "best_base_gini": float(best_base_gini),
+        "ensemble_gini": float(ensemble_gini),
+        "improvement": float(improvement),
+        "persisted": persisted,
+        "meta_alpha": float(meta_model.alpha_) if hasattr(meta_model, "alpha_") else None,
+    }
+
+    return meta_model, metrics
+
+
+# ---------------------------------------------------------------------------
 # Stubs (Phase 3.3+ — LightGBM and XGBoost, implemented in later tasks)
 # ---------------------------------------------------------------------------
 

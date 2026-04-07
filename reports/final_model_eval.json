@@ -1,18 +1,14 @@
 {
-  "evaluation_date": "2026-04-07T10:26:45.237093",
-  "final_model": "Best Standalone (Gini=0.5514)",
-  "final_gini": 0.5514095929990959,
-  "target_gini": 0.6,
-  "gap_to_target": 0.04859040700090411,
-  "gini_gate_passed": false,
-  "phase_45_required": true,
-  "phase_45_justification": "Current final model (Gini=0.5514) is below target (Gini=0.6000). Gap=0.0486. Phase 4-5 work required.",
-  "base_model_gini": {
-    "lgb": 0.5514095929990959,
-    "xgb": 0.5449119285135677,
-    "cat": 0.5461499447991327
-  },
-  "ensemble_gini": 0.5526424402705454,
-  "ensemble_improvement": 0.0012328472714495664,
-  "ensemble_persisted": false
+  "phase": "04.1",
+  "wave": 3,
+  "best_model": "variant_b",
+  "best_gini": 0.5519,
+  "test_gini": 0.5382,
+  "test_ks": 0.404,
+  "test_ks_threshold": 0.4279,
+  "phase_04_1_complete": true,
+  "gap_to_target": 0.0481,
+  "exit_gate_pass": false,
+  "next_phase": "Phase 04.1 Extended",
+  "recommendation": "Continue gap closure (best Gini 0.5519 < 0.57)"
 }
