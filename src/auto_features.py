@@ -27,25 +27,22 @@ try:
 except ImportError:
     ft = None  # type: ignore
 
+try:
+    from woodwork.logical_types import Categorical, Double, Integer, BooleanNullable
+except ImportError:
+    Categorical = Double = Integer = BooleanNullable = None  # type: ignore
+
 from credit_engine.features import select_features_by_iv
 from credit_engine.model import train_xgboost_optuna
 from credit_engine.utils import gini_coefficient
 
 # Constants
 _DEFAULT_AGG_PRIMITIVES = [
-    "mean",
-    "std",
-    "min",
-    "max",
     "count",
-    "skew",
-    "median",
+    "mean",
     "sum",
-    "mode",
-    "percent_true",
+    "std",
     "num_unique",
-    "any",
-    "all",
 ]
 _NAN_SENTINEL = -999.0
 
@@ -169,56 +166,294 @@ def _build_entity_set(tables: dict[str, pd.DataFrame]) -> Any:
     es = ft.EntitySet(id="home_credit")
 
     # Application (primary table, has SK_ID_CURR as PK)
+    logical_types_application = {
+        "SK_ID_CURR": Integer,
+        "NAME_CONTRACT_TYPE": Categorical,
+        "CODE_GENDER": Categorical,
+        "FLAG_OWN_CAR": Categorical,
+        "FLAG_OWN_REALTY": Categorical,
+        "CNT_CHILDREN": Integer,
+        "AMT_INCOME_TOTAL": Double,
+        "AMT_CREDIT": Double,
+        "AMT_ANNUITY": Double,
+        "AMT_GOODS_PRICE": Double,
+        "NAME_TYPE_SUITE": Categorical,
+        "NAME_INCOME_TYPE": Categorical,
+        "NAME_EDUCATION_TYPE": Categorical,
+        "NAME_FAMILY_STATUS": Categorical,
+        "NAME_HOUSING_TYPE": Categorical,
+        "REGION_POPULATION_RELATIVE": Double,
+        "DAYS_BIRTH": Integer,
+        "DAYS_EMPLOYED": Integer,
+        "DAYS_REGISTRATION": Integer,
+        "DAYS_ID_PUBLISH": Integer,
+        "OWN_CAR_AGE": Double,
+        "FLAG_MOBIL": Integer,
+        "FLAG_EMP_PHONE": Integer,
+        "FLAG_WORK_PHONE": Integer,
+        "FLAG_CONT_MOBILE": Integer,
+        "FLAG_PHONE": Integer,
+        "FLAG_EMAIL": Integer,
+        "OCCUPATION_TYPE": Categorical,
+        "CNT_FAM_MEMBERS": Integer,
+        "REGION_RATING_CLIENT": Integer,
+        "REGION_RATING_CLIENT_W_CITY": Integer,
+        "WEEKDAY_APPR_PROCESS_START": Categorical,
+        "HOUR_APPR_PROCESS_START": Integer,
+        "REG_REGION_NOT_LIVE_REGION": Integer,
+        "REG_REGION_NOT_WORK_REGION": Integer,
+        "LIVE_REGION_NOT_WORK_REGION": Integer,
+        "REG_CITY_NOT_LIVE_CITY": Integer,
+        "REG_CITY_NOT_WORK_CITY": Integer,
+        "LIVE_CITY_NOT_WORK_CITY": Integer,
+        "ORGANIZATION_TYPE": Categorical,
+        "EXT_SOURCE_1": Double,
+        "EXT_SOURCE_2": Double,
+        "EXT_SOURCE_3": Double,
+        "APARTMENTS_AVG": Double,
+        "BASEMENTAREA_AVG": Double,
+        "YEARS_BEGINEXPLUATATION_AVG": Double,
+        "YEARS_BUILD_AVG": Double,
+        "COMMONAREA_AVG": Double,
+        "ELEVATORS_AVG": Double,
+        "ENTRANCES_AVG": Double,
+        "FLOORSMAX_AVG": Double,
+        "FLOORSMIN_AVG": Double,
+        "LANDAREA_AVG": Double,
+        "LIVINGAPARTMENTS_AVG": Double,
+        "LIVINGAREA_AVG": Double,
+        "NONLIVINGAPARTMENTS_AVG": Double,
+        "NONLIVINGAREA_AVG": Double,
+        "APARTMENTS_MODE": Double,
+        "BASEMENTAREA_MODE": Double,
+        "YEARS_BEGINEXPLUATATION_MODE": Double,
+        "YEARS_BUILD_MODE": Double,
+        "COMMONAREA_MODE": Double,
+        "ELEVATORS_MODE": Double,
+        "ENTRANCES_MODE": Double,
+        "FLOORSMAX_MODE": Double,
+        "FLOORSMIN_MODE": Double,
+        "LANDAREA_MODE": Double,
+        "LIVINGAPARTMENTS_MODE": Double,
+        "LIVINGAREA_MODE": Double,
+        "NONLIVINGAPARTMENTS_MODE": Double,
+        "NONLIVINGAREA_MODE": Double,
+        "APARTMENTS_MEDI": Double,
+        "BASEMENTAREA_MEDI": Double,
+        "YEARS_BEGINEXPLUATATION_MEDI": Double,
+        "YEARS_BUILD_MEDI": Double,
+        "COMMONAREA_MEDI": Double,
+        "ELEVATORS_MEDI": Double,
+        "ENTRANCES_MEDI": Double,
+        "FLOORSMAX_MEDI": Double,
+        "FLOORSMIN_MEDI": Double,
+        "LANDAREA_MEDI": Double,
+        "LIVINGAPARTMENTS_MEDI": Double,
+        "LIVINGAREA_MEDI": Double,
+        "NONLIVINGAPARTMENTS_MEDI": Double,
+        "NONLIVINGAREA_MEDI": Double,
+        "FONDKAPREMONT_MODE": Categorical,
+        "HOUSETYPE_MODE": Categorical,
+        "TOTALAREA_MODE": Double,
+        "WALLSMATERIAL_MODE": Categorical,
+        "EMERGENCYSTATE_MODE": Categorical,
+        "OBS_30_CNT_SOCIAL_CIRCLE": Integer,
+        "DEF_30_CNT_SOCIAL_CIRCLE": Integer,
+        "OBS_60_CNT_SOCIAL_CIRCLE": Integer,
+        "DEF_60_CNT_SOCIAL_CIRCLE": Integer,
+        "DAYS_LAST_PHONE_CHANGE": Integer,
+        "FLAG_DOCUMENT_2": Integer,
+        "FLAG_DOCUMENT_3": Integer,
+        "FLAG_DOCUMENT_4": Integer,
+        "FLAG_DOCUMENT_5": Integer,
+        "FLAG_DOCUMENT_6": Integer,
+        "FLAG_DOCUMENT_7": Integer,
+        "FLAG_DOCUMENT_8": Integer,
+        "FLAG_DOCUMENT_9": Integer,
+        "FLAG_DOCUMENT_10": Integer,
+        "FLAG_DOCUMENT_11": Integer,
+        "FLAG_DOCUMENT_12": Integer,
+        "FLAG_DOCUMENT_13": Integer,
+        "FLAG_DOCUMENT_14": Integer,
+        "FLAG_DOCUMENT_15": Integer,
+        "FLAG_DOCUMENT_16": Integer,
+        "FLAG_DOCUMENT_17": Integer,
+        "FLAG_DOCUMENT_18": Integer,
+        "FLAG_DOCUMENT_19": Integer,
+        "FLAG_DOCUMENT_20": Integer,
+        "FLAG_DOCUMENT_21": Integer,
+        "AMT_REQ_CREDIT_BUREAU_HOUR": Integer,
+        "AMT_REQ_CREDIT_BUREAU_DAY": Integer,
+        "AMT_REQ_CREDIT_BUREAU_WEEK": Integer,
+        "AMT_REQ_CREDIT_BUREAU_MON": Integer,
+        "AMT_REQ_CREDIT_BUREAU_QRT": Integer,
+        "AMT_REQ_CREDIT_BUREAU_YEAR": Integer,
+    }
     es = es.add_dataframe(
         dataframe_name="application",
         dataframe=tables["application"],
         index="SK_ID_CURR",
+        logical_types=logical_types_application,
     )
 
     # Bureau (has SK_ID_BUREAU as PK)
+    logical_types_bureau = {
+        "SK_ID_CURR": Integer,
+        "SK_ID_BUREAU": Integer,
+        "CREDIT_ACTIVE": Categorical,
+        "CREDIT_CURRENCY": Categorical,
+        "DAYS_CREDIT": Integer,
+        "CREDIT_DAY_OVERDUE": Integer,
+        "DAYS_CREDIT_ENDDATE": Double,
+        "DAYS_ENDDATE_FACT": Double,
+        "AMT_CREDIT_MAX_OVERDUE": Double,
+        "CNT_CREDIT_PROLONG": Integer,
+        "AMT_CREDIT_SUM": Double,
+        "AMT_CREDIT_SUM_DEBT": Double,
+        "AMT_CREDIT_SUM_LIMIT": Double,
+        "AMT_CREDIT_SUM_OVERDUE": Double,
+        "CREDIT_TYPE": Categorical,
+        "DAYS_CREDIT_UPDATE": Integer,
+        "AMT_ANNUITY": Double,
+    }
     es = es.add_dataframe(
         dataframe_name="bureau",
         dataframe=tables["bureau"],
         index="SK_ID_BUREAU",
+        logical_types=logical_types_bureau,
     )
 
     # Bureau balance (no PK, create synthetic index)
+    logical_types_bureau_balance = {
+        "SK_ID_BUREAU": Integer,
+        "MONTHS_BALANCE": Integer,
+        "STATUS": Categorical,
+    }
     es = es.add_dataframe(
         dataframe_name="bureau_balance",
         dataframe=tables["bureau_balance"],
         index="bbal_id",
         make_index=True,
+        logical_types=logical_types_bureau_balance,
     )
 
     # Previous application (has SK_ID_PREV as PK)
+    logical_types_previous_application = {
+        "SK_ID_PREV": Integer,
+        "SK_ID_CURR": Integer,
+        "NAME_CONTRACT_TYPE": Categorical,
+        "AMT_ANNUITY": Double,
+        "AMT_APPLICATION": Double,
+        "AMT_CREDIT": Double,
+        "AMT_DOWN_PAYMENT": Double,
+        "AMT_GOODS_PRICE": Double,
+        "WEEKDAY_APPR_PROCESS_START": Categorical,
+        "HOUR_APPR_PROCESS_START": Integer,
+        "FLAG_LAST_APPL_PER_CONTRACT": Categorical,
+        "NFLAG_LAST_APPL_IN_DAY": Integer,
+        "RATE_DOWN_PAYMENT": Double,
+        "RATE_INTEREST_PRIMARY": Double,
+        "RATE_INTEREST_PRIVILEGED": Double,
+        "NAME_CASH_LOAN_PURPOSE": Categorical,
+        "NAME_CONTRACT_STATUS": Categorical,
+        "DAYS_DECISION": Integer,
+        "NAME_PAYMENT_TYPE": Categorical,
+        "CODE_REJECT_REASON": Categorical,
+        "NAME_TYPE_SUITE": Categorical,
+        "NAME_CLIENT_TYPE": Categorical,
+        "NAME_GOODS_CATEGORY": Categorical,
+        "NAME_PORTFOLIO": Categorical,
+        "NAME_PRODUCT_TYPE": Categorical,
+        "CHANNEL_TYPE": Categorical,
+        "SELLERPLACE_AREA": Integer,
+        "NAME_SELLER_INDUSTRY": Categorical,
+        "CNT_PAYMENT": Double,
+        "NAME_YIELD_GROUP": Categorical,
+        "PRODUCT_COMBINATION": Categorical,
+        "DAYS_FIRST_DRAWING": Double,
+        "DAYS_FIRST_DUE": Double,
+        "DAYS_LAST_DUE_1ST_VERSION": Double,
+        "DAYS_LAST_DUE": Double,
+        "DAYS_TERMINATION": Double,
+        "NFLAG_INSURED_ON_APPROVAL": Double,
+    }
     es = es.add_dataframe(
         dataframe_name="previous_application",
         dataframe=tables["previous_application"],
         index="SK_ID_PREV",
+        logical_types=logical_types_previous_application,
     )
 
     # POS_CASH (no PK, create synthetic index)
+    logical_types_pos_cash = {
+        "SK_ID_PREV": Integer,
+        "SK_ID_CURR": Integer,
+        "MONTHS_BALANCE": Integer,
+        "CNT_INSTALMENT": Double,
+        "CNT_INSTALMENT_FUTURE": Double,
+        "NAME_CONTRACT_STATUS": Categorical,
+        "SK_DPD": Integer,
+        "SK_DPD_DEF": Integer,
+    }
     es = es.add_dataframe(
         dataframe_name="pos_cash",
         dataframe=tables["pos_cash"],
         index="pos_id",
         make_index=True,
+        logical_types=logical_types_pos_cash,
     )
 
     # Installments (no PK, create synthetic index)
+    logical_types_installments = {
+        "SK_ID_PREV": Integer,
+        "SK_ID_CURR": Integer,
+        "NUM_INSTALMENT_VERSION": Double,
+        "NUM_INSTALMENT_NUMBER": Integer,
+        "DAYS_INSTALMENT": Double,
+        "DAYS_ENTRY_PAYMENT": Double,
+        "AMT_INSTALMENT": Double,
+        "AMT_PAYMENT": Double,
+    }
     es = es.add_dataframe(
         dataframe_name="installments",
         dataframe=tables["installments"],
         index="inst_id",
         make_index=True,
+        logical_types=logical_types_installments,
     )
 
     # Credit card (no PK, create synthetic index)
+    logical_types_credit_card = {
+        "SK_ID_PREV": Integer,
+        "SK_ID_CURR": Integer,
+        "MONTHS_BALANCE": Integer,
+        "AMT_BALANCE": Double,
+        "AMT_CREDIT_LIMIT_ACTUAL": Integer,
+        "AMT_DRAWINGS_ATM_CURRENT": Double,
+        "AMT_DRAWINGS_CURRENT": Double,
+        "AMT_DRAWINGS_OTHER_CURRENT": Double,
+        "AMT_DRAWINGS_POS_CURRENT": Double,
+        "AMT_INST_MIN_REGULARITY": Double,
+        "AMT_PAYMENT_CURRENT": Double,
+        "AMT_PAYMENT_TOTAL_CURRENT": Double,
+        "AMT_RECEIVABLE_PRINCIPAL": Double,
+        "AMT_RECIVABLE": Double,
+        "AMT_TOTAL_RECEIVABLE": Double,
+        "CNT_DRAWINGS_ATM_CURRENT": Double,
+        "CNT_DRAWINGS_CURRENT": Integer,
+        "CNT_DRAWINGS_OTHER_CURRENT": Double,
+        "CNT_DRAWINGS_POS_CURRENT": Double,
+        "CNT_INSTALMENT_MATURE_CUM": Double,
+        "NAME_CONTRACT_STATUS": Categorical,
+        "SK_DPD": Integer,
+        "SK_DPD_DEF": Integer,
+    }
     es = es.add_dataframe(
         dataframe_name="credit_card",
         dataframe=tables["credit_card"],
         index="cc_id",
         make_index=True,
+        logical_types=logical_types_credit_card,
     )
 
     # Define relationships
@@ -403,6 +638,14 @@ def build_featuretools_feature_store(
             n_jobs=n_jobs,
             verbose=False,
         )
+
+    # Diagnostic step: print dtype distribution after DFS (verify Woodwork fix working)
+    print("Feature matrix dtypes after DFS:")
+    print(feature_matrix.dtypes.value_counts())
+    print(f"Total columns: {feature_matrix.shape[1]}")
+    numeric_cols_initial = feature_matrix.select_dtypes(include=["number"]).columns
+    print(f"Numeric columns (before filtering): {len(numeric_cols_initial)}")
+    print(f"Non-numeric columns (to be dropped): {feature_matrix.shape[1] - len(numeric_cols_initial)}")
 
     # Post-process: numeric only, inf -> sentinel, NaN -> sentinel
     all_cols = feature_matrix.columns.tolist()
