@@ -79,7 +79,7 @@ _THRESHOLD_MAX: float = 0.9
 # Ranges reflect credit scoring literature: depth 3–8 prevents overfitting on
 # high-cardinality categorical WoE features; learning rate log-uniform so
 # Optuna explores slow (0.01) and fast (0.3) regimes equally.
-_XGB_OPTUNA_N_TRIALS: int = 50
+_XGB_OPTUNA_N_TRIALS: int = 100
 _XGB_N_ESTIMATORS_MIN: int = 100
 _XGB_N_ESTIMATORS_MAX: int = 1000
 _XGB_MAX_DEPTH_MIN: int = 3
