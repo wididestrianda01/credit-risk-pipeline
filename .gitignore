@@ -26,8 +26,10 @@ env/
 # Jupyter
 .ipynb_checkpoints/
 
-# Data (large files — download via Kaggle API)
+# Data (large files — download via Kaggle API or generated during runs)
 dataset/*.csv
+data/processed/*.parquet
+data/*.csv
 
 # Generated figures (produced by executing notebooks)
 reports/figures/
@@ -54,3 +56,4 @@ optuna_study.db
 # IDE
 .vscode/
 .idea/
+.planning/
