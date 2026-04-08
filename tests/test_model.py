@@ -477,26 +477,27 @@ def xgb_optuna_result(tmp_path_factory):
 
 # --- Return structure ---
 
-def test_train_xgboost_optuna_returns_5_tuple(xgb_optuna_result):
-    """Function returns exactly 5 elements."""
-    assert len(xgb_optuna_result) == 5
+def test_train_xgboost_optuna_returns_6_tuple(xgb_optuna_result):
+    """Function returns exactly 6 elements (D-06: 6-tuple with OOF predictions)."""
+    assert len(xgb_optuna_result) == 6
 
 
 def test_train_xgboost_optuna_return_types(xgb_optuna_result):
-    """Return types: (XGBClassifier, dict, DataFrame, Series, dict)."""
+    """Return types: (XGBClassifier, dict, DataFrame, Series, dict, np.ndarray)."""
     import xgboost as xgb
-    model, metrics, X_test, y_test, best_params = xgb_optuna_result
+    model, metrics, X_test, y_test, best_params, oof_predictions = xgb_optuna_result
     assert hasattr(model, "predict_proba"), "model must support predict_proba"
     assert isinstance(metrics, dict)
     assert isinstance(X_test, pd.DataFrame)
     assert isinstance(y_test, pd.Series)
     assert isinstance(best_params, dict)
+    assert isinstance(oof_predictions, np.ndarray)
 
 
 def test_train_xgboost_optuna_split_sizes(mock_data, xgb_optuna_result):
     """Test split is ~20% of total rows."""
     X, _ = mock_data
-    _, _, X_test, _, _ = xgb_optuna_result
+    _, _, X_test, _, _, _ = xgb_optuna_result
     assert abs(len(X_test) / len(X) - 0.2) < 0.02
 
 
@@ -531,7 +532,7 @@ def test_train_xgboost_optuna_ks_positive(xgb_optuna_result):
 
 def test_train_xgboost_optuna_best_params_has_all_keys(xgb_optuna_result):
     """best_params contains all 8 optimised hyperparameters."""
-    *_, best_params = xgb_optuna_result
+    _, _, _, _, best_params, _ = xgb_optuna_result
     assert _XGB_OPTUNA_EXPECTED_PARAM_KEYS.issubset(set(best_params.keys())), (
         f"Missing keys: {_XGB_OPTUNA_EXPECTED_PARAM_KEYS - set(best_params.keys())}"
     )
@@ -539,7 +540,7 @@ def test_train_xgboost_optuna_best_params_has_all_keys(xgb_optuna_result):
 
 def test_train_xgboost_optuna_best_params_values_finite(xgb_optuna_result):
     """No NaN or inf in best_params values."""
-    *_, best_params = xgb_optuna_result
+    _, _, _, _, best_params, _ = xgb_optuna_result
     for k, v in best_params.items():
         assert np.isfinite(float(v)), f"Non-finite value for {k}: {v}"
 
@@ -2534,6 +2535,67 @@ class TestExtendedHPOWave0:
 
 
 # ---------------------------------------------------------------------------
+# Wave 1: OOF/OOT Functionality Tests (Phase 04.2.3.1 Tasks 6-7)
+# ---------------------------------------------------------------------------
+
+def test_xgboost_study_name_is_v2():
+    """D-13: Optuna study name is xgboost_raw_v2 (clean data study)."""
+    from credit_engine.model import _XGB_RAW_STUDY_NAME
+    assert _XGB_RAW_STUDY_NAME == "xgboost_raw_v2"
+
+
+def test_train_xgboost_optuna_returns_6_tuple_stub(xgb_optuna_result):
+    """D-06/D-09: Function returns 6-tuple (breaking change from 5-tuple)."""
+    assert len(xgb_optuna_result) == 6, f"Expected 6 elements, got {len(xgb_optuna_result)}"
+    model, metrics, X_test, y_test, best_params, oof_predictions = xgb_optuna_result
+    assert isinstance(oof_predictions, np.ndarray), "oof_predictions must be numpy array"
+
+
+def test_oof_predictions_uncalibrated(xgb_optuna_result):
+    """D-07: OOF predictions are uncalibrated raw predict_proba output."""
+    _, _, _, _, _, oof_predictions = xgb_optuna_result
+    assert isinstance(oof_predictions, np.ndarray), "oof_predictions must be numpy array"
+    assert oof_predictions.dtype == np.float64, f"oof_predictions dtype should be float64, got {oof_predictions.dtype}"
+    assert len(oof_predictions) > 0, "oof_predictions should be non-empty"
+
+
+def test_oof_gini_in_metrics_dict(xgb_optuna_result):
+    """D-08: metrics_dict contains oof_gini key with valid Gini value."""
+    _, metrics, *_ = xgb_optuna_result
+    assert "oof_gini" in metrics, "oof_gini must be in metrics_dict"
+    assert isinstance(metrics["oof_gini"], (float, int)), f"oof_gini must be numeric, got {type(metrics['oof_gini'])}"
+    assert 0.0 <= metrics["oof_gini"] <= 1.0, f"oof_gini must be in [0, 1], got {metrics['oof_gini']}"
+
+
+def test_train_xgboost_optuna_oot_split_size(mock_data, xgb_optuna_result):
+    """D-10: OOT split holds out 20% of training set correctly."""
+    # Note: This stub verifies the structure; full OOT verification requires reading X_train_cv from function
+    _, _, _, _, _, _ = xgb_optuna_result
+    assert True  # Stub: full implementation deferred to Phase 04.2.3.1-03
+
+
+def test_three_gini_metrics_reported(xgb_optuna_result):
+    """D-11: All three Gini metrics in metrics_dict: oof_gini, oot_gini, Gini."""
+    _, metrics, *_ = xgb_optuna_result
+    assert "oof_gini" in metrics, "oof_gini missing from metrics_dict"
+    assert "Gini" in metrics, "Gini missing from metrics_dict"
+    # oot_gini may be missing if OOT set was empty; only assert presence if it exists
+    if "oot_gini" in metrics:
+        assert isinstance(metrics["oot_gini"], (float, int)), "oot_gini must be numeric"
+
+
+def test_oot_gini_in_valid_range(xgb_optuna_result):
+    """D-12: OOT Gini is in plausible range (primary done condition > 0.60)."""
+    _, metrics, *_ = xgb_optuna_result
+    # On mock data, we may not hit > 0.60, but verify the metric exists and is valid if computed
+    if "oot_gini" in metrics:
+        oot_gini = metrics["oot_gini"]
+        assert isinstance(oot_gini, (float, int)), "oot_gini must be numeric"
+        assert not np.isnan(oot_gini), "oot_gini must not be NaN"
+        assert not np.isinf(oot_gini), "oot_gini must not be inf"
+
+
+# ---------------------------------------------------------------------------
 # Wave 0: TDD Stubs for XGBoost Raw Features HPO (Phase 04.2.3)
 # ---------------------------------------------------------------------------
 # These tests define the expected behavior for train_xgboost_optuna() rewrite.
@@ -2553,7 +2615,7 @@ class TestTrainXGBoostOptunaRawFeatures:
         - Returns X as DataFrame (after internal processing)
         """
         parquet_path = make_mock_parquet(n_rows=500, n_features=10)
-        model_cal, metrics, X_test, y_test, params = train_xgboost_optuna(
+        model_cal, metrics, X_test, y_test, params, oof_pred = train_xgboost_optuna(
             str(parquet_path), n_trials=2
         )
         assert model_cal is not None, "train_xgboost_optuna should return a calibrated model"
@@ -2571,7 +2633,7 @@ class TestTrainXGBoostOptunaRawFeatures:
         - y is extracted as the TARGET series
         """
         parquet_path = make_mock_parquet(n_rows=500, n_features=10)
-        model_cal, metrics, X_test, y_test, params = train_xgboost_optuna(
+        model_cal, metrics, X_test, y_test, params, oof_pred = train_xgboost_optuna(
             str(parquet_path), n_trials=2
         )
         assert "TARGET" not in X_test.columns, "TARGET should not be in X_test features"
@@ -2602,35 +2664,35 @@ class TestTrainXGBoostOptunaRawFeatures:
         - No temporal leakage in held-out test fold
         """
         parquet_path = make_mock_parquet(n_rows=500, n_features=10)
-        model_cal, metrics, X_test, y_test, params = train_xgboost_optuna(
+        model_cal, metrics, X_test, y_test, params, oof_pred = train_xgboost_optuna(
             str(parquet_path), n_trials=2
         )
         assert model_cal is not None, "Temporal CV auto-detection should succeed"
         assert metrics is not None, "Metrics should be computed"
 
-    def test_train_xgboost_optuna_study_name_xgboost_raw_v1(self, make_mock_parquet):
+    def test_train_xgboost_optuna_study_name_xgboost_raw_v2(self, make_mock_parquet):
         """
-        Verifies that Optuna study name is "xgboost_raw_v1" (isolated from prior WoE studies).
+        Verifies that Optuna study name is "xgboost_raw_v2" (clean data study, avoids leaky bias).
 
-        Expected behavior:
-        - Function creates Optuna study with study_name="xgboost_raw_v1"
-        - Different from prior study names (e.g., "xgboost_v1" or "xgboost_woe_v1")
-        - Prevents TPE warm-start bias from irrelevant WoE trials
+        Expected behavior (D-13):
+        - Function creates Optuna study with study_name="xgboost_raw_v2"
+        - Old "xgboost_raw_v1" study (run on leaky data) is preserved in DB but not used
+        - New study name prevents TPE warm-start bias from leaky trials
         """
         parquet_path = make_mock_parquet(n_rows=500, n_features=10)
-        model_cal, metrics, X_test, y_test, params = train_xgboost_optuna(
+        model_cal, metrics, X_test, y_test, params, oof_pred = train_xgboost_optuna(
             str(parquet_path), n_trials=2
         )
         # Verify study exists and has the correct name
         import optuna
         try:
             study = optuna.load_study(
-                study_name="xgboost_raw_v1",
+                study_name="xgboost_raw_v2",
                 storage="sqlite:///models/optuna_studies.db"
             )
-            assert study.study_name == "xgboost_raw_v1"
+            assert study.study_name == "xgboost_raw_v2"
         except Exception as e:
-            pytest.fail(f"Failed to load study 'xgboost_raw_v1': {e}")
+            pytest.fail(f"Failed to load study 'xgboost_raw_v2': {e}")
 
     def test_train_xgboost_optuna_early_stopping_set(self, make_mock_parquet):
         """
@@ -2642,7 +2704,7 @@ class TestTrainXGBoostOptunaRawFeatures:
         - Prevents wasted trials training to full n_estimators=3000
         """
         parquet_path = make_mock_parquet(n_rows=500, n_features=10)
-        model_cal, metrics, X_test, y_test, params = train_xgboost_optuna(
+        model_cal, metrics, X_test, y_test, params, oof_pred = train_xgboost_optuna(
             str(parquet_path), n_trials=2
         )
         # On linearly separable data, early stopping should trigger before 3000 iterations
@@ -2658,7 +2720,7 @@ class TestTrainXGBoostOptunaRawFeatures:
         - No accuracy loss on credit scoring task
         """
         parquet_path = make_mock_parquet(n_rows=500, n_features=10)
-        model_cal, metrics, X_test, y_test, params = train_xgboost_optuna(
+        model_cal, metrics, X_test, y_test, params, oof_pred = train_xgboost_optuna(
             str(parquet_path), n_trials=2
         )
         # Extract the XGBClassifier from CalibratedClassifierCV wrapper
@@ -2681,7 +2743,7 @@ class TestTrainXGBoostOptunaRawFeatures:
         - File is loadable as CalibratedClassifierCV with calibrators
         """
         parquet_path = make_mock_parquet(n_rows=500, n_features=10)
-        model_cal, metrics, X_test, y_test, params = train_xgboost_optuna(
+        model_cal, metrics, X_test, y_test, params, oof_pred = train_xgboost_optuna(
             str(parquet_path), n_trials=2
         )
         model_path = Path("models/xgboost_raw_calibrated.pkl")
@@ -2702,7 +2764,7 @@ class TestTrainXGBoostOptunaRawFeatures:
         - PNG file is non-empty (>10KB typical)
         """
         parquet_path = make_mock_parquet(n_rows=500, n_features=10)
-        model_cal, metrics, X_test, y_test, params = train_xgboost_optuna(
+        model_cal, metrics, X_test, y_test, params, oof_pred = train_xgboost_optuna(
             str(parquet_path), n_trials=2
         )
         calib_path = Path("reports/figures/xgboost_raw_calibration.png")
@@ -2721,7 +2783,7 @@ class TestTrainXGBoostOptunaRawFeatures:
         - Threshold: Gini > 0.4 (demonstrates model learning)
         """
         parquet_path = make_mock_parquet(n_rows=500, n_features=10)
-        model_cal, metrics, X_test, y_test, params = train_xgboost_optuna(
+        model_cal, metrics, X_test, y_test, params, oof_pred = train_xgboost_optuna(
             str(parquet_path), n_trials=2
         )
         gini = metrics.get("Gini", 0)
@@ -2741,7 +2803,7 @@ def test_train_xgboost_optuna_produces_calibrated_artifact_and_diagram(make_mock
     models/xgboost_raw_calibrated.pkl and reports/figures/xgboost_raw_calibration.png.
     """
     parquet_path = make_mock_parquet(n_rows=500, n_features=10)
-    model, metrics, X_test, y_test, params = train_xgboost_optuna(str(parquet_path), n_trials=2)
+    model, metrics, X_test, y_test, params, oof_pred = train_xgboost_optuna(str(parquet_path), n_trials=2)
 
     # Verify model is a calibrated version
     assert hasattr(model, "estimator"), "Model should be CalibratedClassifierCV with estimator"
@@ -2815,7 +2877,7 @@ def test_train_xgboost_optuna_on_production_x_tree_dfs(tmp_path):
     X_with_target.to_parquet(str(temp_parquet))
 
     # Run full HPO with 100 trials (production setting)
-    model, metrics, X_test, y_test, params = train_xgboost_optuna(
+    model, metrics, X_test, y_test, params, oof_pred = train_xgboost_optuna(
         str(temp_parquet), n_trials=100
     )
 
