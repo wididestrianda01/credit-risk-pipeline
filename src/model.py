@@ -1222,7 +1222,14 @@ def train_xgboost_optuna(
     X_oot = None
     y_oot = None
     temporal_sort_values = X[_TEMPORAL_SORT_COL].values
-    temporal_indices = np.argsort(temporal_sort_values)  # Sort ascending (earliest first)
+    # NaN means "no previous applications" — no temporal position known.
+    # np.argsort treats NaN as +inf (ascending), pushing ~128K first-time-applicant
+    # rows into the OOT set and creating a subpopulation bias, not a temporal holdout.
+    # Fill NaN with (nanmin - 1) so unknown-timing rows sort to "oldest" and go into
+    # the training pool, keeping OOT a clean temporal slice of repeat applicants.
+    _nan_fill = float(np.nanmin(temporal_sort_values)) - 1.0 if not np.all(np.isnan(temporal_sort_values)) else 0.0
+    temporal_sort_values_filled = np.where(np.isnan(temporal_sort_values), _nan_fill, temporal_sort_values)
+    temporal_indices = np.argsort(temporal_sort_values_filled)  # Sort ascending (earliest first)
 
     # Identify OOT threshold: 80% of full dataset (earliest), 20% holdout (most-recent)
     oot_threshold_idx = int(len(X) * (1 - _TEST_SIZE))  # (1 - 0.2) = 0.8
