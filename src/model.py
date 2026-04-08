@@ -1190,7 +1190,9 @@ def train_xgboost_optuna(
 
     # --- OOF accumulation loop (D-07, D-08: uncalibrated fold predictions for OOF Gini) ---
     oof_predictions = np.zeros(len(X_train))
-    best_iteration = study.best_trial.user_attrs.get("best_iteration", _XGB_RAW_N_ESTIMATORS - 1)
+    best_iteration = study.best_trial.user_attrs.get(
+        "best_iteration", best_params.get("n_estimators", _XGB_RAW_N_ESTIMATORS_MAX) - 1
+    )
 
     for train_idx, val_idx in cv.split(X_train, y_train):
         X_fold_train = X_train.iloc[train_idx]
@@ -1216,7 +1218,7 @@ def train_xgboost_optuna(
         oof_predictions[val_idx] = y_prob_fold
 
     # --- Final model: retrain on full X_train with best params ---
-    # Extract best_iteration from early stopping; default to 3000 if missing
+    # best_iteration already resolved above; fallback caps at Optuna search ceiling (1000)
     final_n_estimators = best_iteration + 1
 
     best_params_final = {

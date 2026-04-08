@@ -11,6 +11,14 @@ Run with
 """
 from __future__ import annotations
 
+import os
+# Force single-threaded XGBoost to prevent OpenMP thread-pool deadlocks when
+# multiple sequential XGBClassifier.fit() calls run in the same pytest process.
+# Must be set before any XGBoost import or the thread pool may already be live.
+# Hard-set to override any inherited value — setdefault is insufficient when
+# the shell already exports OMP_NUM_THREADS with a multi-thread count.
+os.environ["OMP_NUM_THREADS"] = "1"
+
 import matplotlib
 matplotlib.use("Agg")  # non-interactive backend — must be set before pyplot import
 
@@ -50,6 +58,31 @@ from credit_engine.model import (
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="session", autouse=True)
+def _force_xgb_single_thread():
+    """
+    Session-wide autouse fixture: patches XGBClassifier.__init__ to default
+    nthread=1 for every test in this file.
+
+    Rationale: XGBoost 3.x on Linux shares an OpenMP thread pool across
+    sequential fit() calls in the same process. Without nthread=1 the pool
+    deadlocks after the first fit, hanging the entire test suite.
+    """
+    import functools
+    import xgboost as _xgb
+
+    _original = _xgb.XGBClassifier.__init__
+
+    @functools.wraps(_original)
+    def _patched(self, *args, **kwargs):
+        kwargs.setdefault("nthread", 1)
+        _original(self, *args, **kwargs)
+
+    _xgb.XGBClassifier.__init__ = _patched
+    yield
+    _xgb.XGBClassifier.__init__ = _original
+
 
 @pytest.fixture(scope="module")
 def mock_data() -> tuple[pd.DataFrame, pd.Series]:
@@ -455,7 +488,43 @@ def xgb_optuna_result(tmp_path_factory):
     runs only once regardless of how many tests consume this fixture.
     Function scope would re-run the study 7 times (one per test), taking
     ~7× longer with no additional coverage value.
+
+    Three patches are applied for test speed and thread safety:
+    1. _XGB_RAW_N_ESTIMATORS / _XGB_RAW_N_ESTIMATORS_MAX capped to 20 so the
+       Optuna objective and OOF accumulation loop train tiny models.
+    2. Optuna storage forced to in-memory so the fixture does not read/write
+       the production SQLite DB (models/optuna_studies.db) and does not inherit
+       hyperparameters tuned on production-scale data.
+    3. XGBClassifier forced to nthread=1 to prevent OpenMP thread pool
+       deadlocks when multiple sequential fits run in the same process.
     """
+    import optuna as _optuna
+    import src.model as _model
+    import xgboost as _xgb
+
+    mp = pytest.MonkeyPatch()
+    mp.setattr(_model, "_XGB_RAW_N_ESTIMATORS", 20)
+    mp.setattr(_model, "_XGB_RAW_N_ESTIMATORS_MAX", 20)
+
+    _original_create_study = _optuna.create_study
+
+    def _in_memory_study(**kwargs: object) -> object:
+        kwargs.pop("storage", None)
+        return _original_create_study(**kwargs)
+
+    mp.setattr(_optuna, "create_study", _in_memory_study)
+
+    import functools as _functools
+
+    _original_xgb_init = _xgb.XGBClassifier.__init__
+
+    @_functools.wraps(_original_xgb_init)
+    def _single_thread_init(self: object, *args: object, **kwargs: object) -> None:
+        kwargs.setdefault("nthread", 1)
+        _original_xgb_init(self, *args, **kwargs)
+
+    mp.setattr(_xgb.XGBClassifier, "__init__", _single_thread_init)
+
     rng = np.random.default_rng(42)
     n = 500
     n_pos = int(n * 0.08)
@@ -472,7 +541,10 @@ def xgb_optuna_result(tmp_path_factory):
     parquet_path = tmp_dir / "mock_data.parquet"
     X.to_parquet(parquet_path)
 
-    return train_xgboost_optuna(str(parquet_path), n_trials=3)
+    try:
+        return train_xgboost_optuna(str(parquet_path), n_trials=3)
+    finally:
+        mp.undo()
 
 
 # --- Return structure ---
@@ -504,10 +576,10 @@ def test_train_xgboost_optuna_split_sizes(mock_data, xgb_optuna_result):
 # --- Metrics ---
 
 def test_train_xgboost_optuna_metrics_keys(xgb_optuna_result):
-    """metrics dict has all evaluate_model keys."""
+    """metrics dict has all evaluate_model keys plus oof_gini; oot_gini is optional."""
     _, metrics, *_ = xgb_optuna_result
-    expected = {"Model", "AUC-ROC", "Gini", "KS", "Brier", "BrierSkill", "AvgPrecision"}
-    assert set(metrics.keys()) == expected
+    required = {"Model", "AUC-ROC", "Gini", "KS", "Brier", "BrierSkill", "AvgPrecision", "oof_gini"}
+    assert required.issubset(set(metrics.keys()))
 
 
 def test_train_xgboost_optuna_gini_on_separable_mock(xgb_optuna_result):
@@ -581,7 +653,7 @@ def test_train_xgboost_optuna_model_round_trip(mock_data_parquet_path):
     from pathlib import Path
     model_path = Path("models/xgboost_raw_calibrated.pkl")
 
-    model, _, X_test, _, _ = train_xgboost_optuna(mock_data_parquet_path, n_trials=2)
+    model, _, X_test, _, _, _ = train_xgboost_optuna(mock_data_parquet_path, n_trials=2)
     loaded = load_model(str(model_path))
     np.testing.assert_array_almost_equal(
         model.predict_proba(X_test),
@@ -1367,7 +1439,7 @@ class TestXGBoostExtendedSearchSpace:
         parquet_path = parquet_tmp / "mock_data.parquet"
         X.to_parquet(parquet_path)
 
-        _, _, _, _, best_params = train_xgboost_optuna(str(parquet_path), n_trials=3)
+        _, _, _, _, best_params, _ = train_xgboost_optuna(str(parquet_path), n_trials=3)
         return best_params
 
     def test_best_params_includes_gamma(self, xgb_best_params):
@@ -2828,7 +2900,7 @@ def test_train_xgboost_optuna_brierskill_positive_after_calibration(make_mock_pa
     better-calibrated probability estimates than prevalence baseline).
     """
     parquet_path = make_mock_parquet(n_rows=500, n_features=10)
-    model, metrics, X_test, y_test, params = train_xgboost_optuna(str(parquet_path), n_trials=2)
+    model, metrics, X_test, y_test, params, _ = train_xgboost_optuna(str(parquet_path), n_trials=2)
 
     assert "BrierSkill" in metrics, "Metrics should include BrierSkill"
     brierskill = metrics["BrierSkill"]
@@ -2837,6 +2909,7 @@ def test_train_xgboost_optuna_brierskill_positive_after_calibration(make_mock_pa
     assert brierskill > 0, f"BrierSkill should be > 0 on separable mock data, got {brierskill}"
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(
     not Path("data/processed/X_tree_dfs.parquet").exists(),
     reason="X_tree_dfs.parquet not found; run Phase 04.2.2 first"

@@ -1,4 +1,8 @@
 """conftest.py — adds repo root to sys.path and exposes src/ as credit_engine."""
+# Register custom pytest marks to suppress PytestUnknownMarkWarning.
+# See pytest docs: https://docs.pytest.org/en/stable/how-to/mark.html
+def pytest_configure(config):
+    config.addinivalue_line("markers", "slow: marks tests as slow (excluded by -m 'not slow')")
 
 import sys
 import tempfile
