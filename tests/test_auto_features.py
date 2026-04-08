@@ -641,7 +641,8 @@ class TestBuildFeaturetoolsFeatureStore:
         feature_matrix, _, _ = result
         saved_matrix = pd.read_parquet(output_file)
 
-        pd.testing.assert_frame_equal(feature_matrix, saved_matrix)
+        # Parquet includes TARGET column (required by train_xgboost_optuna); return value does not.
+        pd.testing.assert_frame_equal(feature_matrix, saved_matrix.drop(columns=["TARGET"], errors="ignore"))
 
     @pytest.mark.slow
     def test_default_agg_primitives_used(self, data_dir, y_train):

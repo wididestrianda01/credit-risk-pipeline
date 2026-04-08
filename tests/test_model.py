@@ -499,7 +499,7 @@ def xgb_optuna_result(tmp_path_factory):
        deadlocks when multiple sequential fits run in the same process.
     """
     import optuna as _optuna
-    import src.model as _model
+    import credit_engine.model as _model
     import xgboost as _xgb
 
     mp = pytest.MonkeyPatch()
