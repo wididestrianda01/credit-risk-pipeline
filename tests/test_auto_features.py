@@ -1264,15 +1264,21 @@ def test_no_leaky_cols_in_dfs_output():
     Per D-05 (CONTEXT.md), this test must remain permanently in the suite.
     Basis: SR 11-7 model risk management guidance — documented evidence that input data
     does not include future-looking signals.
-    """
-    import pandas as pd
-    from pathlib import Path
-    from src.auto_features import _LEAKY_SKDPD_COLS
 
+    Arrange: Load DFS feature store parquet (X_tree_dfs.parquet)
+    Act: Identify any column names that match leaky DPD patterns
+    Assert: Verify all _LEAKY_SKDPD_COLS are absent from output
+    """
+    from pathlib import Path
+
+    # Arrange: Set up path to DFS feature store
     parquet_path = Path("data/processed/X_tree_dfs.parquet")
     if not parquet_path.exists():
-        pytest.skip(f"DFS parquet not found at {parquet_path}")
+        pytest.skip(f"DFS parquet not found at {parquet_path} — will be rebuilt in Plan 03")
 
+    # Act: Load DFS output and identify leaky columns
     df = pd.read_parquet(parquet_path)
     leaked = [c for c in df.columns if c in _LEAKY_SKDPD_COLS]
+
+    # Assert: No leaky columns survive the rebuild
     assert leaked == [], f"Leaky columns survived rebuild: {leaked}"

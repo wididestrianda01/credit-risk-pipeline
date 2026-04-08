@@ -3,7 +3,7 @@
 **Created:** 2026-04-07
 **Granularity:** Fine (focused phases, clear go/no-go gates)
 **Execution:** Sequential (ML phases have hard dependencies)
-**Target:** Gini ≥ 0.70 calibrated PD model with full explainability and deployment
+**Target:** Gini ≥ 0.70 calibrated PD model with full explainability and deployment, without overfitting (OOF–OOT gap ≤ 0.05)
 
 ---
 
@@ -71,9 +71,11 @@ Establish the correct data pipeline for tree models: raw features without WoE en
 
 ---
 
-## Milestone 2 — Tree Model Training (Phases 04.2.3–04.2.5)
+## Milestone 2 — Tree Model Training (Phases 04.2.3–04.2.6)
 
 Train and optimize all three tree models on the corrected raw+DFS feature store.
+
+> **Cross-cutting process requirement (all phases in this milestone):** Before any full HPO run, execute a 2-trial sanity check and verify Gini is in plausible range (0.40–0.80). During full runs, monitor progress continuously — check per-trial metrics and abort if a leakage flag threshold is exceeded. See PROC-01 and PROC-02 in REQUIREMENTS.md.
 
 ### Phase 04.2.3 — XGBoost HPO on Raw Features
 
@@ -82,14 +84,44 @@ Train and optimize all three tree models on the corrected raw+DFS feature store.
 **Requirements:** MODEL-02, CALIB-02, CALIB-03
 
 **Plans:**
-1. Update `train_xgboost_optuna()` to accept raw feature store path parameter
-2. Continue existing Optuna study from `models/optuna_studies.db` (do NOT restart)
-3. Run HPO: 50–100 trials, temporal CV with 2% embargo, `scale_pos_weight = n_neg/n_pos`
-4. Apply Platt calibration; save `models/xgboost_raw_calibrated.pkl`
-5. Generate reliability diagram + ROC/PR figure
-6. Add TDD tests for raw-feature training path
+1/1 complete
+- [x] 04.2.3-01-PLAN.md — XGBoost HPO with 8 search-space improvements, Platt calibration, 188 tests migrated
 
-**Done condition:** XGBoost Gini > 0.60 on temporal CV, BrierSkill > 0, model artifact saved with metrics JSON
+**Done condition:** XGBoost held-out Gini > 0.60, OOT Gini > 0.60, OOF–OOT gap ≤ 0.05, BrierSkill > 0, model artifact saved with metrics JSON (three Gini metrics reported)
+
+**Status:** ⚠️ Complete but invalid — Gini=0.9592 due to 14 SK_DPD leaky columns identified post-execution
+
+---
+
+### Phase 04.2.3.1 — Remove SK_DPD Information Leakage and Add OOF/OOT Gini
+
+**Goal:** Strip SK_DPD columns from `X_tree_dfs.parquet`, rebuild the feature store, add OOF Gini computation to `train_xgboost_optuna()`, and re-run XGBoost HPO on the clean store to get a valid Gini baseline
+
+**Why this exists:** Phase 04.2.3 produced Gini=0.9592 — an implausibly high result. Root-cause investigation confirmed 14 SK_DPD columns from `pos_cash_balance` and `credit_card_balance` encode current-month payment distress on ACTIVE products. These signals are unavailable at origination (loan decision time), constituting information leakage under Basel III IRB Article 174. The prior Gini result is therefore invalid.
+
+**What counts as leakage:** Columns sourced from the MONTHS_BALANCE aggregation of pos_cash/credit_card — they include post-origination months. Bureau DPD columns (`bbal_dpd_*`, `bureau_bbal_dpd_*`) and installment DPD columns (`inst_late_dpd_ratio`, `bureau_inst_dpd`) are from historical closed-loan records and are legitimate.
+
+**Leaky columns to remove (14):**
+- `pos_sk_dpd_max`, `pos_sk_dpd_std`, `pos_sk_dpd_mean`, `pos_sk_dpd_def_max`
+- `cc_sk_dpd_max`, `cc_sk_dpd_mean`, `cc_dpd_rate`
+- `SUM(credit_card.SK_DPD)`, `SUM(credit_card.SK_DPD_DEF)`
+- `SUM(pos_cash.SK_DPD)`, `SUM(pos_cash.SK_DPD_DEF)`
+- `SUM(previous_application.credit_card.SK_DPD)`, `SUM(previous_application.credit_card.SK_DPD_DEF)`
+- `SUM(previous_application.pos_cash.SK_DPD)`, `SUM(previous_application.pos_cash.SK_DPD_DEF)`
+
+**OOF + OOT compliance:** Add out-of-fold Gini (development set discrimination, all 307K rows via CV) and out-of-time Gini (Basel CRE36 temporal validation, hold out most-recent 20%). Report three Gini metrics: oof_gini, oot_gini, Gini (holdout).
+
+**Requirements:** MODEL-02 (corrected), CALIB-02, CALIB-03
+
+**Plans:**
+5/5 plans created
+- [ ] 04.2.3.1-01-PLAN.md — Verify leakage guards in auto_features.py and regression test
+- [ ] 04.2.3.1-02-PLAN.md — Fix 6-tuple return unpacking tests; add temporal validation; create OOF/OOT stubs
+- [ ] 04.2.3.1-03-PLAN.md — Rebuild X_tree_dfs: DFS + X_tree_raw merge, apply leakage guards, verify
+- [ ] 04.2.3.1-04-PLAN.md — Sanity check: 5-trial Optuna run (early fail indicator, oof_gini ≤ 0.85 gate)
+- [ ] 04.2.3.1-05-PLAN.md — Full HPO: 50-trial Optuna run (oot_gini > 0.60 gate, 3 Gini metrics, calibration)
+
+**Done condition:** `X_tree_dfs.parquet` contains 0 SK_DPD columns; oot_gini > 0.60 (primary validation gate); oof_gini < 0.75 (plausible, no remaining leakage); OOF–OOT gap ≤ 0.05 (anti-overfitting guard); held-out Gini, OOF Gini, and OOT Gini all reported; all tests pass
 
 ---
 
@@ -233,7 +265,7 @@ Train and optimize all three tree models on the corrected raw+DFS feature store.
 ```
 Phase 01 (infrastructure)
     ↓
-Phase 04.2.1 → Phase 04.2.2 → Phase 04.2.3 → Phase 04.2.4 → Phase 04.2.5 → Phase 04.2.6
+Phase 04.2.1 → Phase 04.2.2 → Phase 04.2.3 → Phase 04.2.3.1 → Phase 04.2.4 → Phase 04.2.5 → Phase 04.2.6
                                                                               ↓
                                                                        Phase 04.3
                                                                               ↓
@@ -251,7 +283,8 @@ Phase 01 (infrastructure) is a prerequisite for all subsequent phases. Phases 04
 | Phase 01 — Infrastructure | 🔄 Planning complete | Test isolation + path safety |
 | Phase 04.2.1 — Fix raw feature store | ✅ Complete | `X_tree_raw.parquet` (307K×211, 0 NaN, 0 WoE) |
 | Phase 04.2.2 — DFS augmentation | ✅ Complete (tests) | 9 TDD tests passing; features/DFS pipeline validated |
-| Phase 04.2.3 — XGBoost HPO | 🔲 Not started | Gini > 0.55 |
+| Phase 04.2.3 — XGBoost HPO | ⚠️ Complete (invalid — leaky data) | Gini=0.9592 (SK_DPD leakage confirmed) |
+| Phase 04.2.3.1 — SK_DPD leakage removal + OOF/OOT Gini | 🔄 In progress | Clean store, oot_gini > 0.60, oof_gini < 0.75, OOF–OOT gap ≤ 0.05 |
 | Phase 04.2.4 — LightGBM HPO | 🔲 Not started | Gini > 0.55 |
 | Phase 04.2.5 — CatBoost HPO | 🔲 Not started | Gini > 0.50 |
 | Phase 04.2.6 — Ensemble + gate | 🔲 Not started | Gini ≥ 0.60 |
@@ -262,5 +295,6 @@ Phase 01 (infrastructure) is a prerequisite for all subsequent phases. Phases 04
 
 ---
 
-*Roadmap updated: 2026-04-07*
-*Phase 04.2.2 tests complete: 9/9 passing (Woodwork + time-features + dedup regression)*
+*Roadmap updated: 2026-04-08*
+*Phase 04.2.3.1 plans created: 2 plans (leakage removal + OOF/OOT metrics, HPO re-run)*
+*2026-04-08: Anti-overfitting guard (OOF–OOT gap ≤ 0.05) added as hard done condition for Phase 04.2.3, 04.2.3.1, and project target*
