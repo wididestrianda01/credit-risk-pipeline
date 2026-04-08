@@ -21,7 +21,16 @@ import argparse
 import sys
 from pathlib import Path
 
-from credit_engine.model import train_xgboost_optuna
+# Bootstrap credit_engine alias when running outside pytest.
+# src/model.py imports from credit_engine.utils at module level, so the alias
+# must exist before the import — same setup as conftest.py.
+_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_ROOT))
+import src as _src  # noqa: E402
+if "credit_engine" not in sys.modules:
+    sys.modules["credit_engine"] = _src
+
+from credit_engine.model import train_xgboost_optuna  # noqa: E402
 
 
 def main():

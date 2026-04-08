@@ -1189,16 +1189,18 @@ def train_xgboost_optuna(
     plt.close(fig)
 
     # --- Platt calibration ---
+    # Pass explicit paths to avoid overwriting LightGBM artifacts (default paths).
     model_calibrated, brier_uncal, brier_cal = calibrate_model(
-        model_best, X_train, y_train, X_test, y_test, method="sigmoid"
+        model_best, X_train, y_train, X_test, y_test, method="sigmoid",
+        output_model_path="models/xgboost_raw_calibrated.pkl",
+        output_figure_path="reports/figures/xgboost_raw_calibration.png",
     )
 
     # --- Evaluate calibrated model ---
     metrics_dict = evaluate_model(model_calibrated, X_test, y_test, "XGBoost (Raw, Calibrated)")
 
-    # --- Persist models ---
+    # --- Persist best (uncalibrated) model ---
     save_model(model_best, "models/xgboost_raw_best.pkl")
-    save_model(model_calibrated, "models/xgboost_raw_calibrated.pkl")
 
     # --- Persist params ---
     params_path = Path("models/xgboost_raw_params.json")
