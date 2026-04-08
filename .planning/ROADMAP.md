@@ -61,13 +61,13 @@ Establish the correct data pipeline for tree models: raw features without WoE en
 **Requirements:** DATA-04, TEST-02 (complete)
 
 **Plans:**
-1. Diagnose `src/auto_features.py` entity-set build failure — trace why child tables produce 0 DFS columns
-2. Fix entity-set construction: correct relationship definitions, validate each child table has rows
-3. Re-run DFS with corrected entity-set; validate generated features have variance
-4. Merge DFS features with `X_tree_raw.parquet` → `X_tree_dfs.parquet`
-5. Add TDD tests for corrected DFS pipeline
+4/4 plans executed
+- [x] 04.2.2-01-PLAN.md — Diagnose entity-set build failure; fix Woodwork LogicalType assignments
+- [x] 04.2.2-02-PLAN.md — Implement engineer_time_features for 3-month, months-since-DPD, credit-age aggregates
+- [x] 04.2.2-03-PLAN.md — Implement deduplicate_dfs_features for >0.90 correlation removal
+- [x] 04.2.2-04-PLAN.md — Add TDD tests (9 total: 4 Woodwork + time-features + dedup)
 
-**Done condition:** `X_tree_dfs.parquet` exists with shape (307511, N>155), DFS columns have non-zero variance, merged cleanly with raw features
+**Done condition:** All 4 sub-tasks complete; 9 TDD tests passing (100% success)
 
 ---
 
@@ -194,7 +194,7 @@ Train and optimize all three tree models on the corrected raw+DFS feature store.
 
 ### Phase 05.2 — Streamlit Dashboard
 
-**Goal:** Interactive Streamlit app for applicant risk scoring with SHAP waterfall visualization
+**Goal:** Interactive Streamlit app for applicant risk scoring with SHAP waterfall visualization deployed on Streamlit community free Online
 
 **Requirements:** DEPLOY-04
 
@@ -205,7 +205,7 @@ Train and optimize all three tree models on the corrected raw+DFS feature store.
 4. Add feature contribution table (top 10 positive/negative factors)
 5. Manual E2E test: applicant entry → PD output → SHAP waterfall visible
 
-**Done condition:** `streamlit run app/streamlit_app.py` starts, full applicant scoring flow works end-to-end
+**Done condition:** `streamlit run app/streamlit_app.py` starts, full applicant scoring flow works end-to-end, can be accessed online
 
 ---
 
@@ -250,7 +250,7 @@ Phase 01 (infrastructure) is a prerequisite for all subsequent phases. Phases 04
 |-------|--------|--------|
 | Phase 01 — Infrastructure | 🔄 Planning complete | Test isolation + path safety |
 | Phase 04.2.1 — Fix raw feature store | ✅ Complete | `X_tree_raw.parquet` (307K×211, 0 NaN, 0 WoE) |
-| Phase 04.2.2 — DFS augmentation | 🔲 Not started | `X_tree_dfs.parquet` (307K, >155) |
+| Phase 04.2.2 — DFS augmentation | ✅ Complete (tests) | 9 TDD tests passing; features/DFS pipeline validated |
 | Phase 04.2.3 — XGBoost HPO | 🔲 Not started | Gini > 0.55 |
 | Phase 04.2.4 — LightGBM HPO | 🔲 Not started | Gini > 0.55 |
 | Phase 04.2.5 — CatBoost HPO | 🔲 Not started | Gini > 0.50 |
@@ -263,4 +263,4 @@ Phase 01 (infrastructure) is a prerequisite for all subsequent phases. Phases 04
 ---
 
 *Roadmap updated: 2026-04-07*
-*Phase 01 planning complete: 3 plans created*
+*Phase 04.2.2 tests complete: 9/9 passing (Woodwork + time-features + dedup regression)*

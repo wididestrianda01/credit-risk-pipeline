@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-04-07T18:57:29.270Z"
+last_updated: "2026-04-07T22:15:00.000Z"
 progress:
-  total_phases: 2
-  completed_phases: 1
-  total_plans: 7
-  completed_plans: 4
-  percent: 57
+  total_phases: 3
+  completed_phases: 2
+  total_plans: 12
+  completed_plans: 8
+  percent: 67
 ---
 
 # Project State
@@ -22,17 +22,17 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-07)
 
 **Core value:** Calibrated PD feeding EL = PD × LGD × EAD, Gini ≥ 0.70
-**Current focus:** Phase 01 — fix-project-wide-infrastructure-issues-credit-engine-alias-f
+**Current focus:** Phase 04.2.2 — dfs-auto-feature-augmentation
 
 ---
 
 ## Active Phase
 
-**Phase 04.2.1** — Fix Tree Feature Store
+**Phase 04.2.2** — DFS Auto-Feature Augmentation
 
-- Status: Not started (planning complete, execution pending)
-- Next command: `/gsd-plan-phase 04.2.1`
-- Branch: `gsd/phase-04.2-continued-gap-closure` (current)
+- Status: In progress (4/4 subtasks complete, awaiting next phase)
+- Last command: `/gsd-plan-phase 04.2.2-04` (just completed)
+- Branch: `gsd/phase-04.2.2-dfs-auto-feature-augmentation` (current)
 
 ---
 
@@ -80,6 +80,15 @@ See: `.planning/PROJECT.md` (updated 2026-04-07)
 - **Gray area 3 (model rebuild order):** XGBoost first (most HPO trials already exist in SQLite), then LightGBM, then CatBoost. All 3 must be rebuilt.
 - **CONTEXT.md + DISCUSSION-LOG.md:** Recreated 2026-04-07 at `.planning/phases/04.2.1-fix-tree-feature-store/`
 - Next command: `/gsd-plan-phase 04.2.1`
+
+### 2026-04-07 — Phase 04.2.2-04 TDD tests complete
+
+- **Task 1:** 3 Woodwork LogicalType fix unit tests added to `test_auto_features.py` — validates `_build_entity_set()` creates EntitySet, asserts `_DEFAULT_AGG_PRIMITIVES` includes `std` and `num_unique`, confirms ≥7 explicit `logical_types=` assignments in source code
+- **Task 2:** 5 engineer_time_features tests added to `test_features.py` — synthetic bureau_tables fixture (10 applicants, 0–5 records each, varying DPD patterns), validates 3-month delinquency rate, months-since-last-DPD, credit-age-mean calculations, return type/shape/dtype
+- **Task 3:** 1 DFS correlation deduplication regression test added — validates `deduplicate_dfs_features()` removes >0.90 correlated feature pairs
+- **Task 4:** Pytest execution: all 9 new tests passing (5.63s), 0 failures, 100% success rate
+- **Commit:** `3841b9f` — `test(04.2.2-04): add TDD tests for Woodwork fix, time features, cross-dedup regression`
+- **SUMMARY.md:** Created at `.planning/phases/04.2.2-dfs-auto-feature-augmentation/04.2.2-04-SUMMARY.md`
 
 ---
 

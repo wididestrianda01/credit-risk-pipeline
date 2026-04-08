@@ -12,6 +12,7 @@ Convention
 - Boolean flags use the suffix `_flag`.
 """
 
+import gc
 import os
 import pickle
 import warnings
@@ -2249,4 +2250,180 @@ def pseudo_label_from_predictions(
 
     return X_pseudo, y_pseudo
 
-    return X_combined
+
+def build_dfs_feature_store(
+    data_dir: Path | str,
+) -> tuple[pd.DataFrame, list[str]]:
+    """
+    Build merged tree feature store: raw + DFS + time features.
+
+    Memory-safe orchestration of the Phase 04.2.2 pipeline.
+    Uses a DFS checkpoint to allow restarts without re-running DFS,
+    and sample-based cross-dedup to avoid materialising the full
+    correlation matrix on 307K rows.
+
+    Pipeline steps
+    --------------
+    1. Load X_tree_raw.parquet
+    2. Run DFS via build_featuretools_feature_store (with checkpoint)
+       - Internal correlation dedup at 0.90 threshold runs inside this call;
+         no second dedup pass is needed or permitted.
+    3. Cross-dedup on a 50K-row random sample
+    4. Compute time features via engineer_time_features
+    5. Merge: pd.concat([X_tree_raw, X_dfs_dedup, X_time], axis=1)
+    6. fillna(-999), cast to float32, save
+
+    Parameters
+    ----------
+    data_dir : Path | str
+        Directory containing raw data CSVs (dataset/ folder).
+
+    Returns
+    -------
+    X_tree_dfs : pd.DataFrame
+        Merged feature matrix, shape (307511, N>155).
+        All float32, no NaN (-999 sentinel used).
+        Index name = SK_ID_CURR.
+    feature_columns : list[str]
+        Column names in X_tree_dfs, in order.
+
+    Raises
+    ------
+    FileNotFoundError
+        If X_tree_raw.parquet or required CSV files are missing.
+    AssertionError
+        If final shape does not satisfy (307511, N>155).
+    """
+    from credit_engine.auto_features import build_featuretools_feature_store
+
+    data_dir = Path(data_dir)
+    output_dir = _PROJECT_ROOT / "data" / "processed"
+    models_dir = _PROJECT_ROOT / "models"
+    checkpoint_path = output_dir / "X_dfs_checkpoint.parquet"
+
+    X_tree_raw_path = output_dir / "X_tree_raw.parquet"
+    if not X_tree_raw_path.exists():
+        raise FileNotFoundError(
+            f"X_tree_raw.parquet not found at {X_tree_raw_path}; run Phase 04.2.1 first"
+        )
+
+    # -----------------------------------------------------------------------
+    # Step 1: Load X_tree_raw and immediately cast to float32
+    # -----------------------------------------------------------------------
+    print("Step 1/6: Loading X_tree_raw...")
+    X_tree_raw = pd.read_parquet(X_tree_raw_path)
+    X_tree_raw = X_tree_raw.astype("float32")
+    print(f"  X_tree_raw: {X_tree_raw.shape}")
+
+    # Ensure SK_ID_CURR index — restore from application CSV if missing
+    if X_tree_raw.index.name != "SK_ID_CURR":
+        _app_ids = pd.read_csv(
+            data_dir / "application_train.csv", usecols=["SK_ID_CURR"]
+        )["SK_ID_CURR"].values
+        X_tree_raw = X_tree_raw.copy()
+        X_tree_raw.index = pd.Index(_app_ids, name="SK_ID_CURR")
+
+    # -----------------------------------------------------------------------
+    # Step 2: Run DFS with checkpoint (most memory-intensive step)
+    # build_featuretools_feature_store runs internal correlation dedup at
+    # corr_threshold=0.90 — a second dedup pass would waste memory and time.
+    # -----------------------------------------------------------------------
+    print("Step 2/6: Running DFS (or loading checkpoint)...")
+    if checkpoint_path.exists():
+        print(f"  Checkpoint found — loading from {checkpoint_path}")
+        X_dfs = pd.read_parquet(checkpoint_path).astype("float32")
+    else:
+        y_train_path = output_dir / "y_train.parquet"
+        if not y_train_path.exists():
+            raise FileNotFoundError(f"y_train.parquet not found at {y_train_path}")
+        y_train = pd.read_parquet(y_train_path).squeeze()
+
+        X_dfs, _feature_defs, _selected_cols = build_featuretools_feature_store(
+            data_dir=data_dir,
+            y_train=y_train,
+            output_path=checkpoint_path,  # saves deduped result to disk
+            agg_primitives=None,
+            max_depth=2,
+            iv_threshold=0.02,
+            corr_threshold=0.90,
+            n_jobs=1,
+        )
+
+        # Reload from disk as float32 to free the float64 copy
+        del X_dfs, _feature_defs, _selected_cols, y_train
+        gc.collect()
+        X_dfs = pd.read_parquet(checkpoint_path).astype("float32")
+
+    print(f"  X_dfs after internal dedup: {X_dfs.shape}")
+
+    # -----------------------------------------------------------------------
+    # Step 3: Cross-dedup DFS vs raw on a 50K-row sample
+    # Avoids materialising the full (307K × N_raw × N_dfs) correlation matrix.
+    # -----------------------------------------------------------------------
+    print("Step 3/6: Cross-dedup DFS vs raw (50K-row sample)...")
+    _SAMPLE_N = 50_000
+    _CORR_THRESHOLD = 0.90
+
+    common_idx = X_dfs.index.intersection(X_tree_raw.index)
+    if len(common_idx) < _SAMPLE_N:
+        sample_idx = common_idx
+    else:
+        rng = np.random.default_rng(42)
+        sample_idx = rng.choice(common_idx, size=_SAMPLE_N, replace=False)
+
+    X_dfs_sample = X_dfs.loc[sample_idx]
+    X_raw_sample = X_tree_raw.loc[sample_idx]
+
+    # For each DFS column find its maximum absolute correlation with any raw column
+    cols_to_keep = []
+    for col in X_dfs.columns:
+        max_corr_with_raw = X_dfs_sample[col].corr(X_raw_sample).abs().max()
+        if max_corr_with_raw <= _CORR_THRESHOLD:
+            cols_to_keep.append(col)
+
+    del X_dfs_sample, X_raw_sample
+    gc.collect()
+
+    X_dfs_dedup = X_dfs[cols_to_keep]
+    del X_dfs
+    gc.collect()
+    print(f"  After cross-dedup: {X_dfs_dedup.shape[1]} DFS columns remain")
+
+    # -----------------------------------------------------------------------
+    # Step 4: Compute time features
+    # -----------------------------------------------------------------------
+    print("Step 4/6: Computing time features...")
+    X_time = engineer_time_features(data_dir).astype("float32")
+    print(f"  X_time: {X_time.shape}")
+
+    # -----------------------------------------------------------------------
+    # Step 5: Merge raw + DFS + time features on SK_ID_CURR index
+    # -----------------------------------------------------------------------
+    print("Step 5/6: Merging raw + DFS + time features...")
+    X_merged = pd.concat([X_tree_raw, X_dfs_dedup, X_time], axis=1)
+
+    del X_tree_raw, X_dfs_dedup, X_time
+    gc.collect()
+    print(f"  After merge: {X_merged.shape}")
+
+    # -----------------------------------------------------------------------
+    # Step 6: Fill NaN, validate, and save
+    # -----------------------------------------------------------------------
+    print("Step 6/6: Finalising and saving...")
+    X_merged = X_merged.fillna(_NAN_SENTINEL)
+
+    assert X_merged.isna().sum().sum() == 0, "NaN values remain after fillna"
+    assert X_merged.shape[0] == 307511, f"Expected 307511 rows, got {X_merged.shape[0]}"
+    assert X_merged.shape[1] > 155, f"Expected >155 columns, got {X_merged.shape[1]}"
+    assert X_merged.index.name == "SK_ID_CURR", f"Index name is {X_merged.index.name}"
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    X_merged.to_parquet(output_dir / "X_tree_dfs.parquet", index=True)
+    print(f"  Saved X_tree_dfs.parquet: {X_merged.shape}")
+
+    feature_columns = list(X_merged.columns)
+    models_dir.mkdir(parents=True, exist_ok=True)
+    with open(models_dir / "dfs_feature_columns.pkl", "wb") as fh:
+        pickle.dump(feature_columns, fh)
+
+    return X_merged, feature_columns
