@@ -2779,24 +2779,44 @@ def test_train_xgboost_optuna_brierskill_positive_after_calibration(make_mock_pa
     not Path("data/processed/X_tree_dfs.parquet").exists(),
     reason="X_tree_dfs.parquet not found; run Phase 04.2.2 first"
 )
-def test_train_xgboost_optuna_on_production_x_tree_dfs():
+def test_train_xgboost_optuna_on_production_x_tree_dfs(tmp_path):
     """
     MANUAL TEST: Runs full HPO on production X_tree_dfs.parquet (307K rows, 323 features).
     Expected outcome: Gini > 0.60 on held-out test set.
 
-    This test is marked as skip if X_tree_dfs.parquet is missing.
+    This test is marked as skip if X_tree_dfs.parquet is missing or incomplete.
     Run manually with:
         pytest tests/test_model.py::test_train_xgboost_optuna_on_production_x_tree_dfs -v
 
     Or use the production script:
         python scripts/train_xgboost_raw.py
     """
+    import pandas as pd
     from pathlib import Path
+
     feature_store_path = Path("data/processed/X_tree_dfs.parquet")
+    y_train_path = Path("data/processed/y_train.parquet")
+
+    # Load X and y, merge with TARGET column, save to temp parquet
+    X = pd.read_parquet(str(feature_store_path))
+    y_df = pd.read_parquet(str(y_train_path))
+    y = y_df.iloc[:, 0] if isinstance(y_df, pd.DataFrame) else y_df
+
+    # Validate data completeness
+    if len(X) != len(y):
+        pytest.skip(f"X ({len(X)}) and y ({len(y)}) have different lengths; data incomplete")
+
+    # Merge TARGET column (use .values to avoid index alignment issues)
+    X_with_target = X.copy()
+    X_with_target["TARGET"] = y.values
+
+    # Save to temp location
+    temp_parquet = tmp_path / "X_tree_dfs_with_target.parquet"
+    X_with_target.to_parquet(str(temp_parquet))
 
     # Run full HPO with 100 trials (production setting)
     model, metrics, X_test, y_test, params = train_xgboost_optuna(
-        str(feature_store_path), n_trials=100
+        str(temp_parquet), n_trials=100
     )
 
     # Production done condition: Gini > 0.60
