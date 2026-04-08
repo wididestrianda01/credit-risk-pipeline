@@ -2343,7 +2343,7 @@ def build_dfs_feature_store(
             y_train=y_train,
             output_path=checkpoint_path,  # saves deduped result to disk
             agg_primitives=None,
-            max_depth=2,
+            max_depth=1,
             iv_threshold=0.02,
             corr_threshold=0.90,
             n_jobs=1,
@@ -2374,10 +2374,12 @@ def build_dfs_feature_store(
     X_dfs_sample = X_dfs.loc[sample_idx]
     X_raw_sample = X_tree_raw.loc[sample_idx]
 
-    # For each DFS column find its maximum absolute correlation with any raw column
+    # For each DFS column find its maximum absolute correlation with any raw column.
+    # corrwith(Series) is used here because Series.corr() only accepts a Series,
+    # not a DataFrame — using DataFrame.corrwith() avoids a TypeError.
     cols_to_keep = []
     for col in X_dfs.columns:
-        max_corr_with_raw = X_dfs_sample[col].corr(X_raw_sample).abs().max()
+        max_corr_with_raw = X_raw_sample.corrwith(X_dfs_sample[col]).abs().max()
         if max_corr_with_raw <= _CORR_THRESHOLD:
             cols_to_keep.append(col)
 
