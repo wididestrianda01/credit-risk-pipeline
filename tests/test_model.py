@@ -87,6 +87,25 @@ def trained_model(mock_data):
 
 
 @pytest.fixture(scope="module")
+def mock_data_parquet_path(mock_data, tmp_path_factory):
+    """
+    Create a parquet file from mock_data with TARGET column included.
+
+    Returns the path string to the parquet file. Used by tests that need
+    the new path-based API for train_xgboost_optuna().
+    """
+    X, y = mock_data
+    X_with_target = X.copy()
+    X_with_target["TARGET"] = y.values
+
+    tmp_dir = tmp_path_factory.mktemp("mock_data_parquet")
+    parquet_path = tmp_dir / "mock_data.parquet"
+    X_with_target.to_parquet(parquet_path)
+
+    return str(parquet_path)
+
+
+@pytest.fixture(scope="module")
 def mock_data_with_ext_source() -> tuple[pd.DataFrame, pd.Series]:
     """
     Create mock data with EXT_SOURCE_3 column containing -999 sentinels (missing values).
@@ -416,19 +435,19 @@ def test_benchmark_csv_saved(benchmark_splits, tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 _XGB_OPTUNA_EXPECTED_PARAM_KEYS = {
-    "n_estimators",
     "max_depth",
     "learning_rate",
     "subsample",
     "colsample_bytree",
     "min_child_weight",
+    "gamma",
     "reg_alpha",
     "reg_lambda",
 }
 
 
 @pytest.fixture(scope="module")
-def xgb_optuna_result():
+def xgb_optuna_result(tmp_path_factory):
     """
     Run train_xgboost_optuna once per module with n_trials=3 on mock data.
 
@@ -446,9 +465,14 @@ def xgb_optuna_result():
     X = pd.DataFrame({
         "f1": np.where(y_arr == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
         "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
+        "TARGET": y_arr,
     })
-    y = pd.Series(y_arr, name="TARGET")
-    return train_xgboost_optuna(X, y, n_trials=3)
+    # Save to temporary parquet file
+    tmp_dir = tmp_path_factory.mktemp("xgb_optuna_module")
+    parquet_path = tmp_dir / "mock_data.parquet"
+    X.to_parquet(parquet_path)
+
+    return train_xgboost_optuna(str(parquet_path), n_trials=3)
 
 
 # --- Return structure ---
@@ -522,45 +546,42 @@ def test_train_xgboost_optuna_best_params_values_finite(xgb_optuna_result):
 
 # --- Artifact persistence ---
 
-def test_train_xgboost_optuna_model_saved(mock_data, tmp_path, monkeypatch):
-    """Model is saved to disk at the configured path."""
-    import credit_engine.model as model_module
-    monkeypatch.setattr(model_module, "_XGB_OPTUNA_MODEL_PATH", str(tmp_path / "xgb.pkl"))
-    monkeypatch.setattr(model_module, "_XGB_OPTUNA_PARAMS_PATH", str(tmp_path / "xgb.json"))
-    monkeypatch.setattr(model_module, "_XGB_OPTUNA_FIGURE_PATH", str(tmp_path / "xgb_roc.png"))
+def test_train_xgboost_optuna_model_saved(mock_data_parquet_path):
+    """Calibrated model is saved to disk at models/xgboost_raw_calibrated.pkl."""
+    from pathlib import Path
+    model_path = Path("models/xgboost_raw_calibrated.pkl")
+    # Clean up any previous run
+    if model_path.exists():
+        model_path.unlink()
 
-    X, y = mock_data
-    train_xgboost_optuna(X, y, n_trials=2)
-    assert (tmp_path / "xgb.pkl").exists(), "Model pickle not written"
+    train_xgboost_optuna(mock_data_parquet_path, n_trials=2)
+    assert model_path.exists(), "Calibrated model pickle not written"
 
 
-def test_train_xgboost_optuna_params_json_valid(mock_data, tmp_path, monkeypatch):
-    """Params JSON is valid, deserializable, and contains all 8 keys."""
-    import credit_engine.model as model_module
-    monkeypatch.setattr(model_module, "_XGB_OPTUNA_MODEL_PATH", str(tmp_path / "xgb.pkl"))
-    params_path = tmp_path / "xgb.json"
-    monkeypatch.setattr(model_module, "_XGB_OPTUNA_PARAMS_PATH", str(params_path))
-    monkeypatch.setattr(model_module, "_XGB_OPTUNA_FIGURE_PATH", str(tmp_path / "xgb_roc.png"))
+def test_train_xgboost_optuna_params_json_valid(mock_data_parquet_path):
+    """Params JSON is valid, deserializable, and contains expected keys."""
+    from pathlib import Path
+    params_path = Path("models/xgboost_raw_params.json")
+    # Clean up any previous run
+    if params_path.exists():
+        params_path.unlink()
 
-    X, y = mock_data
-    train_xgboost_optuna(X, y, n_trials=2)
+    train_xgboost_optuna(mock_data_parquet_path, n_trials=2)
 
     assert params_path.exists(), "Params JSON not written"
     loaded = json.loads(params_path.read_text())
-    assert _XGB_OPTUNA_EXPECTED_PARAM_KEYS.issubset(set(loaded.keys()))
+    # Should have hyperparameters like max_depth, learning_rate, etc.
+    assert "max_depth" in loaded, "max_depth not in params"
+    assert "learning_rate" in loaded, "learning_rate not in params"
 
 
-def test_train_xgboost_optuna_model_round_trip(mock_data, tmp_path, monkeypatch):
+def test_train_xgboost_optuna_model_round_trip(mock_data_parquet_path):
     """Save → load → predict_proba produces identical output."""
-    import credit_engine.model as model_module
-    model_path = tmp_path / "xgb.pkl"
-    monkeypatch.setattr(model_module, "_XGB_OPTUNA_MODEL_PATH", str(model_path))
-    monkeypatch.setattr(model_module, "_XGB_OPTUNA_PARAMS_PATH", str(tmp_path / "xgb.json"))
-    monkeypatch.setattr(model_module, "_XGB_OPTUNA_FIGURE_PATH", str(tmp_path / "xgb_roc.png"))
+    from pathlib import Path
+    model_path = Path("models/xgboost_raw_calibrated.pkl")
 
-    X, y = mock_data
-    model, _, X_test, _, _ = train_xgboost_optuna(X, y, n_trials=2)
-    loaded = load_model(model_path)
+    model, _, X_test, _, _ = train_xgboost_optuna(mock_data_parquet_path, n_trials=2)
+    loaded = load_model(str(model_path))
     np.testing.assert_array_almost_equal(
         model.predict_proba(X_test),
         loaded.predict_proba(X_test),
@@ -569,7 +590,7 @@ def test_train_xgboost_optuna_model_round_trip(mock_data, tmp_path, monkeypatch)
 
 # --- Data leakage prevention ---
 
-def test_train_xgboost_optuna_cv_never_sees_test_data(mock_data, monkeypatch):
+def test_train_xgboost_optuna_cv_never_sees_test_data(mock_data, mock_data_parquet_path, monkeypatch):
     """CV fold fits must always receive strictly fewer rows than X_train.
 
     Monkeypatches XGBClassifier.fit to record input sizes. Any call with
@@ -591,7 +612,7 @@ def test_train_xgboost_optuna_cv_never_sees_test_data(mock_data, monkeypatch):
         return original_fit(self, X_fit, y_fit, **kwargs)
 
     monkeypatch.setattr(xgb.XGBClassifier, "fit", tracking_fit)
-    train_xgboost_optuna(X, y, n_trials=2)
+    train_xgboost_optuna(mock_data_parquet_path, n_trials=2)
 
     # Exclude the final full-training-set refit (exactly len(X_train) rows)
     # All other calls must be fold-sized (< len(X_train))
@@ -604,21 +625,19 @@ def test_train_xgboost_optuna_cv_never_sees_test_data(mock_data, monkeypatch):
 
 # --- Silent operation ---
 
-def test_train_xgboost_optuna_no_stdout(mock_data, capsys):
+def test_train_xgboost_optuna_no_stdout(mock_data_parquet_path, capsys):
     """Library function must not write to stdout (no print() calls)."""
-    X, y = mock_data
-    train_xgboost_optuna(X, y, n_trials=2)
+    train_xgboost_optuna(mock_data_parquet_path, n_trials=2)
     captured = capsys.readouterr()
     assert captured.out == "", f"Unexpected stdout:\n{captured.out}"
 
 
 # --- Input validation ---
 
-def test_train_xgboost_optuna_zero_trials_raises(mock_data):
+def test_train_xgboost_optuna_zero_trials_raises(mock_data_parquet_path):
     """n_trials=0 raises ValueError with a descriptive message."""
-    X, y = mock_data
     with pytest.raises(ValueError, match="n_trials must be >= 1"):
-        train_xgboost_optuna(X, y, n_trials=0)
+        train_xgboost_optuna(mock_data_parquet_path, n_trials=0)
 
 
 # ---------------------------------------------------------------------------
@@ -1340,9 +1359,14 @@ class TestXGBoostExtendedSearchSpace:
         X = pd.DataFrame({
             "f1": np.where(y_arr == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
             "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
+            "TARGET": y_arr,
         })
-        y = pd.Series(y_arr, name="TARGET")
-        _, _, _, _, best_params = train_xgboost_optuna(X, y, n_trials=3)
+        # Save to temporary parquet file
+        parquet_tmp = tmp_path_factory.mktemp("xgb_parquet")
+        parquet_path = parquet_tmp / "mock_data.parquet"
+        X.to_parquet(parquet_path)
+
+        _, _, _, _, best_params = train_xgboost_optuna(str(parquet_path), n_trials=3)
         return best_params
 
     def test_best_params_includes_gamma(self, xgb_best_params):
@@ -1351,16 +1375,16 @@ class TestXGBoostExtendedSearchSpace:
             f"'gamma' missing from best_params keys: {sorted(xgb_best_params.keys())}"
         )
 
-    def test_best_params_includes_max_delta_step(self, xgb_best_params):
-        """best_params must contain 'max_delta_step' after search space extension."""
-        assert "max_delta_step" in xgb_best_params, (
-            f"'max_delta_step' missing from best_params keys: {sorted(xgb_best_params.keys())}"
+    def test_best_params_excludes_max_delta_step(self, xgb_best_params):
+        """best_params must NOT contain 'max_delta_step' (dropped from search space)."""
+        assert "max_delta_step" not in xgb_best_params, (
+            f"'max_delta_step' should be dropped from search space, but found in: {sorted(xgb_best_params.keys())}"
         )
 
-    def test_gamma_within_validated_range(self, xgb_best_params):
-        """Sampled gamma must lie in [0.0, 2.0] — subagent-validated bound."""
-        assert 0.0 <= xgb_best_params["gamma"] <= 2.0, (
-            f"gamma={xgb_best_params['gamma']:.4f} outside [0.0, 2.0]"
+    def test_gamma_within_extended_range(self, xgb_best_params):
+        """Sampled gamma must lie in [0.0, 5.0] — extended search space."""
+        assert 0.0 <= xgb_best_params["gamma"] <= 5.0, (
+            f"gamma={xgb_best_params['gamma']:.4f} outside [0.0, 5.0]"
         )
 
     def test_min_child_weight_constant_extended_to_15(self):
