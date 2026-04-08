@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-04-08T03:55:58.944Z"
+last_updated: "2026-04-08T07:33:42.330Z"
 progress:
-  total_phases: 3
-  completed_phases: 2
-  total_plans: 12
-  completed_plans: 11
-  percent: 92
+  total_phases: 4
+  completed_phases: 3
+  total_plans: 13
+  completed_plans: 13
+  percent: 100
 ---
 
 # Project State
@@ -22,17 +22,27 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-07)
 
 **Core value:** Calibrated PD feeding EL = PD × LGD × EAD, Gini ≥ 0.70
-**Current focus:** Phase 04.2.3 — xgboost-hpo-on-raw-features
+**Current focus:** Phase 04.2.4 — lightgbm-hpo-on-raw-features
 
 ---
 
+## Completed Plans
+
+### Phase 04.2.3 — XGBoost HPO on Raw Features
+
+- Status: ✅ Complete (2026-04-08)
+- Result: train_xgboost_optuna() path-based API, 8 HPO improvements, Platt calibration, 188 tests migrated, 2 integration tests added
+- Summary: `/home/wd/Working Folder/Development/credit-risk-pipeline/.planning/phases/04.2.3-xgboost-hpo-on-raw-features/04.2.3-01-SUMMARY.md`
+- Artifacts: `models/xgboost_raw_best.pkl`, `models/xgboost_raw_calibrated.pkl`, `scripts/train_xgboost_raw.py`
+- Branch: `gsd/phase-04.2.2-dfs-auto-feature-augmentation` (plan executed on this branch)
+
 ## Active Phase
 
-**Phase 04.2.3** — XGBoost HPO on Raw Features
+**Phase 04.2.4** — LightGBM HPO on Raw Features
 
-- Status: Discussion complete — proceeding to plan-phase
-- Last command: `/gsd-discuss-phase 04.2.3 --chains` (completed 2026-04-08)
-- Branch: `gsd/phase-04.2.2-dfs-auto-feature-augmentation` (current; new branch for 04.2.3 to be created)
+- Status: Planned — awaiting execution
+- Next command: `/gsd-execute-phase 04.2.4`
+- Branch: new branch to be created (e.g., `gsd/phase-04.2.4-lgb-hpo-on-raw-features`)
 
 ---
 
@@ -80,6 +90,19 @@ See: `.planning/PROJECT.md` (updated 2026-04-07)
 - **Gray area 3 (model rebuild order):** XGBoost first (most HPO trials already exist in SQLite), then LightGBM, then CatBoost. All 3 must be rebuilt.
 - **CONTEXT.md + DISCUSSION-LOG.md:** Recreated 2026-04-07 at `.planning/phases/04.2.1-fix-tree-feature-store/`
 - Next command: `/gsd-plan-phase 04.2.1`
+
+### 2026-04-08 — Phase 04.2.3-01 XGBoost HPO on Raw Features complete
+
+- **Execution:** 3 task commits (TDD RED→GREEN, test migration, integration tests + CLI)
+- **Signature rewrite:** train_xgboost_optuna(feature_store_path: str) — loads parquet, extracts TARGET column, enables integration testing
+- **HPO improvements (8 total):** Fixed n_estimators=3000, extended gamma [0,2]→[0,5], log-scale min_child_weight [1,30], log-scale regularization [1e-8,5], tree_method='hist', removed max_delta_step, TPESampler(seed=42)+MedianPruner, early stopping via Optuna user_attrs
+- **Platt calibration:** Applied sigmoid on 30% train split; CalibratedClassifierCV artifact saved to `models/xgboost_raw_calibrated.pkl`
+- **Test migration:** Updated all 188 existing tests to path-based parquet API using `mock_data_parquet_path` fixture factory; all GREEN
+- **TDD validation:** 10 new tests verify parquet loading, TARGET extraction, FileNotFoundError, temporal CV auto-detection, study name isolation, early stopping, tree_method, calibration artifacts
+- **Integration tests:** 2 automated tests (full pipeline + BrierSkill>0); 1 production test for X_tree_dfs.parquet (skipif missing)
+- **CLI wrapper:** `scripts/train_xgboost_raw.py` with --feature-store and --n-trials arguments
+- **Commits:** a002e7a (TDD), 4e9198f (migration), a522893 (integration+CLI)
+- **Duration:** 85 min | **Status:** ✅ Complete
 
 ### 2026-04-07 — Phase 04.2.2-04 TDD tests complete
 
