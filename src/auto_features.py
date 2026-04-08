@@ -48,13 +48,31 @@ _NAN_SENTINEL = -999.0
 
 # Leaky SK_DPD columns to be removed (post-origination payment distress, Basel III Article 174)
 _LEAKY_SKDPD_COLS: list[str] = [
+    # Raw SK_DPD aggregates (pos_cash / credit_card) — directly from target-period records
     "pos_sk_dpd_max", "pos_sk_dpd_std", "pos_sk_dpd_mean", "pos_sk_dpd_def_max",
     "cc_sk_dpd_max", "cc_sk_dpd_mean", "cc_dpd_rate",
+    # Featuretools DFS aggregates of SK_DPD columns
     "SUM(credit_card.SK_DPD)", "SUM(credit_card.SK_DPD_DEF)",
     "SUM(pos_cash.SK_DPD)", "SUM(pos_cash.SK_DPD_DEF)",
     "MEAN(pos_cash.SK_DPD)",
     "SUM(previous_application.credit_card.SK_DPD)", "SUM(previous_application.credit_card.SK_DPD_DEF)",
     "SUM(previous_application.pos_cash.SK_DPD)", "SUM(previous_application.pos_cash.SK_DPD_DEF)",
+    # Hand-engineered DPD aggregates from bureau_balance (data_loader.py)
+    # bureau_balance SK_DPD is recorded for active loans during the observation window —
+    # overlap with the application period makes these leaky.
+    "bureau_bbal_dpd_rate_mean",
+    "bureau_bbal_dpd_rate_std_mean",
+    "bureau_bbal_dpd_rate_6m_mean",
+    "bureau_bbal_dpd_rate_12m_mean",
+    "bureau_bbal_dpd_trend_mean",
+    "bbal_months_since_last_dpd",
+    "bbal_dpd_last_3m_rate",
+    "bbal_dpd_last_6m_vs_prior_rate",
+    # Cross-table DPD interaction features (features.py)
+    "inst_late_dpd_ratio",
+    "multi_dpd_flag",
+    "bureau_inst_dpd",
+    "dpd_escalation",
 ]
 
 # File names (canonical in Home Credit dataset)
