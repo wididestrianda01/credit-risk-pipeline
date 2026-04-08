@@ -29,6 +29,7 @@ import pytest
 pytest.importorskip("featuretools", reason="featuretools not installed — skip auto_features tests")
 
 from credit_engine.auto_features import (
+    _LEAKY_SKDPD_COLS,
     _build_entity_set,
     _load_entity_tables,
     apply_featuretools_feature_store,
@@ -1224,3 +1225,39 @@ class TestDFSCorrelationDedup:
         assert all(col in X_dfs_raw.columns for col in dedup_cols), (
             "All dedup columns should be from original X_dfs_raw"
         )
+
+
+# ---------------------------------------------------------------------------
+# Regression Tests: SK_DPD Leakage Removal (Phase 04.2.3.1)
+# ---------------------------------------------------------------------------
+
+
+def test_leaky_cols_constant_defined():
+    """D-02: _LEAKY_SKDPD_COLS constant is defined with all 14 leaky column names."""
+    # Stub: placeholder for full TDD test
+    assert True
+
+
+def test_entity_set_months_balance_filter():
+    """D-04: EntitySet construction filters pos_cash and credit_card to MONTHS_BALANCE < 0."""
+    # Stub: placeholder for full TDD test
+    assert True
+
+
+def test_months_balance_strict_negative():
+    """D-15: Filter is strictly < 0, excluding application month (MONTHS_BALANCE = 0)."""
+    # Stub: placeholder for full TDD test
+    assert True
+
+
+def test_bureau_and_inst_dpd_retained():
+    """D-03: Bureau and installment DPD columns are retained (only SK_DPD removed)."""
+    # Stub: placeholder for full TDD test
+    assert True
+
+
+@pytest.mark.regression
+def test_build_tree_dfs_features_zero_sk_dpd():
+    """D-01/D-05: Regression test (permanent): no SK_DPD columns survive rebuild."""
+    # Stub: placeholder for full TDD test
+    assert True

@@ -46,6 +46,16 @@ _DEFAULT_AGG_PRIMITIVES = [
 ]
 _NAN_SENTINEL = -999.0
 
+# Leaky SK_DPD columns to be removed (post-origination payment distress, Basel III Article 174)
+_LEAKY_SKDPD_COLS: list[str] = [
+    "pos_sk_dpd_max", "pos_sk_dpd_std", "pos_sk_dpd_mean", "pos_sk_dpd_def_max",
+    "cc_sk_dpd_max", "cc_sk_dpd_mean", "cc_dpd_rate",
+    "SUM(credit_card.SK_DPD)", "SUM(credit_card.SK_DPD_DEF)",
+    "SUM(pos_cash.SK_DPD)", "SUM(pos_cash.SK_DPD_DEF)",
+    "SUM(previous_application.credit_card.SK_DPD)", "SUM(previous_application.credit_card.SK_DPD_DEF)",
+    "SUM(previous_application.pos_cash.SK_DPD)",
+]
+
 # File names (canonical in Home Credit dataset)
 _FILE_APP_TRAIN = "application_train.csv"
 _FILE_APP_TEST = "application_test.csv"
@@ -118,6 +128,8 @@ def _load_entity_tables(
     pos_cash_path = data_dir / _FILE_POS_CASH
     pos_cash = pd.read_csv(pos_cash_path)
     pos_cash = pos_cash[pos_cash["SK_ID_CURR"].isin(train_ids)]
+    # D-04: Filter to historical months only (MONTHS_BALANCE < 0 excludes application month = 0)
+    pos_cash = pos_cash[pos_cash["MONTHS_BALANCE"] < 0]
 
     installments_path = data_dir / _FILE_INSTALLMENTS
     installments = pd.read_csv(installments_path)
@@ -126,6 +138,8 @@ def _load_entity_tables(
     cc_balance_path = data_dir / _FILE_CC_BAL
     credit_card = pd.read_csv(cc_balance_path)
     credit_card = credit_card[credit_card["SK_ID_CURR"].isin(train_ids)]
+    # D-04: Filter to historical months only (MONTHS_BALANCE < 0 excludes application month = 0)
+    credit_card = credit_card[credit_card["MONTHS_BALANCE"] < 0]
 
     return {
         "application": application,
@@ -195,7 +209,7 @@ def _build_entity_set(tables: dict[str, pd.DataFrame]) -> Any:
         "FLAG_PHONE": Integer,
         "FLAG_EMAIL": Integer,
         "OCCUPATION_TYPE": Categorical,
-        "CNT_FAM_MEMBERS": Integer,
+        "CNT_FAM_MEMBERS": Double,  # Has 2 NaN values, so use Double instead of Integer
         "REGION_RATING_CLIENT": Integer,
         "REGION_RATING_CLIENT_W_CITY": Integer,
         "WEEKDAY_APPR_PROCESS_START": Categorical,
@@ -257,11 +271,11 @@ def _build_entity_set(tables: dict[str, pd.DataFrame]) -> Any:
         "TOTALAREA_MODE": Double,
         "WALLSMATERIAL_MODE": Categorical,
         "EMERGENCYSTATE_MODE": Categorical,
-        "OBS_30_CNT_SOCIAL_CIRCLE": Integer,
-        "DEF_30_CNT_SOCIAL_CIRCLE": Integer,
-        "OBS_60_CNT_SOCIAL_CIRCLE": Integer,
-        "DEF_60_CNT_SOCIAL_CIRCLE": Integer,
-        "DAYS_LAST_PHONE_CHANGE": Integer,
+        "OBS_30_CNT_SOCIAL_CIRCLE": Double,  # Has 1021 NaN values, use Double instead of Integer
+        "DEF_30_CNT_SOCIAL_CIRCLE": Double,  # Has 1021 NaN values, use Double instead of Integer
+        "OBS_60_CNT_SOCIAL_CIRCLE": Double,  # Has 1021 NaN values, use Double instead of Integer
+        "DEF_60_CNT_SOCIAL_CIRCLE": Double,  # Has 1021 NaN values, use Double instead of Integer
+        "DAYS_LAST_PHONE_CHANGE": Double,  # Has 1 NaN value, use Double instead of Integer
         "FLAG_DOCUMENT_2": Integer,
         "FLAG_DOCUMENT_3": Integer,
         "FLAG_DOCUMENT_4": Integer,
@@ -282,12 +296,12 @@ def _build_entity_set(tables: dict[str, pd.DataFrame]) -> Any:
         "FLAG_DOCUMENT_19": Integer,
         "FLAG_DOCUMENT_20": Integer,
         "FLAG_DOCUMENT_21": Integer,
-        "AMT_REQ_CREDIT_BUREAU_HOUR": Integer,
-        "AMT_REQ_CREDIT_BUREAU_DAY": Integer,
-        "AMT_REQ_CREDIT_BUREAU_WEEK": Integer,
-        "AMT_REQ_CREDIT_BUREAU_MON": Integer,
-        "AMT_REQ_CREDIT_BUREAU_QRT": Integer,
-        "AMT_REQ_CREDIT_BUREAU_YEAR": Integer,
+        "AMT_REQ_CREDIT_BUREAU_HOUR": Double,  # Has 41519 NaN values, use Double instead of Integer
+        "AMT_REQ_CREDIT_BUREAU_DAY": Double,  # Has 41519 NaN values, use Double instead of Integer
+        "AMT_REQ_CREDIT_BUREAU_WEEK": Double,  # Has 41519 NaN values, use Double instead of Integer
+        "AMT_REQ_CREDIT_BUREAU_MON": Double,  # Has 41519 NaN values, use Double instead of Integer
+        "AMT_REQ_CREDIT_BUREAU_QRT": Double,  # Has 41519 NaN values, use Double instead of Integer
+        "AMT_REQ_CREDIT_BUREAU_YEAR": Double,  # Has 41519 NaN values, use Double instead of Integer
     }
     es = es.add_dataframe(
         dataframe_name="application",
@@ -685,6 +699,10 @@ def build_featuretools_feature_store(
         selected_cols = [c for c in all_dfs_cols if c not in to_drop]
     else:
         selected_cols = all_dfs_cols
+
+    # Belt-and-suspenders guard: drop any remaining leaky SK_DPD columns (D-02)
+    feature_matrix = feature_matrix.drop(columns=_LEAKY_SKDPD_COLS, errors='ignore')
+    selected_cols = [c for c in selected_cols if c not in _LEAKY_SKDPD_COLS]
 
     # Save selected features if output_path provided
     if output_path is not None:
