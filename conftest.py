@@ -249,3 +249,93 @@ def test_credit_engine_import_fails_without_conftest():
     assert "credit_engine" in sys.modules, (
         "credit_engine should be in sys.modules if conftest was loaded"
     )
+
+
+# ---------------------------------------------------------------------------
+# Wave 0: XGBoost Raw Features HPO (Phase 04.2.3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def make_mock_parquet(tmp_path: Path):
+    """
+    Factory fixture to create mock X_tree_dfs.parquet files with TARGET column.
+
+    This fixture creates mock parquet files suitable for testing
+    train_xgboost_optuna(feature_store_path: str, ...) which loads
+    parquet from disk instead of accepting DataFrames.
+
+    Parameters
+    ----------
+    tmp_path : Path
+        pytest's temporary directory fixture.
+
+    Yields
+    ------
+    callable
+        A factory function with signature:
+            _factory(n_rows: int = 500, n_pos_frac: float = 0.08, n_features: int = 10) -> Path
+
+        Returns the path to the created parquet file.
+
+    Example
+    -------
+    >>> def test_example(make_mock_parquet):
+    ...     parquet_path = make_mock_parquet(n_rows=500, n_features=10)
+    ...     model, metrics, X_test, y_test, params = train_xgboost_optuna(
+    ...         str(parquet_path), n_trials=2
+    ...     )
+    ...     assert metrics["Gini"] > 0
+    """
+
+    def _factory(
+        n_rows: int = 500, n_pos_frac: float = 0.08, n_features: int = 10
+    ) -> Path:
+        """
+        Create a mock X_tree_dfs.parquet file in tmp_path.
+
+        Parameters
+        ----------
+        n_rows : int, optional
+            Number of rows in the mock dataset (default 500).
+        n_pos_frac : float, optional
+            Fraction of positive (default 1) samples (default 0.08 for imbalance).
+        n_features : int, optional
+            Number of features to generate (default 10).
+
+        Returns
+        -------
+        Path
+            Path to the created parquet file at tmp_path / "X_tree_dfs.parquet".
+        """
+        rng = np.random.default_rng(42)
+        n_pos = int(n_rows * n_pos_frac)
+
+        # Create target: 8% positive, rest negative
+        y_arr = np.zeros(n_rows, dtype=int)
+        y_arr[:n_pos] = 1
+        rng.shuffle(y_arr)
+
+        # Create linearly separable features
+        # Positive samples centered at 1.0, negative at 0.0
+        X = pd.DataFrame(
+            {
+                f"f{i}": np.where(
+                    y_arr == 1,
+                    rng.normal(1.0, 1.0, n_rows),
+                    rng.normal(0.0, 1.0, n_rows),
+                )
+                for i in range(n_features)
+            }
+        )
+
+        # Add TARGET column
+        X["TARGET"] = y_arr
+
+        # Save to parquet
+        path = tmp_path / "X_tree_dfs.parquet"
+        X.to_parquet(path)
+
+        return path
+
+    return _factory

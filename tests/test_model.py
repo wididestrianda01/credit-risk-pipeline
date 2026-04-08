@@ -2507,3 +2507,126 @@ class TestExtendedHPOWave0:
 
         # Verify second model is also fitted
         assert hasattr(model_2, "predict_proba"), "Second model missing predict_proba method"
+
+
+# ---------------------------------------------------------------------------
+# Wave 0: TDD Stubs for XGBoost Raw Features HPO (Phase 04.2.3)
+# ---------------------------------------------------------------------------
+# These tests define the expected behavior for train_xgboost_optuna() rewrite.
+# All must FAIL initially (RED phase), then PASS after Task 2-4 implementation (GREEN).
+
+
+class TestTrainXGBoostOptunaRawFeatures:
+    """TDD tests for train_xgboost_optuna() with path-based parquet loading."""
+
+    def test_train_xgboost_optuna_loads_parquet(self, make_mock_parquet):
+        """
+        Verifies that train_xgboost_optuna() loads X from parquet file.
+
+        Expected behavior:
+        - Function accepts feature_store_path: str parameter (not DataFrame)
+        - Loads parquet file from disk
+        - Returns X as DataFrame (after internal processing)
+        """
+        pytest.fail("NOT IMPLEMENTED: test_train_xgboost_optuna_loads_parquet")
+
+    def test_train_xgboost_optuna_target_column_extracted(self, make_mock_parquet):
+        """
+        Verifies that TARGET column is extracted and not used as a feature.
+
+        Expected behavior:
+        - Function loads X from parquet (which includes TARGET column)
+        - Internally pops TARGET from X
+        - X passed to model does NOT contain TARGET
+        - y is extracted as the TARGET series
+        """
+        pytest.fail("NOT IMPLEMENTED: test_train_xgboost_optuna_target_column_extracted")
+
+    def test_train_xgboost_optuna_file_not_found(self, tmp_path):
+        """
+        Verifies that FileNotFoundError is raised when path does not exist.
+
+        Expected behavior:
+        - Function called with non-existent feature_store_path
+        - pd.read_parquet() naturally raises FileNotFoundError
+        - Error is not suppressed; bubbles up to caller
+        """
+        pytest.fail("NOT IMPLEMENTED: test_train_xgboost_optuna_file_not_found")
+
+    def test_train_xgboost_optuna_temporal_cv_auto_detected(self, make_mock_parquet):
+        """
+        Verifies that temporal CV groups are auto-detected from _TEMPORAL_SORT_COL.
+
+        Expected behavior:
+        - When groups parameter is None and _TEMPORAL_SORT_COL exists in X
+        - Function auto-detects groups = X[_TEMPORAL_SORT_COL]
+        - Passed to _make_cv() for temporal CV split
+        - No temporal leakage in held-out test fold
+        """
+        pytest.fail("NOT IMPLEMENTED: test_train_xgboost_optuna_temporal_cv_auto_detected")
+
+    def test_train_xgboost_optuna_study_name_xgboost_raw_v1(self, make_mock_parquet):
+        """
+        Verifies that Optuna study name is "xgboost_raw_v1" (isolated from prior WoE studies).
+
+        Expected behavior:
+        - Function creates Optuna study with study_name="xgboost_raw_v1"
+        - Different from prior study names (e.g., "xgboost_v1" or "xgboost_woe_v1")
+        - Prevents TPE warm-start bias from irrelevant WoE trials
+        """
+        pytest.fail("NOT IMPLEMENTED: test_train_xgboost_optuna_study_name_xgboost_raw_v1")
+
+    def test_train_xgboost_optuna_early_stopping_set(self, make_mock_parquet):
+        """
+        Verifies that early_stopping_rounds=100 is set inside objective function.
+
+        Expected behavior:
+        - XGBoost model.fit() called with early_stopping_rounds=100
+        - In fold loop of objective, eval_set is provided for early stopping detection
+        - Prevents wasted trials training to full n_estimators=3000
+        """
+        pytest.fail("NOT IMPLEMENTED: test_train_xgboost_optuna_early_stopping_set")
+
+    def test_train_xgboost_optuna_tree_method_hist(self, make_mock_parquet):
+        """
+        Verifies that tree_method='hist' is set in model parameters.
+
+        Expected behavior:
+        - XGBoost model initialized with tree_method='hist'
+        - 8-10× faster than 'exact' on 300K rows
+        - No accuracy loss on credit scoring task
+        """
+        pytest.fail("NOT IMPLEMENTED: test_train_xgboost_optuna_tree_method_hist")
+
+    def test_train_xgboost_optuna_calibrated_artifact(self, make_mock_parquet):
+        """
+        Verifies that calibrated model artifact is saved.
+
+        Expected behavior:
+        - Function runs full HPO pipeline (train, calibrate, save)
+        - models/xgboost_raw_calibrated.pkl is created
+        - File is loadable as CalibratedClassifierCV with calibrators_
+        """
+        pytest.fail("NOT IMPLEMENTED: test_train_xgboost_optuna_calibrated_artifact")
+
+    def test_train_xgboost_optuna_calibration_diagram_saved(self, make_mock_parquet):
+        """
+        Verifies that calibration reliability diagram is saved.
+
+        Expected behavior:
+        - Function runs full pipeline with calibration
+        - reports/figures/xgboost_raw_calibration.png is created
+        - PNG file is non-empty (>10KB typical)
+        """
+        pytest.fail("NOT IMPLEMENTED: test_train_xgboost_optuna_calibration_diagram_saved")
+
+    def test_train_xgboost_optuna_gini_on_separable_mock(self, make_mock_parquet):
+        """
+        Verifies that Gini > 0 on linearly separable mock data.
+
+        Expected behavior:
+        - Linearly separable mock data (8% positive, shifted means)
+        - XGBoost should achieve Gini >> 0 on separable data
+        - Threshold: Gini > 0.4 (demonstrates model learning)
+        """
+        pytest.fail("NOT IMPLEMENTED: test_train_xgboost_optuna_gini_on_separable_mock")
