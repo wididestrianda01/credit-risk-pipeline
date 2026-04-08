@@ -1672,13 +1672,14 @@ def engineer_time_features(data_dir: Path | str) -> pd.DataFrame:
     # -----------------------------------------------------------------------
     # Combine into result DataFrame
     # -----------------------------------------------------------------------
-    # Get all unique SK_ID_CURR from bureau (the master reference)
-    all_curr_ids = bureau["SK_ID_CURR"].unique()
+    # Load all SK_ID_CURR from application_train.csv to ensure complete coverage
+    app_train = pd.read_csv(data_dir / "application_train.csv", usecols=["SK_ID_CURR"])
+    all_curr_ids = app_train["SK_ID_CURR"].values
 
-    # Create result DataFrame indexed by SK_ID_CURR
+    # Create result DataFrame indexed by all SK_ID_CURR
     result = pd.DataFrame(index=pd.Index(all_curr_ids, name="SK_ID_CURR"))
 
-    # Assign features (will introduce NaN for missing applicants)
+    # Assign features (will introduce NaN for applicants without bureau records)
     result["bbal_dpd_rate_3m"] = bbal_dpd_rate_3m
     result["bbal_months_since_last_dpd"] = months_since_dpd
     result["bureau_credit_age_mean"] = bureau_credit_age_mean
@@ -2312,16 +2313,20 @@ def build_dfs_feature_store(
     # -----------------------------------------------------------------------
     print("Step 1/6: Loading X_tree_raw...")
     X_tree_raw = pd.read_parquet(X_tree_raw_path)
-    X_tree_raw = X_tree_raw.astype("float32")
-    print(f"  X_tree_raw: {X_tree_raw.shape}")
 
-    # Ensure SK_ID_CURR index — restore from application CSV if missing
-    if X_tree_raw.index.name != "SK_ID_CURR":
+    # If SK_ID_CURR is a column, move it to the index
+    if "SK_ID_CURR" in X_tree_raw.columns and X_tree_raw.index.name != "SK_ID_CURR":
+        X_tree_raw = X_tree_raw.set_index("SK_ID_CURR")
+    elif X_tree_raw.index.name != "SK_ID_CURR":
+        # Restore SK_ID_CURR index from application CSV if missing
         _app_ids = pd.read_csv(
             data_dir / "application_train.csv", usecols=["SK_ID_CURR"]
         )["SK_ID_CURR"].values
         X_tree_raw = X_tree_raw.copy()
         X_tree_raw.index = pd.Index(_app_ids, name="SK_ID_CURR")
+
+    X_tree_raw = X_tree_raw.astype("float32")
+    print(f"  X_tree_raw: {X_tree_raw.shape}")
 
     # -----------------------------------------------------------------------
     # Step 2: Run DFS with checkpoint (most memory-intensive step)
@@ -2402,7 +2407,17 @@ def build_dfs_feature_store(
     # Step 5: Merge raw + DFS + time features on SK_ID_CURR index
     # -----------------------------------------------------------------------
     print("Step 5/6: Merging raw + DFS + time features...")
-    X_merged = pd.concat([X_tree_raw, X_dfs_dedup, X_time], axis=1)
+    # Remove DFS columns that are already in X_tree_raw (exact duplicates)
+    dfs_cols_to_keep = [col for col in X_dfs_dedup.columns if col not in X_tree_raw.columns]
+    X_dfs_dedup_filtered = X_dfs_dedup[dfs_cols_to_keep]
+    print(f"  DFS columns after removing duplicates: {X_dfs_dedup_filtered.shape[1]} (was {X_dfs_dedup.shape[1]})")
+
+    # Remove time features that are already in X_tree_raw or DFS
+    time_cols_to_keep = [col for col in X_time.columns if col not in X_tree_raw.columns and col not in X_dfs_dedup_filtered.columns]
+    X_time_filtered = X_time[time_cols_to_keep]
+    print(f"  Time columns after removing duplicates: {X_time_filtered.shape[1]} (was {X_time.shape[1]})")
+
+    X_merged = pd.concat([X_tree_raw, X_dfs_dedup_filtered, X_time_filtered], axis=1)
 
     del X_tree_raw, X_dfs_dedup, X_time
     gc.collect()
