@@ -13,6 +13,8 @@ Supported estimators
 
 from __future__ import annotations
 
+import datetime
+import json
 import warnings
 from pathlib import Path
 from typing import Literal
@@ -347,6 +349,73 @@ _OPTUNA_DB_PATH: str = "models/optuna_studies.db"
 #   5. If a study reaches completion status, call load_study(..., load_if_exists=True)
 #    to resume from where it left off
 # ============================================================================
+
+
+# ---------------------------------------------------------------------------
+# _OOFGiniMonitorCallback — Optuna callback for OOF Gini monitoring and early abort
+# ---------------------------------------------------------------------------
+
+class _OOFGiniMonitorCallback:
+    """
+    Monitor OOF Gini per trial; early-abort if 3 consecutive trials exceed 0.85 (leakage indicator).
+    Logs all trial metrics to JSON Lines for automated monitoring (not manual watching).
+
+    Per D-17 (leakage gate) and D-18 (automated monitoring), replaces manual user oversight.
+    """
+
+    def __init__(self, progress_log_path: str = "reports/hpo_progress.jsonl",
+                 oof_gini_threshold: float = 0.85, consecutive_threshold: int = 3):
+        self.progress_log_path = Path(progress_log_path)
+        self.oof_gini_threshold = oof_gini_threshold
+        self.consecutive_threshold = consecutive_threshold
+        self.failed_trial_count = 0  # Rolling count of consecutive trials above threshold
+        self.trial_history = []  # All trial results
+
+        # Ensure reports dir exists
+        self.progress_log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def __call__(self, study, trial) -> None:
+        """
+        Called after each trial completes. Check OOF Gini gate, log results.
+        """
+        # Extract trial metrics (oof_gini should be in trial.user_attrs after objective completes)
+        oof_gini = trial.user_attrs.get('oof_gini', None)
+        oot_gini = trial.user_attrs.get('oot_gini', None)
+
+        # Log trial result to JSON Lines
+        log_entry = {
+            "trial_number": trial.number,
+            "trial_id": trial._trial_id,
+            "oof_gini": oof_gini,
+            "oot_gini": oot_gini,
+            "status": trial.state.name,
+            "timestamp": datetime.datetime.now().isoformat(),
+        }
+        self.trial_history.append(log_entry)
+
+        # Append to JSON Lines file
+        with open(self.progress_log_path, 'a') as f:
+            f.write(json.dumps(log_entry) + '\n')
+
+        # Early-abort gate: if oof_gini > threshold, increment counter; else reset
+        if oof_gini is not None and oof_gini > self.oof_gini_threshold:
+            self.failed_trial_count += 1
+            print(f"  ⚠️ Trial {trial.number}: oof_gini={oof_gini:.4f} > {self.oof_gini_threshold} "
+                  f"({self.failed_trial_count}/{self.consecutive_threshold} consecutive)")
+
+            # Raise error if threshold exceeded
+            if self.failed_trial_count >= self.consecutive_threshold:
+                import optuna
+                raise optuna.exceptions.OptunaError(
+                    f"Leakage gate exceeded: {self.consecutive_threshold} consecutive trials with "
+                    f"oof_gini > {self.oof_gini_threshold}. Last oof_gini={oof_gini:.4f}. "
+                    f"Aborting HPO. Investigate remaining SK_DPD leakage in feature store."
+                )
+        else:
+            # Reset counter on good trial (oof_gini <= threshold)
+            if oof_gini is not None:
+                self.failed_trial_count = 0
+                print(f"  ✓ Trial {trial.number}: oof_gini={oof_gini:.4f} <= {self.oof_gini_threshold} (gate OK)")
 
 
 # ---------------------------------------------------------------------------
@@ -1019,6 +1088,7 @@ def _xgboost_optuna_objective(
     }
 
     fold_aucs: list[float] = []
+    oof_predictions = np.zeros(len(X_train))  # Accumulate OOF predictions for OOF Gini computation
     for train_idx, val_idx in cv.split(X_train, y_train):
         X_fold_train = X_train.iloc[train_idx]
         X_fold_val = X_train.iloc[val_idx]
@@ -1036,6 +1106,16 @@ def _xgboost_optuna_objective(
 
         y_prob_val = model.predict_proba(X_fold_val)[:, 1]
         fold_aucs.append(float(roc_auc_score(y_fold_val, y_prob_val)))
+
+        # Accumulate OOF predictions for per-trial OOF Gini monitoring (D-17, D-18)
+        oof_predictions[val_idx] = y_prob_val
+
+    # Compute and log OOF Gini per trial for early leakage detection (D-17)
+    try:
+        oof_gini = gini_coefficient(y_train.values, oof_predictions)
+        trial.set_user_attr("oof_gini", float(oof_gini))
+    except Exception as e:
+        trial.set_user_attr("oof_gini", None)
 
     return float(np.mean(fold_aucs))
 
@@ -1129,27 +1209,29 @@ def train_xgboost_optuna(
     # Basel CRE36.54 requires temporal validation: hold out the most-recent 20% as separate OOT set
     # before stratified train/test split. The final model is trained on full training set (after OOT holdout),
     # then evaluated on OOT as a separate temporal validation metric.
+    if _TEMPORAL_SORT_COL not in X.columns:
+        raise ValueError(
+            f"Temporal sort column '{_TEMPORAL_SORT_COL}' not in X. "
+            "OOT split is required for Basel CRE36 compliance. "
+            "Rebuild X_tree_dfs.parquet with X_tree_raw merge (see D-06-new)."
+        )
+
     X_oot = None
     y_oot = None
-    if _TEMPORAL_SORT_COL in X.columns:
-        temporal_sort_values = X[_TEMPORAL_SORT_COL].values
-        temporal_indices = np.argsort(temporal_sort_values)  # Sort ascending (earliest first)
+    temporal_sort_values = X[_TEMPORAL_SORT_COL].values
+    temporal_indices = np.argsort(temporal_sort_values)  # Sort ascending (earliest first)
 
-        # Identify OOT threshold: 80% of full dataset (earliest), 20% holdout (most-recent)
-        oot_threshold_idx = int(len(X) * (1 - _TEST_SIZE))  # (1 - 0.2) = 0.8
-        oot_indices = temporal_indices[oot_threshold_idx:]  # Most-recent 20%
+    # Identify OOT threshold: 80% of full dataset (earliest), 20% holdout (most-recent)
+    oot_threshold_idx = int(len(X) * (1 - _TEST_SIZE))  # (1 - 0.2) = 0.8
+    oot_indices = temporal_indices[oot_threshold_idx:]  # Most-recent 20%
 
-        # OOT test set
-        X_oot = X.iloc[oot_indices].copy()
-        y_oot = y.iloc[oot_indices].copy()
+    # OOT test set
+    X_oot = X.iloc[oot_indices].copy()
+    y_oot = y.iloc[oot_indices].copy()
 
-        # Remaining data for stratified train/test split (excludes OOT)
-        X_remaining = X.iloc[temporal_indices[:oot_threshold_idx]].copy()
-        y_remaining = y.iloc[temporal_indices[:oot_threshold_idx]].copy()
-    else:
-        # Fallback: no temporal column available, use all data for train/test
-        X_remaining = X.copy()
-        y_remaining = y.copy()
+    # Remaining data for stratified train/test split (excludes OOT)
+    X_remaining = X.iloc[temporal_indices[:oot_threshold_idx]].copy()
+    y_remaining = y.iloc[temporal_indices[:oot_threshold_idx]].copy()
 
     # --- Train / test split (stratified, identical seed to LR baseline) ---
     X_train, X_test, y_train, y_test = train_test_split(
@@ -1184,7 +1266,15 @@ def train_xgboost_optuna(
         pruner=optuna.pruners.MedianPruner(n_startup_trials=15, n_warmup_steps=75),
         load_if_exists=True,
     )
-    study.optimize(objective, n_trials=n_trials)
+
+    # Instantiate monitoring callback for OOF Gini gating (D-17, D-18)
+    callback = _OOFGiniMonitorCallback(
+        progress_log_path="reports/hpo_progress.jsonl",
+        oof_gini_threshold=0.85,
+        consecutive_threshold=3
+    )
+
+    study.optimize(objective, n_trials=n_trials, callbacks=[callback])
 
     best_params: dict = study.best_params
 
