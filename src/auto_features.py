@@ -57,22 +57,17 @@ _LEAKY_SKDPD_COLS: list[str] = [
     "MEAN(pos_cash.SK_DPD)",
     "SUM(previous_application.credit_card.SK_DPD)", "SUM(previous_application.credit_card.SK_DPD_DEF)",
     "SUM(previous_application.pos_cash.SK_DPD)", "SUM(previous_application.pos_cash.SK_DPD_DEF)",
-    # Hand-engineered DPD aggregates from bureau_balance (data_loader.py)
-    # bureau_balance SK_DPD is recorded for active loans during the observation window —
-    # overlap with the application period makes these leaky.
-    "bureau_bbal_dpd_rate_mean",
-    "bureau_bbal_dpd_rate_std_mean",
-    "bureau_bbal_dpd_rate_6m_mean",
-    "bureau_bbal_dpd_rate_12m_mean",
-    "bureau_bbal_dpd_trend_mean",
-    "bbal_months_since_last_dpd",
-    "bbal_dpd_last_3m_rate",
-    "bbal_dpd_last_6m_vs_prior_rate",
-    # Cross-table DPD interaction features (features.py)
-    "inst_late_dpd_ratio",
-    "multi_dpd_flag",
-    "bureau_inst_dpd",
-    "dpd_escalation",
+    # Bureau-balance DPD (MONTHS_BALANCE >= -6 or all-months — includes application month 0)
+    "bureau_bbal_dpd_rate_mean",     # mean across ALL months including month 0
+    "bureau_bbal_dpd_rate_std_mean", # std across ALL months including month 0
+    "bureau_bbal_dpd_rate_6m_mean",  # MB >= -6, includes month 0
+    "bureau_bbal_dpd_trend_mean",    # 6m - 12m; 6m component is leaky
+    "bbal_months_since_last_dpd",    # uses all records including month 0
+    "bbal_dpd_last_3m_rate",         # MB >= -3, includes month 0
+    "bbal_dpd_last_6m_vs_prior_rate",# recent window includes month 0
+    # Cross-table features derived from leaky inputs
+    "multi_dpd_flag",    # primary path uses cc_dpd_rate (already leaky)
+    "dpd_escalation",    # derived from bureau_bbal_dpd_rate_6m_mean (leaky)
 ]
 
 # File names (canonical in Home Credit dataset)

@@ -1257,7 +1257,21 @@ def test_bureau_and_inst_dpd_retained():
 
 
 @pytest.mark.regression
-def test_build_tree_dfs_features_zero_sk_dpd():
-    """D-01/D-05: Regression test (permanent): no SK_DPD columns survive rebuild."""
-    # Stub: placeholder for full TDD test
-    assert True
+def test_no_leaky_cols_in_dfs_output():
+    """
+    Regression test: Verify rebuilt DFS output contains zero columns from _LEAKY_SKDPD_COLS.
+    Per D-05 (CONTEXT.md), this test must remain permanently in the suite.
+    Basis: SR 11-7 model risk management guidance — documented evidence that input data
+    does not include future-looking signals.
+    """
+    import pandas as pd
+    from pathlib import Path
+    from src.auto_features import _LEAKY_SKDPD_COLS
+
+    parquet_path = Path("data/processed/X_tree_dfs.parquet")
+    if not parquet_path.exists():
+        pytest.skip(f"DFS parquet not found at {parquet_path}")
+
+    df = pd.read_parquet(parquet_path)
+    leaked = [c for c in df.columns if c in _LEAKY_SKDPD_COLS]
+    assert leaked == [], f"Leaky columns survived rebuild: {leaked}"
