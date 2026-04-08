@@ -1258,9 +1258,15 @@ def train_xgboost_optuna(
     # Auto-detect temporal groups from _TEMPORAL_SORT_COL if not supplied.
     if groups is None and _TEMPORAL_SORT_COL in X.columns:
         groups = X[_TEMPORAL_SORT_COL]
-    groups_train = (
-        groups.loc[X_train.index].to_numpy() if groups is not None else None
-    )
+    if groups is not None:
+        groups_arr = groups.loc[X_train.index].to_numpy()
+        # Fill NaN with (nanmin - 1) so unknown-timing rows sort "oldest" in
+        # _TemporalCV, keeping them in early training folds rather than the
+        # validation folds (same fix as the OOT split above).
+        _g_nan_fill = float(np.nanmin(groups_arr)) - 1.0 if not np.all(np.isnan(groups_arr)) else 0.0
+        groups_train = np.where(np.isnan(groups_arr), _g_nan_fill, groups_arr)
+    else:
+        groups_train = None
     cv = _make_cv(groups_train, n_splits=_XGB_CV_N_SPLITS)
 
     def objective(trial: optuna.Trial) -> float:

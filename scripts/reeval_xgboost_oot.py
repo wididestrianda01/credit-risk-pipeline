@@ -104,7 +104,14 @@ def main():
     print(f"  Best params: {best_params}")
 
     # --- CV for OOF accumulation ---
-    groups_train = X_train[_TEMPORAL_SORT_COL].to_numpy() if _TEMPORAL_SORT_COL in X_train.columns else None
+    # Fill NaN in temporal groups with (nanmin-1) so first-time-applicant rows
+    # sort to "oldest" in _TemporalCV and stay in early training folds, not val.
+    if _TEMPORAL_SORT_COL in X_train.columns:
+        g_arr = X_train[_TEMPORAL_SORT_COL].to_numpy()
+        _g_fill = float(np.nanmin(g_arr)) - 1.0 if not np.all(np.isnan(g_arr)) else 0.0
+        groups_train = np.where(np.isnan(g_arr), _g_fill, g_arr)
+    else:
+        groups_train = None
     cv = _make_cv(groups_train, n_splits=_XGB_CV_N_SPLITS)
 
     fold_params = {
@@ -154,7 +161,7 @@ def main():
     model_calibrated, _, _ = calibrate_model(
         model_best, X_train, y_train, X_test, y_test, method="sigmoid",
         output_model_path="models/xgboost_raw_calibrated.pkl",
-        calibration_figure_path="reports/figures/xgboost_raw_calibration.png",
+        output_figure_path="reports/figures/xgboost_raw_calibration.png",
     )
 
     # --- Gate check ---
