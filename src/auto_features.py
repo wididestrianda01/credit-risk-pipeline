@@ -52,8 +52,9 @@ _LEAKY_SKDPD_COLS: list[str] = [
     "cc_sk_dpd_max", "cc_sk_dpd_mean", "cc_dpd_rate",
     "SUM(credit_card.SK_DPD)", "SUM(credit_card.SK_DPD_DEF)",
     "SUM(pos_cash.SK_DPD)", "SUM(pos_cash.SK_DPD_DEF)",
+    "MEAN(pos_cash.SK_DPD)",
     "SUM(previous_application.credit_card.SK_DPD)", "SUM(previous_application.credit_card.SK_DPD_DEF)",
-    "SUM(previous_application.pos_cash.SK_DPD)",
+    "SUM(previous_application.pos_cash.SK_DPD)", "SUM(previous_application.pos_cash.SK_DPD_DEF)",
 ]
 
 # File names (canonical in Home Credit dataset)
