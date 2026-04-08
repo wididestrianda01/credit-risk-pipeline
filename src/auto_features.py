@@ -317,6 +317,9 @@ def _build_entity_set(tables: dict[str, pd.DataFrame]) -> Any:
         "AMT_REQ_CREDIT_BUREAU_QRT": Double,  # Has 41519 NaN values, use Double instead of Integer
         "AMT_REQ_CREDIT_BUREAU_YEAR": Double,  # Has 41519 NaN values, use Double instead of Integer
     }
+    logical_types_application = {
+        k: v for k, v in logical_types_application.items() if k in tables["application"].columns
+    }
     es = es.add_dataframe(
         dataframe_name="application",
         dataframe=tables["application"],
@@ -344,6 +347,9 @@ def _build_entity_set(tables: dict[str, pd.DataFrame]) -> Any:
         "DAYS_CREDIT_UPDATE": Integer,
         "AMT_ANNUITY": Double,
     }
+    logical_types_bureau = {
+        k: v for k, v in logical_types_bureau.items() if k in tables["bureau"].columns
+    }
     es = es.add_dataframe(
         dataframe_name="bureau",
         dataframe=tables["bureau"],
@@ -356,6 +362,9 @@ def _build_entity_set(tables: dict[str, pd.DataFrame]) -> Any:
         "SK_ID_BUREAU": Integer,
         "MONTHS_BALANCE": Integer,
         "STATUS": Categorical,
+    }
+    logical_types_bureau_balance = {
+        k: v for k, v in logical_types_bureau_balance.items() if k in tables["bureau_balance"].columns
     }
     es = es.add_dataframe(
         dataframe_name="bureau_balance",
@@ -405,6 +414,9 @@ def _build_entity_set(tables: dict[str, pd.DataFrame]) -> Any:
         "DAYS_TERMINATION": Double,
         "NFLAG_INSURED_ON_APPROVAL": Double,
     }
+    logical_types_previous_application = {
+        k: v for k, v in logical_types_previous_application.items() if k in tables["previous_application"].columns
+    }
     es = es.add_dataframe(
         dataframe_name="previous_application",
         dataframe=tables["previous_application"],
@@ -422,6 +434,9 @@ def _build_entity_set(tables: dict[str, pd.DataFrame]) -> Any:
         "NAME_CONTRACT_STATUS": Categorical,
         "SK_DPD": Integer,
         "SK_DPD_DEF": Integer,
+    }
+    logical_types_pos_cash = {
+        k: v for k, v in logical_types_pos_cash.items() if k in tables["pos_cash"].columns
     }
     es = es.add_dataframe(
         dataframe_name="pos_cash",
@@ -441,6 +456,9 @@ def _build_entity_set(tables: dict[str, pd.DataFrame]) -> Any:
         "DAYS_ENTRY_PAYMENT": Double,
         "AMT_INSTALMENT": Double,
         "AMT_PAYMENT": Double,
+    }
+    logical_types_installments = {
+        k: v for k, v in logical_types_installments.items() if k in tables["installments"].columns
     }
     es = es.add_dataframe(
         dataframe_name="installments",
@@ -475,6 +493,9 @@ def _build_entity_set(tables: dict[str, pd.DataFrame]) -> Any:
         "NAME_CONTRACT_STATUS": Categorical,
         "SK_DPD": Integer,
         "SK_DPD_DEF": Integer,
+    }
+    logical_types_credit_card = {
+        k: v for k, v in logical_types_credit_card.items() if k in tables["credit_card"].columns
     }
     es = es.add_dataframe(
         dataframe_name="credit_card",
