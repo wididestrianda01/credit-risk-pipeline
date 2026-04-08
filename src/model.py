@@ -15,6 +15,9 @@ from __future__ import annotations
 
 import datetime
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 import warnings
 from pathlib import Path
 from typing import Literal
@@ -400,7 +403,7 @@ class _OOFGiniMonitorCallback:
         # Early-abort gate: if oof_gini > threshold, increment counter; else reset
         if oof_gini is not None and oof_gini > self.oof_gini_threshold:
             self.failed_trial_count += 1
-            print(f"  ⚠️ Trial {trial.number}: oof_gini={oof_gini:.4f} > {self.oof_gini_threshold} "
+            logger.warning(f"  ⚠️ Trial {trial.number}: oof_gini={oof_gini:.4f} > {self.oof_gini_threshold} "
                   f"({self.failed_trial_count}/{self.consecutive_threshold} consecutive)")
 
             # Raise error if threshold exceeded
@@ -415,7 +418,7 @@ class _OOFGiniMonitorCallback:
             # Reset counter on good trial (oof_gini <= threshold)
             if oof_gini is not None:
                 self.failed_trial_count = 0
-                print(f"  ✓ Trial {trial.number}: oof_gini={oof_gini:.4f} <= {self.oof_gini_threshold} (gate OK)")
+                logger.info(f"  ✓ Trial {trial.number}: oof_gini={oof_gini:.4f} <= {self.oof_gini_threshold} (gate OK)")
 
 
 # ---------------------------------------------------------------------------

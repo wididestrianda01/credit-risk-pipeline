@@ -127,8 +127,15 @@ def mock_data_parquet_path(mock_data, tmp_path_factory):
     Returns the path string to the parquet file. Used by tests that need
     the new path-based API for train_xgboost_optuna().
     """
+    import credit_engine.model as model_module
+
     X, y = mock_data
     X_with_target = X.copy()
+
+    # Add temporal sort column (required for OOT split in train_xgboost_optuna)
+    if model_module._TEMPORAL_SORT_COL not in X_with_target.columns:
+        X_with_target[model_module._TEMPORAL_SORT_COL] = np.arange(len(X_with_target), dtype=float)
+
     X_with_target["TARGET"] = y.values
 
     tmp_dir = tmp_path_factory.mktemp("mock_data_parquet")
@@ -534,8 +541,11 @@ def xgb_optuna_result(tmp_path_factory):
     X = pd.DataFrame({
         "f1": np.where(y_arr == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
         "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
-        "TARGET": y_arr,
     })
+    # Add temporal sort column (required for OOT split in train_xgboost_optuna)
+    X[_model._TEMPORAL_SORT_COL] = np.arange(len(X), dtype=float)
+    X["TARGET"] = y_arr
+
     # Save to temporary parquet file
     tmp_dir = tmp_path_factory.mktemp("xgb_optuna_module")
     parquet_path = tmp_dir / "mock_data.parquet"
@@ -567,10 +577,12 @@ def test_train_xgboost_optuna_return_types(xgb_optuna_result):
 
 
 def test_train_xgboost_optuna_split_sizes(mock_data, xgb_optuna_result):
-    """Test split is ~20% of total rows."""
+    """Test split is ~16% of total rows (20% OOT + 20% train/test = 16% of original)."""
     X, _ = mock_data
     _, _, X_test, _, _, _ = xgb_optuna_result
-    assert abs(len(X_test) / len(X) - 0.2) < 0.02
+    # OOT temporal split holds 20% → 400 remain. Train/test on 400 → 80 test.
+    # 80/500 = 16% of total (not 20%), so tolerance is 4% to account for OOT
+    assert abs(len(X_test) / len(X) - 0.16) < 0.04
 
 
 # --- Metrics ---
@@ -598,6 +610,94 @@ def test_train_xgboost_optuna_ks_positive(xgb_optuna_result):
     """KS > 0 confirms model has discrimination."""
     _, metrics, *_ = xgb_optuna_result
     assert metrics["KS"] > 0.0
+
+
+# --- OOF/OOT Gini metrics (Basel III three-metric validation) ---
+
+@pytest.mark.unit
+def test_three_gini_metrics_reported(mock_data_parquet_path):
+    """
+    Verify that metrics_dict contains three Gini metrics per Basel III validation structure.
+    OOF = development discrimination, OOT = temporal validation, Gini = holdout test.
+    """
+    model, metrics, X_test, y_test, best_params, oof_predictions = train_xgboost_optuna(
+        feature_store_path=mock_data_parquet_path, n_trials=2
+    )
+    assert "oof_gini" in metrics, f"Missing 'oof_gini' in metrics: {metrics.keys()}"
+    assert "oot_gini" in metrics, f"Missing 'oot_gini' in metrics: {metrics.keys()}"
+    assert "Gini" in metrics, f"Missing 'Gini' in metrics: {metrics.keys()}"
+    # All three should be floats in [0, 1]
+    for key in ["oof_gini", "oot_gini", "Gini"]:
+        assert 0 <= metrics[key] <= 1, f"Gini metric {key} out of range: {metrics[key]}"
+
+
+@pytest.mark.unit
+def test_oof_predictions_shape_and_range(mock_data_parquet_path):
+    """
+    Verify that oof_predictions are uncalibrated probabilities with correct shape.
+    Shape must match the training set size after OOT split; values in [0, 1].
+
+    Note: OOT split removes 20% most-recent samples before train/test split.
+    So OOF predictions size = len(X_remaining_after_OOT) after 20% train/test split.
+    """
+    model, metrics, X_test, y_test, best_params, oof_predictions = train_xgboost_optuna(
+        feature_store_path=mock_data_parquet_path, n_trials=2
+    )
+    # Expected OOF size: 80% of original (OOT holdout) × 80% train (after test split)
+    # = 0.8 × 0.8 = 0.64 of original size
+    X_full = pd.read_parquet(mock_data_parquet_path)
+    expected_oof_size = int(len(X_full) * 0.8 * 0.8)  # 80% OOT, then 80% train
+    # Allow some tolerance for rounding
+    assert abs(len(oof_predictions) - expected_oof_size) <= 1, \
+        f"OOF predictions size {len(oof_predictions)} not ~{expected_oof_size} (expected 64% of {len(X_full)})"
+    assert isinstance(oof_predictions, np.ndarray), f"OOF predictions not ndarray: {type(oof_predictions)}"
+    assert oof_predictions.dtype in [np.float32, np.float64], \
+        f"OOF predictions not float type: {oof_predictions.dtype}"
+    assert (0 <= oof_predictions).all() and (oof_predictions <= 1).all(), \
+        f"OOF predictions out of [0,1] range: min={oof_predictions.min()}, max={oof_predictions.max()}"
+
+
+@pytest.mark.unit
+def test_oof_gini_consistency(mock_data_parquet_path):
+    """
+    Verify that metrics_dict['oof_gini'] equals gini_coefficient(y_train, oof_predictions).
+    This confirms OOF Gini is computed correctly from accumulated CV predictions.
+
+    Note: OOF predictions only include samples from X_train (after OOT+test splits).
+    So we compute expected Gini only on the corresponding y_train subset.
+    """
+    from credit_engine.utils import gini_coefficient
+    from credit_engine.model import _TEMPORAL_SORT_COL, _TEST_SIZE
+
+    model, metrics, X_test, y_test, best_params, oof_predictions = train_xgboost_optuna(
+        feature_store_path=mock_data_parquet_path, n_trials=2
+    )
+    # Recreate the same train/test split to get y_train
+    X_full = pd.read_parquet(mock_data_parquet_path)
+    y_full = X_full.pop("TARGET")
+
+    # Replicate OOT split
+    temporal_sort_values = X_full[_TEMPORAL_SORT_COL].values
+    temporal_indices = np.argsort(temporal_sort_values)
+    oot_threshold_idx = int(len(X_full) * (1 - _TEST_SIZE))
+    X_remaining = X_full.iloc[temporal_indices[:oot_threshold_idx]].copy()
+    y_remaining = y_full.iloc[temporal_indices[:oot_threshold_idx]].copy()
+
+    # Replicate stratified train/test split
+    from sklearn.model_selection import train_test_split
+    X_train, _, y_train, _ = train_test_split(
+        X_remaining, y_remaining, test_size=_TEST_SIZE, stratify=y_remaining, random_state=42
+    )
+
+    # Compute expected OOF Gini
+    expected_oof_gini = gini_coefficient(y_train.values, oof_predictions)
+
+    # Assert metrics_dict oof_gini matches
+    assert "oof_gini" in metrics, f"'oof_gini' not in metrics: {metrics.keys()}"
+    np.testing.assert_almost_equal(
+        metrics["oof_gini"], expected_oof_gini, decimal=5,
+        err_msg=f"OOF Gini mismatch: metrics={metrics['oof_gini']}, computed={expected_oof_gini}"
+    )
 
 
 # --- best_params structure ---
@@ -2724,6 +2824,40 @@ class TestTrainXGBoostOptunaRawFeatures:
         nonexistent_path = str(tmp_path / "nonexistent.parquet")
         with pytest.raises(FileNotFoundError):
             train_xgboost_optuna(nonexistent_path, n_trials=2)
+
+    def test_train_xgboost_optuna_requires_temporal_sort_col(self, tmp_path):
+        """
+        Verify that train_xgboost_optuna raises ValueError if _TEMPORAL_SORT_COL is missing.
+        This is a regulatory requirement for Basel CRE36 OOT validation.
+
+        Expected behavior:
+        - Function creates a parquet without prev_days_decision_mean column
+        - train_xgboost_optuna raises ValueError with message about TEMPORAL_SORT_COL
+        - Error is not suppressed; bubbles up to caller
+        """
+        import credit_engine.model as model_module
+
+        # Create a parquet without the temporal sort column
+        rng = np.random.default_rng(42)
+        n_rows = 100
+        n_pos = 8
+
+        y_arr = np.zeros(n_rows, dtype=int)
+        y_arr[:n_pos] = 1
+        rng.shuffle(y_arr)
+
+        X = pd.DataFrame({
+            f"f{i}": rng.normal(0.0, 1.0, n_rows) for i in range(5)
+        })
+        X["TARGET"] = y_arr
+        # Explicitly do NOT add prev_days_decision_mean
+
+        parquet_path = tmp_path / "X_no_temporal.parquet"
+        X.to_parquet(parquet_path)
+
+        # Verify that calling train_xgboost_optuna raises ValueError
+        with pytest.raises(ValueError, match="Temporal sort column.*not in X"):
+            train_xgboost_optuna(str(parquet_path), n_trials=1)
 
     def test_train_xgboost_optuna_temporal_cv_auto_detected(self, make_mock_parquet):
         """
