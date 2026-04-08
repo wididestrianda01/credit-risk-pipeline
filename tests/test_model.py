@@ -1529,9 +1529,12 @@ class TestXGBoostExtendedSearchSpace:
         y_arr = np.zeros(n, dtype=int)
         y_arr[:40] = 1
         rng.shuffle(y_arr)
+        temporal_vals = np.arange(n, dtype=float)
+        temporal_vals[:50] = np.nan  # first-time applicants with no prior decision
         X = pd.DataFrame({
             "f1": np.where(y_arr == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
             "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
+            "prev_days_decision_mean": temporal_vals,
             "TARGET": y_arr,
         })
         # Save to temporary parquet file
@@ -2710,10 +2713,10 @@ class TestExtendedHPOWave0:
 # Wave 1: OOF/OOT Functionality Tests (Phase 04.2.3.1 Tasks 6-7)
 # ---------------------------------------------------------------------------
 
-def test_xgboost_study_name_is_v2():
-    """D-13: Optuna study name is xgboost_raw_v2 (clean data study)."""
+def test_xgboost_study_name_is_v3():
+    """D-13: Optuna study name is xgboost_raw_v3 (NaN-corrected split study)."""
     from credit_engine.model import _XGB_RAW_STUDY_NAME
-    assert _XGB_RAW_STUDY_NAME == "xgboost_raw_v2"
+    assert _XGB_RAW_STUDY_NAME == "xgboost_raw_v3"
 
 
 def test_train_xgboost_optuna_returns_6_tuple_stub(xgb_optuna_result):
@@ -2876,14 +2879,14 @@ class TestTrainXGBoostOptunaRawFeatures:
         assert model_cal is not None, "Temporal CV auto-detection should succeed"
         assert metrics is not None, "Metrics should be computed"
 
-    def test_train_xgboost_optuna_study_name_xgboost_raw_v2(self, make_mock_parquet):
+    def test_train_xgboost_optuna_study_name_xgboost_raw_v3(self, make_mock_parquet):
         """
-        Verifies that Optuna study name is "xgboost_raw_v2" (clean data study, avoids leaky bias).
+        Verifies that Optuna study name is "xgboost_raw_v3" (NaN-corrected split study).
 
         Expected behavior (D-13):
-        - Function creates Optuna study with study_name="xgboost_raw_v2"
-        - Old "xgboost_raw_v1" study (run on leaky data) is preserved in DB but not used
-        - New study name prevents TPE warm-start bias from leaky trials
+        - Function creates Optuna study with study_name="xgboost_raw_v3"
+        - Old v2 study (run on NaN-biased split — NaN rows sorted to OOT) is preserved but not used
+        - New study name prevents TPE warm-start bias from trials optimised on the wrong training set
         """
         parquet_path = make_mock_parquet(n_rows=500, n_features=10)
         model_cal, metrics, X_test, y_test, params, oof_pred = train_xgboost_optuna(
@@ -2893,12 +2896,12 @@ class TestTrainXGBoostOptunaRawFeatures:
         import optuna
         try:
             study = optuna.load_study(
-                study_name="xgboost_raw_v2",
+                study_name="xgboost_raw_v3",
                 storage="sqlite:///models/optuna_studies.db"
             )
-            assert study.study_name == "xgboost_raw_v2"
+            assert study.study_name == "xgboost_raw_v3"
         except Exception as e:
-            pytest.fail(f"Failed to load study 'xgboost_raw_v2': {e}")
+            pytest.fail(f"Failed to load study 'xgboost_raw_v3': {e}")
 
     def test_train_xgboost_optuna_early_stopping_set(self, make_mock_parquet):
         """

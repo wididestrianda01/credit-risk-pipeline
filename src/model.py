@@ -116,7 +116,7 @@ _XGB_RAW_GAMMA_MAX: float = 5.0
 _XGB_RAW_REG_ALPHA_MIN: float = 1e-8
 _XGB_RAW_REG_LAMBDA_MIN: float = 1e-8
 _XGB_RAW_REG_MAX: float = 5.0
-_XGB_RAW_STUDY_NAME: str = "xgboost_raw_v2"
+_XGB_RAW_STUDY_NAME: str = "xgboost_raw_v3"
 
 # Output paths for XGBoost Optuna HPO artefacts
 _XGB_OPTUNA_MODEL_PATH: str = "models/xgboost_best.pkl"
