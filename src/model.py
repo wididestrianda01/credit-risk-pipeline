@@ -111,7 +111,7 @@ _XGB_RAW_GAMMA_MAX: float = 5.0
 _XGB_RAW_REG_ALPHA_MIN: float = 1e-8
 _XGB_RAW_REG_LAMBDA_MIN: float = 1e-8
 _XGB_RAW_REG_MAX: float = 5.0
-_XGB_RAW_STUDY_NAME: str = "xgboost_raw_v1"
+_XGB_RAW_STUDY_NAME: str = "xgboost_raw_v2"
 
 # Output paths for XGBoost Optuna HPO artefacts
 _XGB_OPTUNA_MODEL_PATH: str = "models/xgboost_best.pkl"
@@ -1044,7 +1044,7 @@ def train_xgboost_optuna(
     feature_store_path: str,
     n_trials: int = _XGB_OPTUNA_N_TRIALS,
     groups: pd.Series | None = None,
-) -> tuple[object, dict, pd.DataFrame, pd.Series, dict]:
+) -> tuple[object, dict, pd.DataFrame, pd.Series, dict, np.ndarray]:
     """
     Train XGBoost with Bayesian hyperparameter optimisation via Optuna on raw features.
 
@@ -1075,13 +1075,15 @@ def train_xgboost_optuna(
         Fitted and Platt-calibrated XGBoost model (production-ready for EL = PD × LGD × EAD).
     metrics_dict : dict
         Evaluation metrics on X_test (calibrated model). Keys: Model, AUC-ROC, Gini, KS,
-        Brier, BrierSkill, AvgPrecision.
+        Brier, BrierSkill, AvgPrecision, oof_gini, oot_gini.
     X_test : pd.DataFrame
         Held-out test features (20% stratified split, seed=42).
     y_test : pd.Series
         Held-out test labels.
     best_params : dict
         Optimised hyperparameters from best trial.
+    oof_predictions : np.ndarray
+        Uncalibrated out-of-fold predictions (shape (n_train_rows,)), accumulated across CV folds.
 
     Raises
     ------
@@ -1123,9 +1125,35 @@ def train_xgboost_optuna(
     if n_neg == 0:
         raise ValueError("y has no negative samples — cannot compute scale_pos_weight.")
 
+    # --- OOT temporal split (before train/test, hold out most-recent 20% by temporal column) ---
+    # Basel CRE36.54 requires temporal validation: hold out the most-recent 20% as separate OOT set
+    # before stratified train/test split. The final model is trained on full training set (after OOT holdout),
+    # then evaluated on OOT as a separate temporal validation metric.
+    X_oot = None
+    y_oot = None
+    if _TEMPORAL_SORT_COL in X.columns:
+        temporal_sort_values = X[_TEMPORAL_SORT_COL].values
+        temporal_indices = np.argsort(temporal_sort_values)  # Sort ascending (earliest first)
+
+        # Identify OOT threshold: 80% of full dataset (earliest), 20% holdout (most-recent)
+        oot_threshold_idx = int(len(X) * (1 - _TEST_SIZE))  # (1 - 0.2) = 0.8
+        oot_indices = temporal_indices[oot_threshold_idx:]  # Most-recent 20%
+
+        # OOT test set
+        X_oot = X.iloc[oot_indices].copy()
+        y_oot = y.iloc[oot_indices].copy()
+
+        # Remaining data for stratified train/test split (excludes OOT)
+        X_remaining = X.iloc[temporal_indices[:oot_threshold_idx]].copy()
+        y_remaining = y.iloc[temporal_indices[:oot_threshold_idx]].copy()
+    else:
+        # Fallback: no temporal column available, use all data for train/test
+        X_remaining = X.copy()
+        y_remaining = y.copy()
+
     # --- Train / test split (stratified, identical seed to LR baseline) ---
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=_TEST_SIZE, stratify=y, random_state=_RANDOM_STATE
+        X_remaining, y_remaining, test_size=_TEST_SIZE, stratify=y_remaining, random_state=_RANDOM_STATE
     )
 
     # Cost-sensitive weight: Task 3.3 winner strategy
@@ -1160,9 +1188,35 @@ def train_xgboost_optuna(
 
     best_params: dict = study.best_params
 
+    # --- OOF accumulation loop (D-07, D-08: uncalibrated fold predictions for OOF Gini) ---
+    oof_predictions = np.zeros(len(X_train))
+    best_iteration = study.best_trial.user_attrs.get("best_iteration", _XGB_RAW_N_ESTIMATORS - 1)
+
+    for train_idx, val_idx in cv.split(X_train, y_train):
+        X_fold_train = X_train.iloc[train_idx]
+        X_fold_val = X_train.iloc[val_idx]
+        y_fold_train = y_train.iloc[train_idx]
+
+        fold_params = {
+            **best_params,
+            "n_estimators": best_iteration + 1,
+            "tree_method": "hist",
+            "scale_pos_weight": scale_pos_weight,
+            "eval_metric": "auc",
+            "use_label_encoder": False,
+            "verbosity": 0,
+            "random_state": _RANDOM_STATE,
+        }
+
+        fold_model = xgb.XGBClassifier(**fold_params)
+        fold_model.fit(X_fold_train, y_fold_train, verbose=False)
+
+        # Accumulate uncalibrated OOF predictions (D-07: raw predict_proba, not Platt-scaled)
+        y_prob_fold = fold_model.predict_proba(X_fold_val)[:, 1]
+        oof_predictions[val_idx] = y_prob_fold
+
     # --- Final model: retrain on full X_train with best params ---
     # Extract best_iteration from early stopping; default to 3000 if missing
-    best_iteration = study.best_trial.user_attrs.get("best_iteration", _XGB_RAW_N_ESTIMATORS - 1)
     final_n_estimators = best_iteration + 1
 
     best_params_final = {
@@ -1182,6 +1236,16 @@ def train_xgboost_optuna(
     # --- Evaluate best model on held-out test set ---
     metrics_best = evaluate_model(model_best, X_test, y_test, "XGBoost (Raw)")
 
+    # --- Compute OOF Gini (D-08: development set discrimination across all folds) ---
+    oof_gini = gini_coefficient(y_train.to_numpy(), oof_predictions)
+    metrics_best["oof_gini"] = oof_gini
+
+    # --- Compute OOT Gini (D-11: temporal holdout validation, Basel CRE36) ---
+    if X_oot is not None and len(X_oot) > 0:
+        y_prob_oot = model_best.predict_proba(X_oot)[:, 1]
+        oot_gini = gini_coefficient(y_oot.to_numpy(), y_prob_oot)
+        metrics_best["oot_gini"] = oot_gini
+
     # --- ROC + PR figure for best model ---
     figure_path = Path("reports/figures/xgboost_raw_roc_pr.png")
     figure_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1198,6 +1262,10 @@ def train_xgboost_optuna(
 
     # --- Evaluate calibrated model ---
     metrics_dict = evaluate_model(model_calibrated, X_test, y_test, "XGBoost (Raw, Calibrated)")
+    # Preserve OOF and OOT metrics from uncalibrated model evaluation
+    metrics_dict["oof_gini"] = oof_gini
+    if X_oot is not None and len(X_oot) > 0:
+        metrics_dict["oot_gini"] = oot_gini
 
     # --- Persist best (uncalibrated) model ---
     save_model(model_best, "models/xgboost_raw_best.pkl")
@@ -1214,7 +1282,7 @@ def train_xgboost_optuna(
     with eval_path.open("w") as fh:
         _json.dump(metrics_dict, fh, indent=2)
 
-    return model_calibrated, metrics_dict, X_test, y_test, best_params
+    return model_calibrated, metrics_dict, X_test, y_test, best_params, oof_predictions
 
 
 # ---------------------------------------------------------------------------
