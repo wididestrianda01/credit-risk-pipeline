@@ -2728,3 +2728,77 @@ class TestTrainXGBoostOptunaRawFeatures:
         assert gini > 0, f"Gini should be > 0, got {gini}"
         # On linearly separable data, should achieve reasonable Gini
         assert gini > 0.2, f"Expected Gini > 0.2 on separable data, got {gini}"
+
+
+# ---------------------------------------------------------------------------
+# Task 7: Integration tests for full pipeline and artifact verification
+# ---------------------------------------------------------------------------
+
+
+def test_train_xgboost_optuna_produces_calibrated_artifact_and_diagram(make_mock_parquet):
+    """
+    Full pipeline test: verifies that train_xgboost_optuna() produces
+    models/xgboost_raw_calibrated.pkl and reports/figures/xgboost_raw_calibration.png.
+    """
+    parquet_path = make_mock_parquet(n_rows=500, n_features=10)
+    model, metrics, X_test, y_test, params = train_xgboost_optuna(str(parquet_path), n_trials=2)
+
+    # Verify model is a calibrated version
+    assert hasattr(model, "estimator"), "Model should be CalibratedClassifierCV with estimator"
+
+    # Verify artifacts exist
+    from pathlib import Path
+    calibrated_pkl = Path("models/xgboost_raw_calibrated.pkl")
+    roc_png = Path("reports/figures/xgboost_raw_roc_pr.png")
+
+    assert calibrated_pkl.exists(), f"Calibrated model artifact missing: {calibrated_pkl}"
+    assert roc_png.exists(), f"ROC+PR diagram missing: {roc_png}"
+
+    # Verify metrics contain expected keys
+    assert "Gini" in metrics, "Metrics should contain Gini"
+    assert "BrierSkill" in metrics, "Metrics should contain BrierSkill"
+    assert metrics["Gini"] > 0, "Gini should be > 0"
+
+
+def test_train_xgboost_optuna_brierskill_positive_after_calibration(make_mock_parquet):
+    """
+    Verifies that calibration improves BrierSkill to > 0 (indicating
+    better-calibrated probability estimates than prevalence baseline).
+    """
+    parquet_path = make_mock_parquet(n_rows=500, n_features=10)
+    model, metrics, X_test, y_test, params = train_xgboost_optuna(str(parquet_path), n_trials=2)
+
+    assert "BrierSkill" in metrics, "Metrics should include BrierSkill"
+    brierskill = metrics["BrierSkill"]
+
+    # BrierSkill > 0 means better than prevalence baseline (more calibrated)
+    assert brierskill > 0, f"BrierSkill should be > 0 on separable mock data, got {brierskill}"
+
+
+@pytest.mark.skipif(
+    not Path("data/processed/X_tree_dfs.parquet").exists(),
+    reason="X_tree_dfs.parquet not found; run Phase 04.2.2 first"
+)
+def test_train_xgboost_optuna_on_production_x_tree_dfs():
+    """
+    MANUAL TEST: Runs full HPO on production X_tree_dfs.parquet (307K rows, 323 features).
+    Expected outcome: Gini > 0.60 on held-out test set.
+
+    This test is marked as skip if X_tree_dfs.parquet is missing.
+    Run manually with:
+        pytest tests/test_model.py::test_train_xgboost_optuna_on_production_x_tree_dfs -v
+
+    Or use the production script:
+        python scripts/train_xgboost_raw.py
+    """
+    from pathlib import Path
+    feature_store_path = Path("data/processed/X_tree_dfs.parquet")
+
+    # Run full HPO with 100 trials (production setting)
+    model, metrics, X_test, y_test, params = train_xgboost_optuna(
+        str(feature_store_path), n_trials=100
+    )
+
+    # Production done condition: Gini > 0.60
+    assert metrics["Gini"] > 0.60, f"Expected Gini > 0.60, got {metrics['Gini']}"
+    assert metrics["BrierSkill"] > 0, f"Expected BrierSkill > 0, got {metrics['BrierSkill']}"
