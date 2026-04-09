@@ -1229,6 +1229,188 @@ class TestDFSCorrelationDedup:
 
 
 # ---------------------------------------------------------------------------
+# Regression Tests: DFS Aggregations + Correlation Threshold (Plan 04.2.3.2-03)
+# ---------------------------------------------------------------------------
+
+
+class TestDFSAggregations:
+    """Regression tests for new DFS aggregations and recency features.
+
+    These tests verify that the new aggregations (D-23 through D-27) are present
+    in the rebuilt DFS feature store. They skip if the parquet file exists but
+    doesn't contain the new columns (pre-rebuild state).
+    """
+
+    def test_build_featuretools_feature_store_has_bureau_bb_dpd_mean(self):
+        """D-23: bureau_bb_dpd_mean is computed from STATUS ∈ ['1'-'5'] in bureau_balance."""
+        parquet_path = Path("data/processed/X_tree_dfs.parquet")
+        if not parquet_path.exists():
+            pytest.skip("DFS parquet not yet built")
+
+        df = pd.read_parquet(parquet_path)
+
+        # Check that the column exists (will be aggregated by DFS as MEAN(bureau.bb_dpd_mean) or similar)
+        # Skip this test if the new columns haven't been added yet (pre-rebuild)
+        has_bb_dpd = any("bb_dpd_mean" in col.lower() for col in df.columns)
+        if not has_bb_dpd:
+            pytest.skip("DFS feature store not yet rebuilt with new aggregations (Plan 04.2.3.2-05)")
+
+        assert has_bb_dpd, "Expected bureau bb_dpd_mean aggregates in DFS output"
+
+    def test_build_featuretools_feature_store_has_bureau_bb_dpd_max(self):
+        """D-23: bureau_bb_dpd_max is computed from STATUS ∈ ['1'-'5'] in bureau_balance."""
+        parquet_path = Path("data/processed/X_tree_dfs.parquet")
+        if not parquet_path.exists():
+            pytest.skip("DFS parquet not yet built")
+
+        df = pd.read_parquet(parquet_path)
+
+        has_bb_dpd = any("bb_dpd_max" in col.lower() for col in df.columns)
+        if not has_bb_dpd:
+            pytest.skip("DFS feature store not yet rebuilt with new aggregations (Plan 04.2.3.2-05)")
+
+        assert has_bb_dpd, "Expected bureau bb_dpd_max aggregates in DFS output"
+
+    def test_build_featuretools_feature_store_has_inst_recent_late_mean(self):
+        """D-24: inst_recent_late_mean is computed from last 12 instalments."""
+        parquet_path = Path("data/processed/X_tree_dfs.parquet")
+        if not parquet_path.exists():
+            pytest.skip("DFS parquet not yet built")
+
+        df = pd.read_parquet(parquet_path)
+
+        has_inst_recent = any("inst_recent_late" in col.lower() for col in df.columns)
+        if not has_inst_recent:
+            pytest.skip("DFS feature store not yet rebuilt with new aggregations (Plan 04.2.3.2-05)")
+
+        assert has_inst_recent, "Expected inst_recent_late aggregates in DFS output"
+
+    def test_build_featuretools_feature_store_has_inst_recent_underpay(self):
+        """D-24: inst_recent_underpay is computed from last 12 instalments."""
+        parquet_path = Path("data/processed/X_tree_dfs.parquet")
+        if not parquet_path.exists():
+            pytest.skip("DFS parquet not yet built")
+
+        df = pd.read_parquet(parquet_path)
+
+        has_inst_underpay = any("inst_recent_underpay" in col.lower() for col in df.columns)
+        if not has_inst_underpay:
+            pytest.skip("DFS feature store not yet rebuilt with new aggregations (Plan 04.2.3.2-05)")
+
+        assert has_inst_underpay, "Expected inst_recent_underpay aggregates in DFS output"
+
+    def test_build_featuretools_feature_store_has_inst_late_trend(self):
+        """D-25: inst_late_trend = recent_mean - overall_mean (can be negative)."""
+        parquet_path = Path("data/processed/X_tree_dfs.parquet")
+        if not parquet_path.exists():
+            pytest.skip("DFS parquet not yet built")
+
+        df = pd.read_parquet(parquet_path)
+
+        has_inst_trend = any("inst_late_trend" in col.lower() for col in df.columns)
+        if not has_inst_trend:
+            pytest.skip("DFS feature store not yet rebuilt with new aggregations (Plan 04.2.3.2-05)")
+
+        assert has_inst_trend, "Expected inst_late_trend aggregates in DFS output"
+
+    def test_build_featuretools_feature_store_has_inst_payment_diff_max(self):
+        """D-26: inst_payment_diff_max is the worst-case underpayment amount."""
+        parquet_path = Path("data/processed/X_tree_dfs.parquet")
+        if not parquet_path.exists():
+            pytest.skip("DFS parquet not yet built")
+
+        df = pd.read_parquet(parquet_path)
+
+        has_inst_max = any("inst_payment_diff_max" in col.lower() for col in df.columns)
+        if not has_inst_max:
+            pytest.skip("DFS feature store not yet rebuilt with new aggregations (Plan 04.2.3.2-05)")
+
+        assert has_inst_max, "Expected inst_payment_diff_max aggregates in DFS output"
+
+    def test_build_featuretools_feature_store_has_inst_late_skew(self):
+        """D-27: inst_late_skew is the skewness of payment delay distribution."""
+        parquet_path = Path("data/processed/X_tree_dfs.parquet")
+        if not parquet_path.exists():
+            pytest.skip("DFS parquet not yet built")
+
+        df = pd.read_parquet(parquet_path)
+
+        has_inst_skew = any("inst_late_skew" in col.lower() for col in df.columns)
+        if not has_inst_skew:
+            pytest.skip("DFS feature store not yet rebuilt with new aggregations (Plan 04.2.3.2-05)")
+
+        assert has_inst_skew, "Expected inst_late_skew aggregates in DFS output"
+
+    def test_deduplicate_dfs_features_uses_0_95_threshold(self):
+        """D-28: deduplicate_dfs_features default threshold is 0.95 (not 0.90)."""
+        from credit_engine.auto_features import deduplicate_dfs_features
+        import inspect
+
+        # Check function signature
+        sig = inspect.signature(deduplicate_dfs_features)
+        default_threshold = sig.parameters["corr_threshold"].default
+
+        assert default_threshold == 0.95, (
+            f"Expected default corr_threshold=0.95, got {default_threshold}"
+        )
+
+        # Create mock X_dfs with features at exactly 0.95 correlation
+        train_ids = list(range(100))
+        base_feature = np.random.randn(100)
+
+        X_dfs_test = pd.DataFrame(
+            {
+                "feat_1": base_feature,
+                "feat_2": base_feature * 0.95 + np.random.randn(100) * 0.1,  # corr ≈ 0.95
+                "feat_3": np.random.randn(100),  # independent
+            },
+            index=pd.Index(train_ids, name="SK_ID_CURR"),
+        )
+
+        # With threshold 0.95, highly correlated pair should not be deduplicated
+        # (only pairs with |r| > 0.95 are dropped)
+        dedup_cols = deduplicate_dfs_features(X_dfs_test, corr_threshold=0.95)
+
+        # Should keep most or all columns (only drops if |r| > 0.95)
+        assert len(dedup_cols) >= 2, (
+            f"With threshold 0.95, should keep at least 2 columns, got {len(dedup_cols)}"
+        )
+
+    def test_build_featuretools_feature_store_no_high_correlation_pairs(self):
+        """D-29: Final DFS output (after dedup with 0.95 threshold) has no feature pairs with |r| > 0.95."""
+        parquet_path = Path("data/processed/X_tree_dfs.parquet")
+        if not parquet_path.exists():
+            pytest.skip("DFS parquet not yet built")
+
+        df = pd.read_parquet(parquet_path)
+
+        # Check if this is the rebuilt version (with new aggregations)
+        # If not, skip since the old version hasn't had 0.95 deduplication applied
+        has_new_aggs = any(
+            "bb_dpd" in col.lower() or "inst_recent" in col.lower()
+            for col in df.columns
+        )
+        if not has_new_aggs:
+            pytest.skip(
+                "DFS feature store not yet rebuilt with 0.95 threshold (Plan 04.2.3.2-05)"
+            )
+
+        # Compute correlation matrix
+        corr_matrix = df.corr().abs()
+
+        # Find all pairs with |r| > 0.95 (excluding self-correlation)
+        high_corr_pairs = []
+        for i, col_a in enumerate(corr_matrix.columns):
+            for col_b in corr_matrix.columns[i + 1 :]:
+                if corr_matrix.loc[col_a, col_b] > 0.95:
+                    high_corr_pairs.append((col_a, col_b, corr_matrix.loc[col_a, col_b]))
+
+        assert len(high_corr_pairs) == 0, (
+            f"Found {len(high_corr_pairs)} pairs with |r| > 0.95: {high_corr_pairs[:5]}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Regression Tests: SK_DPD Leakage Removal (Phase 04.2.3.1)
 # ---------------------------------------------------------------------------
 

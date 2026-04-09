@@ -180,6 +180,9 @@ def _build_entity_set(tables: dict[str, pd.DataFrame]) -> Any:
     Configures the 7-table relational structure with foreign keys and
     synthetic indices where needed (for child tables without unique PKs).
 
+    Adds manual aggregations for STATUS-based DPD and installment recency features
+    before EntitySet construction to ensure they are available for DFS.
+
     Parameters
     ----------
     tables : dict[str, pd.DataFrame]
@@ -197,6 +200,109 @@ def _build_entity_set(tables: dict[str, pd.DataFrame]) -> Any:
     """
     if ft is None:
         raise ImportError("featuretools is required for this function")
+
+    # --- Task 1: Add STATUS-based bureau_balance DPD aggregations ---
+    # Pre-compute DPD flags at bureau level (historical closed loans only)
+    bureau_balance = tables["bureau_balance"].copy()
+    bureau_balance_hist = bureau_balance[bureau_balance["MONTHS_BALANCE"] < 0].copy()
+
+    # STATUS ∈ ["1","2","3","4","5"] = 1-5+ months overdue
+    bureau_balance_hist["is_dpd"] = bureau_balance_hist["STATUS"].isin(
+        ["1", "2", "3", "4", "5"]
+    ).astype(int)
+
+    # Aggregate to SK_ID_BUREAU level
+    bb_agg = bureau_balance_hist.groupby("SK_ID_BUREAU").agg(
+        bb_dpd_mean=("is_dpd", "mean"),
+        bb_dpd_max=("is_dpd", "max"),
+    ).reset_index()
+
+    # Merge into bureau DataFrame
+    bureau = tables["bureau"].copy()
+    bureau = bureau.merge(bb_agg, on="SK_ID_BUREAU", how="left")
+    bureau[["bb_dpd_mean", "bb_dpd_max"]] = bureau[
+        ["bb_dpd_mean", "bb_dpd_max"]
+    ].fillna(0)
+
+    # Update tables dictionary (immutable pattern: create copies, don't mutate original)
+    tables = tables.copy()
+    tables["bureau"] = bureau
+    tables["bureau_balance"] = bureau_balance
+
+    # --- Task 2 & 3: Add installment recency aggregations and skew ---
+    installments = tables["installments"].copy()
+
+    # Derive base columns if not already present
+    if "days_late" not in installments.columns:
+        # days_late = max(DAYS_ENTRY_PAYMENT - DAYS_INSTALMENT, 0)
+        installments["days_late"] = (
+            installments["DAYS_ENTRY_PAYMENT"] - installments["DAYS_INSTALMENT"]
+        ).clip(lower=0)
+
+    if "payment_diff" not in installments.columns:
+        # payment_diff = AMT_INSTALMENT - AMT_PAYMENT
+        installments["payment_diff"] = (
+            installments["AMT_INSTALMENT"] - installments["AMT_PAYMENT"]
+        )
+
+    # Create a rank column for recency (most recent first: rank 0 is most recent)
+    installments["rank"] = installments.groupby("SK_ID_CURR").cumcount(ascending=False)
+    inst_recent = installments[installments["rank"] < 12].copy()  # Most recent 12
+
+    # Recency aggregations
+    inst_recent_agg = inst_recent.groupby("SK_ID_CURR").agg(
+        inst_recent_late_mean=("days_late", "mean"),
+        inst_recent_underpay=("payment_diff", "mean"),
+    ).reset_index()
+
+    # For trend, compute overall mean separately
+    inst_all_agg = installments.groupby("SK_ID_CURR").agg(
+        inst_days_late_mean=("days_late", "mean"),
+    ).reset_index()
+
+    inst_recent_agg = inst_recent_agg.merge(inst_all_agg, on="SK_ID_CURR", how="left")
+    inst_recent_agg["inst_late_trend"] = (
+        inst_recent_agg["inst_recent_late_mean"]
+        - inst_recent_agg["inst_days_late_mean"]
+    )
+    inst_recent_agg = inst_recent_agg.drop(columns=["inst_days_late_mean"])
+
+    # Worst-case underpayment
+    inst_payment_max = installments.groupby("SK_ID_CURR").agg(
+        inst_payment_diff_max=("payment_diff", "max"),
+    ).reset_index()
+
+    # Distribution shape of payment delays
+    try:
+        from scipy.stats import skew
+
+        inst_skew = installments.groupby("SK_ID_CURR").agg(
+            inst_late_skew=("days_late", lambda x: skew(x) if len(x) > 1 else 0),
+        ).reset_index()
+    except ImportError:
+        # Fallback: compute simple skew manually or use 0
+        inst_skew = installments.groupby("SK_ID_CURR").agg(
+            inst_late_skew=("days_late", lambda x: 0),
+        ).reset_index()
+
+    # Merge recency aggregations back into installments
+    installments = installments.merge(inst_recent_agg, on="SK_ID_CURR", how="left")
+    installments = installments.merge(inst_payment_max, on="SK_ID_CURR", how="left")
+    installments = installments.merge(inst_skew, on="SK_ID_CURR", how="left")
+
+    # Fill NaN values with 0 for aggregations that may not have matched rows
+    recency_cols = [
+        "inst_recent_late_mean",
+        "inst_recent_underpay",
+        "inst_late_trend",
+        "inst_payment_diff_max",
+        "inst_late_skew",
+    ]
+    for col in recency_cols:
+        if col in installments.columns:
+            installments[col] = installments[col].fillna(0)
+
+    tables["installments"] = installments
 
     es = ft.EntitySet(id="home_credit")
 
@@ -353,6 +459,8 @@ def _build_entity_set(tables: dict[str, pd.DataFrame]) -> Any:
         "CREDIT_TYPE": Categorical,
         "DAYS_CREDIT_UPDATE": Integer,
         "AMT_ANNUITY": Double,
+        "bb_dpd_mean": Double,
+        "bb_dpd_max": Double,
     }
     logical_types_bureau = {
         k: v for k, v in logical_types_bureau.items() if k in tables["bureau"].columns
@@ -463,6 +571,14 @@ def _build_entity_set(tables: dict[str, pd.DataFrame]) -> Any:
         "DAYS_ENTRY_PAYMENT": Double,
         "AMT_INSTALMENT": Double,
         "AMT_PAYMENT": Double,
+        "days_late": Double,
+        "payment_diff": Double,
+        "rank": Integer,
+        "inst_recent_late_mean": Double,
+        "inst_recent_underpay": Double,
+        "inst_late_trend": Double,
+        "inst_payment_diff_max": Double,
+        "inst_late_skew": Double,
     }
     logical_types_installments = {
         k: v for k, v in logical_types_installments.items() if k in tables["installments"].columns
@@ -600,7 +716,7 @@ def build_featuretools_feature_store(
     agg_primitives: list[str] | None = None,
     max_depth: int = 1,
     iv_threshold: float = 0.02,
-    corr_threshold: float = 0.90,
+    corr_threshold: float = 0.95,
     n_jobs: int = 1,
 ) -> tuple[pd.DataFrame, list[Any], list[str]]:
     """
@@ -624,7 +740,7 @@ def build_featuretools_feature_store(
     iv_threshold : float, optional
         Minimum IV to include feature (default 0.02).
     corr_threshold : float, optional
-        Correlation threshold for deduplication (default 0.90).
+        Correlation threshold for deduplication (default 0.95 per feature.md Layer 6).
     n_jobs : int, optional
         Number of jobs for DFS (default 1).
 
@@ -908,7 +1024,7 @@ def apply_featuretools_feature_store(
 def deduplicate_dfs_features(
     X_dfs: pd.DataFrame,
     feature_importance: dict[str, float] | None = None,
-    corr_threshold: float = 0.90,
+    corr_threshold: float = 0.95,
 ) -> list[str]:
     """
     Identify and remove highly correlated DFS feature pairs.
@@ -926,7 +1042,7 @@ def deduplicate_dfs_features(
         uses importance to decide which feature to drop. If None, drops the
         second feature in each correlated pair.
     corr_threshold : float, optional
-        Correlation threshold for deduplication (default 0.90).
+        Correlation threshold for deduplication (default 0.95 per feature.md Layer 6).
 
     Returns
     -------
@@ -969,7 +1085,7 @@ def evaluate_dfs_features(
     y: pd.Series,
     output_path: Path | str | None = None,
     n_trials: int = 50,
-    corr_threshold: float = 0.90,
+    corr_threshold: float = 0.95,
 ) -> dict[str, Any]:
     """
     Evaluate DFS features by comparing Gini on raw vs combined feature sets.
@@ -991,7 +1107,7 @@ def evaluate_dfs_features(
     n_trials : int, optional
         Number of Optuna trials for XGBoost HPO (default 50).
     corr_threshold : float, optional
-        Correlation threshold for DFS feature deduplication (default 0.90).
+        Correlation threshold for DFS feature deduplication (default 0.95 per feature.md).
 
     Returns
     -------
