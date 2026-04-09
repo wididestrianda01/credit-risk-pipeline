@@ -118,6 +118,7 @@ _XGB_RAW_REG_MAX: float = 5.0
 _XGB_RAW_STUDY_NAME: str = "xgboost_raw_v8"
 
 # Output paths for XGBoost Optuna HPO artefacts
+_HPO_PROGRESS_LOG_PATH: str = "reports/hpo_progress.jsonl"
 _XGB_OPTUNA_MODEL_PATH: str = "models/xgboost_best.pkl"
 _XGB_OPTUNA_PARAMS_PATH: str = "models/xgboost_params.json"
 _XGB_OPTUNA_FIGURE_PATH: str = "reports/figures/xgboost_roc_pr.png"
@@ -1184,6 +1185,7 @@ def train_xgboost_optuna(
     feature_store_path: str,
     n_trials: int = _XGB_OPTUNA_N_TRIALS,
     groups: pd.Series | None = None,
+    progress_log_path: str | None = None,
 ) -> tuple[object, dict, pd.DataFrame, pd.Series, dict, np.ndarray]:
     """
     Train XGBoost with Bayesian hyperparameter optimisation via Optuna on raw features.
@@ -1208,6 +1210,10 @@ def train_xgboost_optuna(
     groups : pd.Series | None, optional
         Optional temporal groups for CV embargo. If None and _TEMPORAL_SORT_COL
         exists in X, groups are auto-detected.
+    progress_log_path : str, optional
+        Path for the per-trial OOF Gini JSONL log written by ``_OOFGiniMonitorCallback``.
+        Override in tests to avoid polluting the production ``reports/hpo_progress.jsonl``.
+        Default: ``"reports/hpo_progress.jsonl"``.
 
     Returns
     -------
@@ -1247,6 +1253,11 @@ def train_xgboost_optuna(
     import matplotlib.pyplot as plt
     import optuna
     import xgboost as xgb
+
+    # Resolve progress_log_path sentinel — allows tests to monkeypatch _HPO_PROGRESS_LOG_PATH
+    # without passing the argument explicitly, preventing production JSONL contamination.
+    if progress_log_path is None:
+        progress_log_path = _HPO_PROGRESS_LOG_PATH
 
     # --- Load features + target from parquet ---
     X = pd.read_parquet(feature_store_path)
@@ -1368,7 +1379,7 @@ def train_xgboost_optuna(
 
     # Instantiate monitoring callback for OOF Gini gating (D-17, D-18)
     callback = _OOFGiniMonitorCallback(
-        progress_log_path="reports/hpo_progress.jsonl",
+        progress_log_path=progress_log_path,
         oof_gini_threshold=0.85,
         consecutive_threshold=3
     )

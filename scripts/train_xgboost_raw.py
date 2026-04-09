@@ -66,7 +66,7 @@ def main():
     print(f"Loading feature store from {feature_store_path}...")
     print(f"Running Optuna HPO with {n_trials} trials...")
     print(f"Per-trial progress: tail -f reports/hpo_progress.jsonl")
-    print(f"Full run log:       tail -f reports/hpo_v7_run.log  (if launched via nohup)")
+    print(f"Full run log:       tail -f reports/hpo_v8_run.log  (if launched via nohup)")
     import sys as _sys; _sys.stdout.flush()
 
     exit_code = 0

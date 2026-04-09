@@ -84,6 +84,18 @@ def _force_xgb_single_thread():
     _xgb.XGBClassifier.__init__ = _original
 
 
+@pytest.fixture(autouse=True)
+def _redirect_hpo_progress_log(monkeypatch, tmp_path):
+    """Redirect _HPO_PROGRESS_LOG_PATH to tmp_path for all tests in this file.
+
+    Prevents pytest runs on mock data from writing inflated Gini values into
+    the production reports/hpo_progress.jsonl, which would contaminate HPO
+    monitoring dashboards for real training runs.
+    """
+    import credit_engine.model as _model
+    monkeypatch.setattr(_model, "_HPO_PROGRESS_LOG_PATH", str(tmp_path / "hpo_progress.jsonl"))
+
+
 @pytest.fixture(scope="module")
 def mock_data() -> tuple[pd.DataFrame, pd.Series]:
     """
@@ -553,7 +565,10 @@ def xgb_optuna_result(tmp_path_factory):
     X.to_parquet(parquet_path)
 
     try:
-        return train_xgboost_optuna(str(parquet_path), n_trials=3)
+        return train_xgboost_optuna(
+            str(parquet_path), n_trials=3,
+            progress_log_path=str(tmp_dir / "hpo_progress.jsonl"),
+        )
     finally:
         mp.undo()
 
@@ -1583,7 +1598,10 @@ class TestXGBoostExtendedSearchSpace:
         parquet_path = parquet_tmp / "mock_data.parquet"
         X.to_parquet(parquet_path)
 
-        _, _, _, _, best_params, _ = train_xgboost_optuna(str(parquet_path), n_trials=3)
+        _, _, _, _, best_params, _ = train_xgboost_optuna(
+            str(parquet_path), n_trials=3,
+            progress_log_path=str(tmp / "hpo_progress.jsonl"),
+        )
         return best_params
 
     def test_best_params_includes_gamma(self, xgb_best_params):
@@ -2822,16 +2840,19 @@ class TestTrainXGBoostOptunaRawFeatures:
     """TDD tests for train_xgboost_optuna() with path-based parquet loading."""
 
     @pytest.fixture(autouse=True)
-    def _patch_optuna_in_memory(self, monkeypatch):
+    def _patch_optuna_in_memory(self, monkeypatch, tmp_path):
         """Force in-memory Optuna storage for all class tests to prevent mock-data
-        trials from contaminating the production SQLite study DB."""
+        trials from contaminating the production SQLite study DB.
+        Also redirect hpo_progress.jsonl writes to tmp_path."""
         import optuna as _optuna
+        import credit_engine.model as _model
         _orig = _optuna.create_study
         monkeypatch.setattr(
             _optuna,
             "create_study",
             lambda **kw: _orig(**{k: v for k, v in kw.items() if k != "storage"}),
         )
+        monkeypatch.setattr(_model, "_HPO_PROGRESS_LOG_PATH", str(tmp_path / "hpo_progress.jsonl"))
 
     def test_train_xgboost_optuna_loads_parquet(self, make_mock_parquet):
         """
