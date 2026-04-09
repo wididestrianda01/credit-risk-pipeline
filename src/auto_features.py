@@ -51,12 +51,19 @@ _LEAKY_SKDPD_COLS: list[str] = [
     # Raw SK_DPD aggregates (pos_cash / credit_card) — directly from target-period records
     "pos_sk_dpd_max", "pos_sk_dpd_std", "pos_sk_dpd_mean", "pos_sk_dpd_def_max",
     "cc_sk_dpd_max", "cc_sk_dpd_mean", "cc_dpd_rate",
-    # Featuretools DFS aggregates of SK_DPD columns
+    # Featuretools DFS aggregates of SK_DPD columns (SUM, MEAN, STD variants)
     "SUM(credit_card.SK_DPD)", "SUM(credit_card.SK_DPD_DEF)",
+    "MEAN(credit_card.SK_DPD)", "MEAN(credit_card.SK_DPD_DEF)",
+    "STD(credit_card.SK_DPD)", "STD(credit_card.SK_DPD_DEF)",
     "SUM(pos_cash.SK_DPD)", "SUM(pos_cash.SK_DPD_DEF)",
-    "MEAN(pos_cash.SK_DPD)",
+    "MEAN(pos_cash.SK_DPD)", "MEAN(pos_cash.SK_DPD_DEF)",
+    "STD(pos_cash.SK_DPD)", "STD(pos_cash.SK_DPD_DEF)",
     "SUM(previous_application.credit_card.SK_DPD)", "SUM(previous_application.credit_card.SK_DPD_DEF)",
+    "MEAN(previous_application.credit_card.SK_DPD)", "MEAN(previous_application.credit_card.SK_DPD_DEF)",
+    "STD(previous_application.credit_card.SK_DPD)", "STD(previous_application.credit_card.SK_DPD_DEF)",
     "SUM(previous_application.pos_cash.SK_DPD)", "SUM(previous_application.pos_cash.SK_DPD_DEF)",
+    "MEAN(previous_application.pos_cash.SK_DPD)", "MEAN(previous_application.pos_cash.SK_DPD_DEF)",
+    "STD(previous_application.pos_cash.SK_DPD)", "STD(previous_application.pos_cash.SK_DPD_DEF)",
     # Bureau-balance DPD (MONTHS_BALANCE >= -6 or all-months — includes application month 0)
     "bureau_bbal_dpd_rate_mean",     # mean across ALL months including month 0
     "bureau_bbal_dpd_rate_std_mean", # std across ALL months including month 0
@@ -739,12 +746,37 @@ def build_featuretools_feature_store(
     feature_matrix = feature_matrix.drop(columns=_LEAKY_SKDPD_COLS, errors='ignore')
     selected_cols = [c for c in selected_cols if c not in _LEAKY_SKDPD_COLS]
 
+    # Resolve _x/_y duplicate columns introduced when DFS entity columns overlap
+    # with hand-engineered features: keep _x (first occurrence), drop _y.
+    xy_x_cols = [c for c in feature_matrix.columns if c.endswith('_x')]
+    xy_y_cols = [c for c in feature_matrix.columns if c.endswith('_y')]
+    xy_x_bases = {c[:-2] for c in xy_x_cols}
+    xy_y_bases = {c[:-2] for c in xy_y_cols}
+    paired_bases = xy_x_bases & xy_y_bases
+    if paired_bases:
+        rename_map = {f"{b}_x": b for b in paired_bases}
+        drop_y = [f"{b}_y" for b in paired_bases]
+        feature_matrix = feature_matrix.drop(columns=drop_y, errors='ignore')
+        feature_matrix = feature_matrix.rename(columns=rename_map)
+        selected_cols = [
+            rename_map.get(c, c) for c in selected_cols if c not in drop_y
+        ]
+
+    # Drop FLAG_DOCUMENT_* columns — sparse binary flags with negligible IV for tree models
+    flag_doc_cols = [c for c in feature_matrix.columns if 'FLAG_DOCUMENT' in c]
+    if flag_doc_cols:
+        feature_matrix = feature_matrix.drop(columns=flag_doc_cols)
+        selected_cols = [c for c in selected_cols if c not in flag_doc_cols]
+
     # Save selected features if output_path provided
     if output_path is not None:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        feature_matrix[selected_cols].to_parquet(output_path)
-        # When saving, return only selected columns
+        # Add TARGET column to feature matrix before saving (required for train_xgboost_optuna)
+        output_df = feature_matrix[selected_cols].copy()
+        output_df['TARGET'] = y_indexed.loc[output_df.index].values
+        output_df.to_parquet(output_path)
+        # When saving, return only selected columns (without TARGET)
         return feature_matrix[selected_cols], feature_defs, selected_cols
 
     return feature_matrix, feature_defs, selected_cols
