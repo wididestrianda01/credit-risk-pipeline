@@ -39,7 +39,6 @@ from sklearn.preprocessing import StandardScaler
 
 from credit_engine.utils import evaluate_model, gini_coefficient, ks_statistic, plot_roc_and_pr
 
-
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -116,7 +115,7 @@ _XGB_RAW_GAMMA_MAX: float = 5.0
 _XGB_RAW_REG_ALPHA_MIN: float = 1e-8
 _XGB_RAW_REG_LAMBDA_MIN: float = 1e-8
 _XGB_RAW_REG_MAX: float = 5.0
-_XGB_RAW_STUDY_NAME: str = "xgboost_raw_v4"
+_XGB_RAW_STUDY_NAME: str = "xgboost_raw_v8"
 
 # Output paths for XGBoost Optuna HPO artefacts
 _XGB_OPTUNA_MODEL_PATH: str = "models/xgboost_best.pkl"
@@ -331,8 +330,11 @@ _XGB_RAW_GAMMA_MIN: float = 0.0
 _XGB_RAW_GAMMA_MAX: float = 3.0
 # Note: _XGB_RAW_REG_ALPHA_MIN, _XGB_RAW_REG_LAMBDA_MIN, _XGB_RAW_REG_MAX are defined above (lines 111-113)
 
-# Optuna study persistence constants
-_OPTUNA_DB_PATH: str = "models/optuna_studies.db"
+# Optuna study persistence constants — absolute path prevents test runs from
+# resolving to the production DB when pytest CWD == project root.
+_OPTUNA_DB_PATH: str = str(
+    Path(__file__).resolve().parents[1] / "models" / "optuna_studies.db"
+)
 
 # Optuna Studies Database Metadata
 # ============================================================================
@@ -367,11 +369,15 @@ class _OOFGiniMonitorCallback:
     """
 
     def __init__(self, progress_log_path: str = "reports/hpo_progress.jsonl",
-                 oof_gini_threshold: float = 0.85, consecutive_threshold: int = 3):
+                 oof_gini_threshold: float = 0.85, consecutive_threshold: int = 3,
+                 min_oof_gini_threshold: float = 0.30, min_gini_consecutive_threshold: int = 5):
         self.progress_log_path = Path(progress_log_path)
         self.oof_gini_threshold = oof_gini_threshold
         self.consecutive_threshold = consecutive_threshold
+        self.min_oof_gini_threshold = min_oof_gini_threshold
+        self.min_gini_consecutive_threshold = min_gini_consecutive_threshold
         self.failed_trial_count = 0  # Rolling count of consecutive trials above threshold
+        self.low_gini_trial_count = 0  # Rolling count of consecutive trials below floor
         self.trial_history = []  # All trial results
 
         # Ensure reports dir exists
@@ -381,9 +387,11 @@ class _OOFGiniMonitorCallback:
         """
         Called after each trial completes. Check OOF Gini gate, log results.
         """
+        import sys as _sys
         # Extract trial metrics (oof_gini should be in trial.user_attrs after objective completes)
         oof_gini = trial.user_attrs.get('oof_gini', None)
         oot_gini = trial.user_attrs.get('oot_gini', None)
+        best_value = study.best_value if study.best_trial is not None else None
 
         # Log trial result to JSON Lines
         log_entry = {
@@ -392,6 +400,7 @@ class _OOFGiniMonitorCallback:
             "oof_gini": oof_gini,
             "oot_gini": oot_gini,
             "status": trial.state.name,
+            "best_oof_gini_so_far": best_value,
             "timestamp": datetime.datetime.now().isoformat(),
         }
         self.trial_history.append(log_entry)
@@ -400,13 +409,30 @@ class _OOFGiniMonitorCallback:
         with open(self.progress_log_path, 'a') as f:
             f.write(json.dumps(log_entry) + '\n')
 
-        # Early-abort gate: if oof_gini > threshold, increment counter; else reset
+        # Print per-trial summary to stdout so nohup log shows live progress
+        ts = datetime.datetime.now().strftime("%H:%M:%S")
+        oof_str = f"{oof_gini:.4f}" if oof_gini is not None else "n/a"
+        oot_str = f"{oot_gini:.4f}" if oot_gini is not None else "n/a"
+        best_str = f"{best_value:.4f}" if best_value is not None else "n/a"
+        n_trials_done = trial.number + 1
+        print(
+            f"[{ts}] Trial {n_trials_done:>3} | OOF={oof_str} | OOT={oot_str}"
+            f" | BestOOF={best_str} | status={trial.state.name}",
+            flush=True,
+        )
+        _sys.stdout.flush()
+
+        # Early-abort gate (upper): leakage — if oof_gini > threshold, increment counter; else reset
         if oof_gini is not None and oof_gini > self.oof_gini_threshold:
             self.failed_trial_count += 1
-            logger.warning(f"  ⚠️ Trial {trial.number}: oof_gini={oof_gini:.4f} > {self.oof_gini_threshold} "
-                  f"({self.failed_trial_count}/{self.consecutive_threshold} consecutive)")
+            self.low_gini_trial_count = 0
+            msg = (
+                f"  ⚠️  Trial {trial.number}: oof_gini={oof_gini:.4f} > {self.oof_gini_threshold} "
+                f"({self.failed_trial_count}/{self.consecutive_threshold} consecutive)"
+            )
+            logger.warning(msg)
+            print(msg, flush=True)
 
-            # Raise error if threshold exceeded
             if self.failed_trial_count >= self.consecutive_threshold:
                 import optuna
                 raise optuna.exceptions.OptunaError(
@@ -414,11 +440,31 @@ class _OOFGiniMonitorCallback:
                     f"oof_gini > {self.oof_gini_threshold}. Last oof_gini={oof_gini:.4f}. "
                     f"Aborting HPO. Investigate remaining SK_DPD leakage in feature store."
                 )
+
+        # Early-abort gate (lower): broken CV — if oof_gini < floor, increment counter; else reset
+        elif oof_gini is not None and oof_gini < self.min_oof_gini_threshold:
+            self.low_gini_trial_count += 1
+            self.failed_trial_count = 0
+            msg = (
+                f"  ⚠️  Trial {trial.number}: oof_gini={oof_gini:.4f} < {self.min_oof_gini_threshold} "
+                f"(floor gate — {self.low_gini_trial_count}/{self.min_gini_consecutive_threshold} consecutive)"
+            )
+            logger.warning(msg)
+            print(msg, flush=True)
+
+            if self.low_gini_trial_count >= self.min_gini_consecutive_threshold:
+                import optuna
+                raise optuna.exceptions.OptunaError(
+                    f"Floor gate exceeded: {self.min_gini_consecutive_threshold} consecutive trials with "
+                    f"oof_gini < {self.min_oof_gini_threshold}. Last oof_gini={oof_gini:.4f}. "
+                    f"Aborting HPO. Likely CV dead-zone contamination or feature store corruption."
+                )
         else:
-            # Reset counter on good trial (oof_gini <= threshold)
+            # Reset both counters on good trial (floor <= oof_gini <= ceiling)
             if oof_gini is not None:
                 self.failed_trial_count = 0
-                logger.info(f"  ✓ Trial {trial.number}: oof_gini={oof_gini:.4f} <= {self.oof_gini_threshold} (gate OK)")
+                self.low_gini_trial_count = 0
+                logger.info(f"  ✓ Trial {trial.number}: oof_gini={oof_gini:.4f} in valid range (gate OK)")
 
 
 # ---------------------------------------------------------------------------
@@ -1088,10 +1134,15 @@ def _xgboost_optuna_objective(
         "use_label_encoder": False,
         "verbosity": 0,
         "random_state": _RANDOM_STATE,
+        # XGBoost 3.x: early_stopping_rounds moved to constructor (not fit kwarg)
+        "early_stopping_rounds": _XGB_RAW_EARLY_STOPPING_ROUNDS,
     }
 
     fold_aucs: list[float] = []
-    oof_predictions = np.zeros(len(X_train))  # Accumulate OOF predictions for OOF Gini computation
+    # NaN-init: walk-forward CV never validates the oldest block (~1/(n_splits+1) of samples).
+    # Zero-init contaminates OOF Gini — the dead zone gets score=0, dragging AUC toward 0.5.
+    # NaN marks unvalidated samples; we compute OOF Gini only on actually-validated rows.
+    oof_predictions = np.full(len(X_train), np.nan)
     for train_idx, val_idx in cv.split(X_train, y_train):
         X_fold_train = X_train.iloc[train_idx]
         X_fold_val = X_train.iloc[val_idx]
@@ -1099,23 +1150,24 @@ def _xgboost_optuna_objective(
         y_fold_val = y_train.iloc[val_idx]
 
         model = xgb.XGBClassifier(**params)
-        # Improvement 8: Train with early stopping intention
-        # Note: sklearn XGBClassifier doesn't natively support early_stopping_rounds.
-        # Instead, Optuna's MedianPruner will prune unpromising trials.
-        model.fit(X_fold_train, y_fold_train, verbose=False)
-        # Capture best iteration if available (may not exist without eval_set)
-        best_iteration = getattr(model, 'best_iteration', params.get('n_estimators', 3000) - 1)
+        model.fit(
+            X_fold_train,
+            y_fold_train,
+            eval_set=[(X_fold_val, y_fold_val)],
+            verbose=False,
+        )
+        best_iteration = getattr(model, "best_iteration", params.get("n_estimators", 3000) - 1)
         trial.set_user_attr("best_iteration", best_iteration)
 
         y_prob_val = model.predict_proba(X_fold_val)[:, 1]
         fold_aucs.append(float(roc_auc_score(y_fold_val, y_prob_val)))
-
-        # Accumulate OOF predictions for per-trial OOF Gini monitoring (D-17, D-18)
         oof_predictions[val_idx] = y_prob_val
 
-    # Compute OOF Gini — used as the Optuna objective (maximised) and logged for monitoring (D-17)
+    # Compute OOF Gini only over validated rows (NaN-filtered).
+    # Used as the Optuna objective (maximised) and logged for monitoring (D-17).
+    validated_mask = ~np.isnan(oof_predictions)
     try:
-        oof_gini = gini_coefficient(y_train.values, oof_predictions)
+        oof_gini = gini_coefficient(y_train.values[validated_mask], oof_predictions[validated_mask])
         trial.set_user_attr("oof_gini", float(oof_gini))
     except Exception:
         oof_gini = float(np.mean(fold_aucs)) - 1.0  # Fallback: penalise degenerate trials
@@ -1270,6 +1322,15 @@ def train_xgboost_optuna(
         X_remaining, y_remaining, test_size=_TEST_SIZE, stratify=y_remaining, random_state=_RANDOM_STATE
     )
 
+    # Replace -999 sentinel with NaN so XGBoost uses its native split-direction learning.
+    # The sentinel fill (from features.py / auto_features.py) treats missing as an extreme
+    # continuous value, causing systematic score drift across temporal folds when NaN rates differ.
+    # XGBoost handles NaN natively: it learns the optimal default branch per split node.
+    X_train = X_train.replace(-999.0, np.nan)
+    X_test = X_test.replace(-999.0, np.nan)
+    if X_oot is not None:
+        X_oot = X_oot.replace(-999.0, np.nan)
+
     # Cost-sensitive weight: Task 3.3 winner strategy
     scale_pos_weight = float((y_train == 0).sum()) / float((y_train == 1).sum())
 
@@ -1298,7 +1359,7 @@ def train_xgboost_optuna(
 
     study = optuna.create_study(
         study_name=_XGB_RAW_STUDY_NAME,
-        storage="sqlite:///models/optuna_studies.db",
+        storage=f"sqlite:///{_OPTUNA_DB_PATH}",
         direction="maximize",
         sampler=optuna.samplers.TPESampler(seed=42, n_startup_trials=20),
         pruner=optuna.pruners.MedianPruner(n_startup_trials=15, n_warmup_steps=75),
@@ -1317,9 +1378,14 @@ def train_xgboost_optuna(
     best_params: dict = study.best_params
 
     # --- OOF accumulation loop (D-07, D-08: uncalibrated fold predictions for OOF Gini) ---
-    oof_predictions = np.zeros(len(X_train))
-    best_iteration = study.best_trial.user_attrs.get(
-        "best_iteration", best_params.get("n_estimators", _XGB_RAW_N_ESTIMATORS_MAX) - 1
+    # NaN-init: _TemporalCV dead zone leaves oldest block unvalidated; NaN marks unscored rows
+    # so OOF Gini is computed only on rows that were actually validated (validated_mask below).
+    oof_predictions = np.full(len(X_train), np.nan)
+    best_iteration = max(
+        study.best_trial.user_attrs.get(
+            "best_iteration", best_params.get("n_estimators", _XGB_RAW_N_ESTIMATORS_MAX) - 1
+        ),
+        _XGB_N_ESTIMATORS - 1,  # floor at 100 rounds to prevent underfit on easy/small data
     )
 
     for train_idx, val_idx in cv.split(X_train, y_train):
@@ -1341,7 +1407,8 @@ def train_xgboost_optuna(
         fold_model = xgb.XGBClassifier(**fold_params)
         fold_model.fit(X_fold_train, y_fold_train, verbose=False)
 
-        # Accumulate uncalibrated OOF predictions (D-07: raw predict_proba, not Platt-scaled)
+        # Accumulate raw OOF predictions (D-07).
+        # Raw probabilities used directly; OOF Gini computed only on validated rows (validated_mask).
         y_prob_fold = fold_model.predict_proba(X_fold_val)[:, 1]
         oof_predictions[val_idx] = y_prob_fold
 
@@ -1367,7 +1434,9 @@ def train_xgboost_optuna(
     metrics_best = evaluate_model(model_best, X_test, y_test, "XGBoost (Raw)")
 
     # --- Compute OOF Gini (D-08: development set discrimination across all folds) ---
-    oof_gini = gini_coefficient(y_train.to_numpy(), oof_predictions)
+    # validated_mask excludes the _TemporalCV dead zone (oldest block, never in any val set).
+    validated_mask = ~np.isnan(oof_predictions)
+    oof_gini = gini_coefficient(y_train.to_numpy()[validated_mask], oof_predictions[validated_mask])
     metrics_best["oof_gini"] = oof_gini
 
     # --- Compute OOT Gini (D-11: temporal holdout validation, Basel CRE36) ---
