@@ -72,6 +72,11 @@ _IV_STRONG: float = 0.3
 _IV_MEDIUM: float = 0.1
 _IV_WEAK: float = 0.02
 
+# Regulatory exclusions — columns that must be dropped from tree models per legal compliance.
+# CODE_GENDER: GDPR Art. 21 (protection from discrimination), EU Consumer Credit Directive.
+# thin_file_young: EU AI Act Art. 6 (age-gating is prohibited age discrimination).
+_REGULATORY_DROP_COLS: list[str] = ["CODE_GENDER", "thin_file_young"]
+
 
 # ---------------------------------------------------------------------------
 # Private helpers — one concern per function
@@ -116,7 +121,10 @@ def _engineer_financial_ratios(df: pd.DataFrame) -> pd.DataFrame:
         # Ratio < 1 indicates the loan amount exceeds the goods value (credit risk).
         out["GOODS_CREDIT_RATIO"] = np.where(credit > 0, goods / credit, 0.0)
 
-    ratio_cols = ["CREDIT_INCOME_RATIO", "ANNUITY_INCOME_RATIO", "CREDIT_TERM", "GOODS_CREDIT_RATIO"]
+        # Fraction of credit repaid per payment — lower = longer amortisation, higher interest cost.
+        out["payment_rate"] = np.where(credit > 0, annuity / credit, 0.0)
+
+    ratio_cols = ["CREDIT_INCOME_RATIO", "ANNUITY_INCOME_RATIO", "CREDIT_TERM", "GOODS_CREDIT_RATIO", "payment_rate"]
     for col in ratio_cols:
         out[col] = out[col].replace([np.inf, -np.inf], 0.0).fillna(_NAN_SENTINEL)
 
@@ -292,6 +300,25 @@ def _engineer_ext_source(df: pd.DataFrame) -> pd.DataFrame:
     out["EXT_SOURCE_RATIO_12"]   = _s(ratio_12).fillna(_NAN_SENTINEL)
     out["EXT_SOURCE_RATIO_23"]   = _s(ratio_23).fillna(_NAN_SENTINEL)
     out["EXT_SCORE_FLOOR"]       = _s(ext_floor).fillna(_NAN_SENTINEL)
+
+    # Missing-indicator flags — the PRESENCE of a bureau score is itself
+    # predictive: thin-file / young applicants often have no EXT_SOURCE_1.
+    # These binary columns let the tree model that information explicitly
+    # without relying on the sentinel value alone.
+    out["EXT_SOURCE_1_missing"]      = _s(np.isnan(e1).astype(float))
+    out["EXT_SOURCE_2_missing"]      = _s(np.isnan(e2).astype(float))
+    out["EXT_SOURCE_3_missing"]      = _s(np.isnan(e3).astype(float))
+    out["ext_source_missing_count"]  = _s(np.isnan(ext).sum(axis=1).astype(float))
+
+    # Triple product: all-three-present "joint good-standing" signal.
+    # Distinct from pairwise products — captures the case where all three
+    # bureaus simultaneously report a low score (or high).
+    prod_123 = np.where(
+        ~np.isnan(e1) & ~np.isnan(e2) & ~np.isnan(e3),
+        e1 * e2 * e3,
+        np.nan,
+    )
+    out["ext_source_prod"] = _s(prod_123).fillna(_NAN_SENTINEL)
 
     return out
 
@@ -727,6 +754,119 @@ def engineer_secondary_features(
         out["debt_service_coverage"] = (
             out["AMT_INCOME_TOTAL"].clip(lower=0.0) / (out["AMT_ANNUITY"].clip(lower=0.0) + 1.0)
         ).replace([np.inf, -np.inf], 0.0).clip(lower=0.0).fillna(_NAN_SENTINEL)
+
+    # -----------------------------------------------------------------------
+    # Secondary & Cross-table Features (Phase 04.2.3.2, D-07 through D-19)
+    # -----------------------------------------------------------------------
+
+    # D-07: no_bureau_history — thin-file indicator
+    if "bureau_cnt" in out.columns:
+        out["no_bureau_history"] = (out["bureau_cnt"] == 0).astype(int)
+
+    # D-08: no_prev_applications — thin-file indicator
+    if "prev_cnt" in out.columns:
+        out["no_prev_applications"] = (out["prev_cnt"] == 0).astype(int)
+
+    # D-09: ever_dpd_bureau — ever had overdue in bureau history
+    if "bureau_overdue_cnt" in out.columns:
+        out["ever_dpd_bureau"] = (out["bureau_overdue_cnt"] > 0).astype(int)
+
+    # D-10: bureau_prolong_any — debt restructuring signal
+    if "bureau_prolong_sum" in out.columns:
+        out["bureau_prolong_any"] = (out["bureau_prolong_sum"] > 0).astype(int)
+
+    # D-11: high_credit_income — overstretched indicator
+    if "CREDIT_INCOME_RATIO" in out.columns:
+        out["high_credit_income"] = (out["CREDIT_INCOME_RATIO"] > 5).astype(int)
+
+    # D-12: low_payment_rate — near-minimum payment indicator
+    if "payment_rate" in out.columns:
+        out["low_payment_rate"] = (out["payment_rate"] < 0.03).astype(int)
+
+    # D-13: thin_file (REGULATORY REFRAME) — replace thin_file_young
+    # thin_file_young (age < 30 AND no_bureau_history) is PROHIBITED under EU AI Act Art. 6
+    if "no_bureau_history" in out.columns:
+        out["thin_file"] = out["no_bureau_history"].astype(int)
+
+    # D-14: new_credit_to_bureau_ratio — current credit vs existing bureau total
+    if "AMT_CREDIT" in out.columns and "bureau_credit_sum" in out.columns:
+        bureau_sum = out["bureau_credit_sum"].to_numpy(dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            out["new_credit_to_bureau_ratio"] = np.where(
+                bureau_sum > 0, out["AMT_CREDIT"].to_numpy(dtype=float) / bureau_sum, np.nan
+            )
+        out["new_credit_to_bureau_ratio"] = (
+            out["new_credit_to_bureau_ratio"]
+            .replace([np.inf, -np.inf], np.nan)
+            .fillna(_NAN_SENTINEL)
+        )
+
+    # D-15: annuity_to_prev_annuity_ratio — compare current annuity to historical average
+    if "AMT_ANNUITY" in out.columns and "prev_amt_annuity_mean" in out.columns:
+        prev_annuity = out["prev_amt_annuity_mean"].to_numpy(dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            out["annuity_to_prev_annuity_ratio"] = np.where(
+                prev_annuity > 0, out["AMT_ANNUITY"].to_numpy(dtype=float) / prev_annuity, np.nan
+            )
+        out["annuity_to_prev_annuity_ratio"] = (
+            out["annuity_to_prev_annuity_ratio"]
+            .replace([np.inf, -np.inf], np.nan)
+            .fillna(_NAN_SENTINEL)
+        )
+
+    # D-16: bureau_overdue_to_income — normalized overdue stress
+    if "bureau_overdue_sum" in out.columns and "AMT_INCOME_TOTAL" in out.columns:
+        income = out["AMT_INCOME_TOTAL"].to_numpy(dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            out["bureau_overdue_to_income"] = np.where(
+                income > 0, out["bureau_overdue_sum"].to_numpy(dtype=float) / income, np.nan
+            )
+        out["bureau_overdue_to_income"] = (
+            out["bureau_overdue_to_income"]
+            .replace([np.inf, -np.inf], np.nan)
+            .fillna(_NAN_SENTINEL)
+        )
+
+    # D-17: bureau_active_to_prev_apps — ratio of active bureau accounts to previous applications
+    if "bureau_active_cnt" in out.columns and "prev_cnt" in out.columns:
+        prev_cnt = out["prev_cnt"].to_numpy(dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            out["bureau_active_to_prev_apps"] = np.where(
+                prev_cnt > 0, out["bureau_active_cnt"].to_numpy(dtype=float) / prev_cnt, np.nan
+            )
+        out["bureau_active_to_prev_apps"] = (
+            out["bureau_active_to_prev_apps"]
+            .replace([np.inf, -np.inf], np.nan)
+            .fillna(_NAN_SENTINEL)
+        )
+
+    # D-18: cc_utilisation_to_income — credit card spending relative to income
+    if "cc_utilisation_mean" in out.columns and "cc_bal_max" in out.columns and "AMT_INCOME_TOTAL" in out.columns:
+        income = out["AMT_INCOME_TOTAL"].to_numpy(dtype=float)
+        util = out["cc_utilisation_mean"].to_numpy(dtype=float)
+        cc_bal = out["cc_bal_max"].to_numpy(dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            out["cc_utilisation_to_income"] = np.where(
+                income > 0, (util * cc_bal) / income, np.nan
+            )
+        out["cc_utilisation_to_income"] = (
+            out["cc_utilisation_to_income"]
+            .replace([np.inf, -np.inf], np.nan)
+            .fillna(_NAN_SENTINEL)
+        )
+
+    # D-19: bureau_close_rate — ratio of closed to total bureau loans
+    if "bureau_closed_cnt" in out.columns and "bureau_cnt" in out.columns:
+        bureau_cnt = out["bureau_cnt"].to_numpy(dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            out["bureau_close_rate"] = np.where(
+                bureau_cnt > 0, out["bureau_closed_cnt"].to_numpy(dtype=float) / bureau_cnt, np.nan
+            )
+        out["bureau_close_rate"] = (
+            out["bureau_close_rate"]
+            .replace([np.inf, -np.inf], np.nan)
+            .fillna(_NAN_SENTINEL)
+        )
 
     # Optional: merge instalment time-series features if raw instalment data is provided
     if df_inst is not None:
@@ -1488,6 +1628,15 @@ def build_tree_feature_store(
 
     X_eng = engineer_application_features(X) if "AMT_CREDIT" in X.columns else X.copy()
     X_eng = engineer_secondary_features(X_eng)
+
+    # D-20, D-21: Enforce regulatory compliance
+    # Drop CODE_GENDER (GDPR Art. 21) and thin_file_young (EU AI Act Art. 6 age discrimination)
+    # Use .drop(..., errors='ignore') to handle cases where columns may not exist
+    X_eng = X_eng.drop(columns=_REGULATORY_DROP_COLS, errors="ignore")
+
+    # D-22: ORGANIZATION_TYPE treatment
+    # ORGANIZATION_TYPE is passed as integer-encoded categorical to XGBoost (no target encoding here).
+    # WoE/logistic pipeline applies smoothing=50 per SR 11-7. Tree pipeline uses raw integers.
 
     # Keep only numeric columns — categorical columns (dtype 'category' or 'object')
     # cannot be passed to gradient boosting without encoding.
