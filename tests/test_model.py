@@ -2713,10 +2713,10 @@ class TestExtendedHPOWave0:
 # Wave 1: OOF/OOT Functionality Tests (Phase 04.2.3.1 Tasks 6-7)
 # ---------------------------------------------------------------------------
 
-def test_xgboost_study_name_is_v3():
-    """D-13: Optuna study name is xgboost_raw_v3 (NaN-corrected split study)."""
+def test_xgboost_study_name_is_v4():
+    """D-13: Optuna study name is xgboost_raw_v4 (Gini-objective + stratified OOT study)."""
     from credit_engine.model import _XGB_RAW_STUDY_NAME
-    assert _XGB_RAW_STUDY_NAME == "xgboost_raw_v3"
+    assert _XGB_RAW_STUDY_NAME == "xgboost_raw_v4"
 
 
 def test_train_xgboost_optuna_returns_6_tuple_stub(xgb_optuna_result):
@@ -2879,14 +2879,14 @@ class TestTrainXGBoostOptunaRawFeatures:
         assert model_cal is not None, "Temporal CV auto-detection should succeed"
         assert metrics is not None, "Metrics should be computed"
 
-    def test_train_xgboost_optuna_study_name_xgboost_raw_v3(self, make_mock_parquet):
+    def test_train_xgboost_optuna_study_name_xgboost_raw_v4(self, make_mock_parquet):
         """
-        Verifies that Optuna study name is "xgboost_raw_v3" (NaN-corrected split study).
+        Verifies that Optuna study name is "xgboost_raw_v4" (Gini-objective + stratified OOT study).
 
         Expected behavior (D-13):
-        - Function creates Optuna study with study_name="xgboost_raw_v3"
-        - Old v2 study (run on NaN-biased split — NaN rows sorted to OOT) is preserved but not used
-        - New study name prevents TPE warm-start bias from trials optimised on the wrong training set
+        - Function creates Optuna study with study_name="xgboost_raw_v4"
+        - Old v3 study (run with AUC-ROC objective — misaligned with OOF Gini gate) is preserved but not used
+        - New study name prevents TPE warm-start bias from trials optimised on the wrong objective
         """
         parquet_path = make_mock_parquet(n_rows=500, n_features=10)
         model_cal, metrics, X_test, y_test, params, oof_pred = train_xgboost_optuna(
@@ -2896,12 +2896,12 @@ class TestTrainXGBoostOptunaRawFeatures:
         import optuna
         try:
             study = optuna.load_study(
-                study_name="xgboost_raw_v3",
+                study_name="xgboost_raw_v4",
                 storage="sqlite:///models/optuna_studies.db"
             )
-            assert study.study_name == "xgboost_raw_v3"
+            assert study.study_name == "xgboost_raw_v4"
         except Exception as e:
-            pytest.fail(f"Failed to load study 'xgboost_raw_v3': {e}")
+            pytest.fail(f"Failed to load study 'xgboost_raw_v4': {e}")
 
     def test_train_xgboost_optuna_early_stopping_set(self, make_mock_parquet):
         """

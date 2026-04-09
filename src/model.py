@@ -116,7 +116,7 @@ _XGB_RAW_GAMMA_MAX: float = 5.0
 _XGB_RAW_REG_ALPHA_MIN: float = 1e-8
 _XGB_RAW_REG_LAMBDA_MIN: float = 1e-8
 _XGB_RAW_REG_MAX: float = 5.0
-_XGB_RAW_STUDY_NAME: str = "xgboost_raw_v3"
+_XGB_RAW_STUDY_NAME: str = "xgboost_raw_v4"
 
 # Output paths for XGBoost Optuna HPO artefacts
 _XGB_OPTUNA_MODEL_PATH: str = "models/xgboost_best.pkl"
@@ -1113,14 +1113,19 @@ def _xgboost_optuna_objective(
         # Accumulate OOF predictions for per-trial OOF Gini monitoring (D-17, D-18)
         oof_predictions[val_idx] = y_prob_val
 
-    # Compute and log OOF Gini per trial for early leakage detection (D-17)
+    # Compute OOF Gini — used as the Optuna objective (maximised) and logged for monitoring (D-17)
     try:
         oof_gini = gini_coefficient(y_train.values, oof_predictions)
         trial.set_user_attr("oof_gini", float(oof_gini))
-    except Exception as e:
+    except Exception:
+        oof_gini = float(np.mean(fold_aucs)) - 1.0  # Fallback: penalise degenerate trials
         trial.set_user_attr("oof_gini", None)
 
-    return float(np.mean(fold_aucs))
+    # Store mean fold AUC for reference only — NOT used as objective
+    trial.set_user_attr("mean_fold_auc", float(np.mean(fold_aucs)))
+
+    # Optimise directly on OOF Gini so study.best_params → highest-Gini trial
+    return float(oof_gini)
 
 
 def train_xgboost_optuna(
@@ -1222,26 +1227,43 @@ def train_xgboost_optuna(
     X_oot = None
     y_oot = None
     temporal_sort_values = X[_TEMPORAL_SORT_COL].values
-    # NaN means "no previous applications" — no temporal position known.
-    # np.argsort treats NaN as +inf (ascending), pushing ~128K first-time-applicant
-    # rows into the OOT set and creating a subpopulation bias, not a temporal holdout.
-    # Fill NaN with (nanmin - 1) so unknown-timing rows sort to "oldest" and go into
-    # the training pool, keeping OOT a clean temporal slice of repeat applicants.
-    _nan_fill = float(np.nanmin(temporal_sort_values)) - 1.0 if not np.all(np.isnan(temporal_sort_values)) else 0.0
-    temporal_sort_values_filled = np.where(np.isnan(temporal_sort_values), _nan_fill, temporal_sort_values)
-    temporal_indices = np.argsort(temporal_sort_values_filled)  # Sort ascending (earliest first)
 
-    # Identify OOT threshold: 80% of full dataset (earliest), 20% holdout (most-recent)
-    oot_threshold_idx = int(len(X) * (1 - _TEST_SIZE))  # (1 - 0.2) = 0.8
-    oot_indices = temporal_indices[oot_threshold_idx:]  # Most-recent 20%
+    # Stratified OOT split: preserve the ~42% first-time / ~58% repeat applicant mix.
+    # Prior approach (NaN-fill → nanmin-1) sent ALL first-time applicants to training,
+    # making OOT a 100%-repeat-applicant cohort — unrepresentative of production scoring.
+    #
+    # Strategy:
+    #   Known-timing rows (non-NaN): temporal holdout — most-recent 20% → OOT
+    #   Unknown-timing rows (NaN):   random 20% → OOT (no temporal order available)
+    # This preserves the observed NaN proportion (~41.8%) in both training and OOT.
+    nan_mask = np.isnan(temporal_sort_values)
+    known_pos = np.where(~nan_mask)[0]
+    unknown_pos = np.where(nan_mask)[0]
+
+    # Known-timing: sort ascending and take most-recent 20%
+    known_sorted = known_pos[np.argsort(temporal_sort_values[known_pos])]
+    oot_known_cut = int(len(known_sorted) * (1 - _TEST_SIZE))
+    oot_known = known_sorted[oot_known_cut:]
+    train_known = known_sorted[:oot_known_cut]
+
+    # Unknown-timing: random 20% to OOT (seeded for reproducibility)
+    rng = np.random.default_rng(_RANDOM_STATE)
+    unknown_perm = rng.permutation(len(unknown_pos))
+    oot_unknown_cut = int(len(unknown_pos) * (1 - _TEST_SIZE))
+    oot_unknown = unknown_pos[unknown_perm[oot_unknown_cut:]]
+    train_unknown = unknown_pos[unknown_perm[:oot_unknown_cut]]
+
+    oot_indices = np.concatenate([oot_known, oot_unknown])
+    temporal_indices = np.concatenate([train_known, train_unknown])  # remaining rows
 
     # OOT test set
     X_oot = X.iloc[oot_indices].copy()
     y_oot = y.iloc[oot_indices].copy()
 
     # Remaining data for stratified train/test split (excludes OOT)
-    X_remaining = X.iloc[temporal_indices[:oot_threshold_idx]].copy()
-    y_remaining = y.iloc[temporal_indices[:oot_threshold_idx]].copy()
+    # temporal_indices already contains only non-OOT rows — no further slicing needed.
+    X_remaining = X.iloc[temporal_indices].copy()
+    y_remaining = y.iloc[temporal_indices].copy()
 
     # --- Train / test split (stratified, identical seed to LR baseline) ---
     X_train, X_test, y_train, y_test = train_test_split(
