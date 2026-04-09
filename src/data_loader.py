@@ -495,6 +495,7 @@ def _join_bureau(app: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
         is_active=(bureau["CREDIT_ACTIVE"] == "Active").astype(np.float32),
         is_closed=(bureau["CREDIT_ACTIVE"] == "Closed").astype(np.float32),
         is_overdue=(bureau["CREDIT_DAY_OVERDUE"] > 0).astype(np.float32),
+        opened_in_last_year=(bureau["DAYS_CREDIT"] >= -365).astype(int),
     )
 
     bureau_agg = (
@@ -509,14 +510,18 @@ def _join_bureau(app: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
             bureau_days_credit_max=("DAYS_CREDIT", "max"),
             bureau_days_credit_std=("DAYS_CREDIT", "std"),
             bureau_credit_sum=("AMT_CREDIT_SUM", "sum"),
+            bureau_amt_credit_mean=("AMT_CREDIT_SUM", "mean"),
             bureau_credit_debt_sum=("AMT_CREDIT_SUM_DEBT", "sum"),
             bureau_credit_debt_std=("AMT_CREDIT_SUM_DEBT", "std"),
             bureau_credit_debt_max=("AMT_CREDIT_SUM_DEBT", "max"),
             bureau_credit_overdue_sum=("AMT_CREDIT_SUM_OVERDUE", "sum"),
+            bureau_overdue_sum=("AMT_CREDIT_SUM_OVERDUE", "sum"),
             bureau_max_overdue_amt=("AMT_CREDIT_MAX_OVERDUE", "max"),
             bureau_annuity_mean=("AMT_ANNUITY", "mean"),
             bureau_overdue_max=("CREDIT_DAY_OVERDUE", "max"),
             bureau_prolong_sum=("CNT_CREDIT_PROLONG", "sum"),
+            bureau_recent_openings=("opened_in_last_year", "sum"),
+            bureau_days_since_last_credit=("DAYS_CREDIT", "max"),
             bureau_bbal_cnt_mean=("bbal_cnt", "mean"),
             bureau_bbal_dpd_rate_mean=("bbal_dpd_rate", "mean"),
             bureau_bbal_dpd_rate_std_mean=("bbal_dpd_rate_std", "mean"),
@@ -540,6 +545,10 @@ def _join_bureau(app: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
     result["bureau_prolong_sum"] = (
         result["bureau_prolong_sum"].fillna(0).astype(np.int32)
     )
+    result["bureau_recent_openings"] = result["bureau_recent_openings"].fillna(0).astype(np.int32)
+    result["bureau_overdue_sum"] = result["bureau_overdue_sum"].fillna(0)
+    result["bureau_amt_credit_mean"] = result["bureau_amt_credit_mean"].fillna(0)
+    result["bureau_days_since_last_credit"] = result["bureau_days_since_last_credit"].fillna(0)
 
     # Phase A2: Add DPD recency features from bureau_balance
     bbal = pd.read_csv(data_dir / _FILE_BUREAU_BAL)
@@ -603,6 +612,8 @@ def _join_previous_application(app: pd.DataFrame, data_dir: Path) -> pd.DataFram
             prev_amt_credit_max=("AMT_CREDIT", "max"),
             prev_amt_application_mean=("AMT_APPLICATION", "mean"),
             prev_annuity_mean=("AMT_ANNUITY", "mean"),
+            prev_amt_annuity_mean=("AMT_ANNUITY", "mean"),
+            prev_amt_down_payment_mean=("AMT_DOWN_PAYMENT", "mean"),
             prev_credit_to_app_ratio_mean=("credit_to_app_ratio", "mean"),
             prev_days_decision_min=("DAYS_DECISION", "min"),
             prev_days_decision_mean=("DAYS_DECISION", "mean"),
@@ -619,6 +630,10 @@ def _join_previous_application(app: pd.DataFrame, data_dir: Path) -> pd.DataFram
     result["prev_approved_cnt"] = result["prev_approved_cnt"].fillna(0).astype(np.int32)
     result["prev_refused_cnt"] = result["prev_refused_cnt"].fillna(0).astype(np.int32)
     result["prev_cancelled_cnt"] = result["prev_cancelled_cnt"].fillna(0).astype(np.int32)
+    if "prev_amt_annuity_mean" in result.columns:
+        result["prev_amt_annuity_mean"] = result["prev_amt_annuity_mean"].fillna(0)
+    if "prev_amt_down_payment_mean" in result.columns:
+        result["prev_amt_down_payment_mean"] = result["prev_amt_down_payment_mean"].fillna(0)
 
     _assert_no_row_multiplication(app, result, "previous_application join")
     return result

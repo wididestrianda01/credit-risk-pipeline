@@ -813,3 +813,57 @@ class TestBuildTrainingFrameNewCols:
         for col in new_cols:
             if col in X.columns:
                 assert not X[col].isna().any(), f"{col} contains NaN values"
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for 6 new aggregations (Phase 04.2.3.2 D-01 through D-06)
+# ---------------------------------------------------------------------------
+
+
+def test_load_data_has_bureau_amt_credit_mean(data_dir):
+    """D-01: Column bureau_amt_credit_mean is present and numeric."""
+    df = load_data(data_dir)
+    assert "bureau_amt_credit_mean" in df.columns
+    assert df["bureau_amt_credit_mean"].dtype in [np.float32, np.float64]
+    assert not df["bureau_amt_credit_mean"].isna().any()
+
+
+def test_load_data_has_bureau_overdue_sum(data_dir):
+    """D-02: Column bureau_overdue_sum is present and numeric."""
+    df = load_data(data_dir)
+    assert "bureau_overdue_sum" in df.columns
+    assert df["bureau_overdue_sum"].dtype in [np.float32, np.float64]
+    assert not df["bureau_overdue_sum"].isna().any()
+
+
+def test_load_data_has_prev_amt_annuity_mean(data_dir):
+    """D-03: Column prev_amt_annuity_mean is present and numeric."""
+    df = load_data(data_dir)
+    assert "prev_amt_annuity_mean" in df.columns
+    assert df["prev_amt_annuity_mean"].dtype in [np.float32, np.float64]
+    assert not df["prev_amt_annuity_mean"].isna().any()
+
+
+def test_load_data_has_prev_down_payment_mean(data_dir):
+    """D-04: Column prev_amt_down_payment_mean is present and numeric."""
+    df = load_data(data_dir)
+    assert "prev_amt_down_payment_mean" in df.columns
+    assert df["prev_amt_down_payment_mean"].dtype in [np.float32, np.float64]
+    assert not df["prev_amt_down_payment_mean"].isna().any()
+
+
+def test_load_data_has_bureau_recent_openings(data_dir):
+    """D-05: Column bureau_recent_openings is present, numeric, and non-negative."""
+    df = load_data(data_dir)
+    assert "bureau_recent_openings" in df.columns
+    assert df["bureau_recent_openings"].dtype in [np.int32, np.int64, int, float]
+    assert not df["bureau_recent_openings"].isna().any()
+    assert (df["bureau_recent_openings"] >= 0).all()
+
+
+def test_load_data_has_bureau_days_since_last_credit(data_dir):
+    """D-06: Column bureau_days_since_last_credit is present and numeric."""
+    df = load_data(data_dir)
+    assert "bureau_days_since_last_credit" in df.columns
+    assert df["bureau_days_since_last_credit"].dtype in [np.float32, np.float64]
+    assert not df["bureau_days_since_last_credit"].isna().any()
