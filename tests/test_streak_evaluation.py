@@ -12,7 +12,7 @@ from sklearn.model_selection import train_test_split
 
 from credit_engine.data_loader import load_data
 from credit_engine.features import engineer_instalment_streaks
-from credit_engine.model import train_xgboost_optuna
+from credit_engine.model import train_lightgbm_optuna
 from credit_engine.utils import gini_coefficient
 
 
@@ -26,6 +26,7 @@ _TEST_SIZE: float = 0.2
 _N_TRIALS: int = 50
 
 
+@pytest.mark.slow
 def test_streak_feature_evaluation():
     """Execute Phase 1 Plan 02 (Wave 2) streak feature evaluation."""
     _MIN_PRODUCTION_ROWS = 100_000
@@ -81,10 +82,11 @@ def test_streak_feature_evaluation():
     print(f"  Train default rate: {y_train_split.mean():.2%}")
     print(f"  Test default rate: {y_test.mean():.2%}")
 
-    # Step 4: Train XGBoost baseline WITHOUT any streak features
-    print(f"\nStep 4: Train baseline XGBoost (Optuna n_trials={_N_TRIALS})")
+    # Step 4: Train LightGBM baseline WITHOUT any streak features
+    # Note: train_xgboost_optuna was refactored to a file-path API; use LGB (DataFrame API) for AB eval
+    print(f"\nStep 4: Train baseline LightGBM (Optuna n_trials={_N_TRIALS})")
     baseline_model, metrics_baseline, X_test_ret, y_test_ret, best_params_baseline = (
-        train_xgboost_optuna(X_train, y_train_split, n_trials=_N_TRIALS)
+        train_lightgbm_optuna(X_train, y_train_split, n_trials=_N_TRIALS)
     )
     print(f"✓ Baseline model trained")
     print(f"  Best params keys: {list(best_params_baseline.keys())}")
@@ -121,7 +123,7 @@ def test_streak_feature_evaluation():
 
     # Step 7: Load raw installments data and compute OLS-based streak features
     print("\nStep 7: Load raw installments data")
-    data_dict = load_data("dataset/", mode="train")
+    data_dict = load_data("data/", mode="train")
     df_inst = data_dict["installments_payments"]
     print(f"✓ Installments table shape: {df_inst.shape}")
     print(f"  Columns: {df_inst.columns.tolist()}")
@@ -181,8 +183,8 @@ def test_streak_feature_evaluation():
     print(f"✓ Full-feature train shape: {X_train_full.shape}")
     print(f"  Full-feature test shape: {X_test_full.shape}")
 
-    print(f"\nStep 11: Train full XGBoost (Optuna n_trials={_N_TRIALS})")
-    full_model, metrics_full, _, _, best_params_full = train_xgboost_optuna(
+    print(f"\nStep 11: Train full LightGBM (Optuna n_trials={_N_TRIALS})")
+    full_model, metrics_full, _, _, best_params_full = train_lightgbm_optuna(
         X_train_full, y_train_full, n_trials=_N_TRIALS
     )
     print(f"✓ Full model trained")
