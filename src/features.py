@@ -20,6 +20,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from sklearn.feature_selection import VarianceThreshold
 
 
 def _get_project_root() -> Path:
@@ -1651,19 +1652,41 @@ def build_tree_feature_store(
     # Skip IV filter for tree models — preserve all numeric columns with variance
     X_iv = X_filled.copy()
 
-    # Variance filter: drop constant columns then bottom 5% by variance
-    variances = X_iv.var()
-    positive_var = variances[variances > 0]
-    if len(positive_var) == 0:
-        X_final = pd.DataFrame(index=X_iv.index)
+    # Layer 6a: Remove low-variance features (variance < 1%)
+    # Use sklearn.feature_selection.VarianceThreshold for reproducible semantics
+    # (avoids data-dependent quantile heuristics).
+    var_filter = VarianceThreshold(threshold=0.01)
+    if X_iv.shape[1] > 0:
+        X_var_filtered = var_filter.fit_transform(X_iv)
+        X_var = pd.DataFrame(
+            X_var_filtered,
+            columns=X_iv.columns[var_filter.get_support()],
+            index=X_iv.index,
+        )
     else:
-        var_threshold = positive_var.quantile(0.05)
-        keep_cols = positive_var[positive_var >= var_threshold].index
-        X_final = X_iv[keep_cols].copy()
+        X_var = X_iv.copy()
 
-    print(f"After variance filter: {X_final.shape[1]}")
+    print(f"After variance filter: {X_var.shape[1]}")
 
-    # No correlation dedup for tree models — preserve raw signal
+    # Layer 6b: Remove correlated features (|r| > 0.95)
+    # Compute Pearson correlation matrix and drop one of each highly-correlated pair.
+    if X_var.shape[1] > 1:
+        corr_matrix = X_var.corr().abs()
+
+        # Find pairs with |r| > 0.95 (upper triangle only to avoid duplication)
+        pairs_to_drop = []
+        for i in range(len(corr_matrix.columns)):
+            for j in range(i + 1, len(corr_matrix.columns)):
+                if corr_matrix.iloc[i, j] > 0.95:
+                    pairs_to_drop.append(corr_matrix.columns[j])
+
+        # Keep first of each pair, drop second
+        cols_to_drop = list(set(pairs_to_drop))
+        X_final = X_var.drop(columns=cols_to_drop, errors="ignore")
+    else:
+        X_final = X_var.copy()
+
+    print(f"After correlation dedup (|r| > 0.95): {X_final.shape[1]}")
 
     # Persist artifacts
     X_final.to_parquet(output_dir / "X_tree_raw.parquet", index=False)

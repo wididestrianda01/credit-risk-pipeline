@@ -2407,3 +2407,54 @@ class TestEngineerTimeFeatures:
         # Index is SK_ID_CURR
         assert result.index.name == "SK_ID_CURR"
         assert result.index.is_unique, "SK_ID_CURR should be unique index"
+
+
+class TestBuildTreeFeatureStoreL6Filters:
+    """Regression tests for Layer 6 feature selection (variance + correlation dedup)."""
+
+    def test_build_tree_feature_store_applies_variance_threshold(self, tree_store_data, tmp_path):
+        """Verify VarianceThreshold(0.01) is applied and no features with variance < 0.01 remain."""
+        X, y = tree_store_data
+
+        X_tree, feature_cols = build_tree_feature_store(
+            X=X,
+            y=y,
+            output_dir=tmp_path,
+        )
+
+        # Load from parquet to verify persistence
+        X_loaded = pd.read_parquet(tmp_path / "X_tree_raw.parquet")
+
+        # Verify all remaining features have variance >= 0.01
+        variances = X_loaded.var()
+        assert (variances >= 0.01).all(), (
+            f"Features with variance < 0.01 found: "
+            f"{variances[variances < 0.01].to_dict()}"
+        )
+
+    def test_build_tree_feature_store_no_high_correlation_pairs(self, secondary_fixture, tmp_path):
+        """Verify no two columns have |r| > 0.95 after Layer 6b deduplication."""
+        # Create a simple target for secondary_fixture
+        y = pd.Series([0, 1, 0, 1, 0], index=range(len(secondary_fixture)))
+
+        X_tree, feature_cols = build_tree_feature_store(
+            X=secondary_fixture,
+            y=y,
+            output_dir=tmp_path,
+        )
+
+        # Load from parquet to verify persistence
+        X_loaded = pd.read_parquet(tmp_path / "X_tree_raw.parquet")
+
+        # Compute correlation matrix (absolute values)
+        if X_loaded.shape[1] > 1:
+            corr_matrix = X_loaded.corr().abs()
+
+            # Check upper triangle for correlations > 0.95
+            for i in range(len(corr_matrix.columns)):
+                for j in range(i + 1, len(corr_matrix.columns)):
+                    corr_val = corr_matrix.iloc[i, j]
+                    assert corr_val <= 0.95, (
+                        f"High correlation found: {corr_matrix.columns[i]} vs "
+                        f"{corr_matrix.columns[j]}: {corr_val:.4f}"
+                    )
