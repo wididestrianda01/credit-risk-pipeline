@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: unknown
-last_updated: "2026-04-08T07:33:42.330Z"
+status: executing
+last_updated: "2026-04-09T17:46:07.140Z"
 progress:
-  total_phases: 4
-  completed_phases: 3
-  total_plans: 13
-  completed_plans: 13
-  percent: 100
+  total_phases: 7
+  completed_phases: 5
+  total_plans: 25
+  completed_plans: 18
+  percent: 72
 ---
 
 # Project State
@@ -22,7 +22,7 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-07)
 
 **Core value:** Calibrated PD feeding EL = PD × LGD × EAD, Gini ≥ 0.70
-**Current focus:** Phase 04.2.4 — lightgbm-hpo-on-raw-features
+**Current focus:** Phase 04.2.3.2 — feature-engineering-completion-xgb-rerun
 
 ---
 
@@ -38,11 +38,28 @@ See: `.planning/PROJECT.md` (updated 2026-04-07)
 
 ## Active Phase
 
-**Phase 04.2.4** — LightGBM HPO on Raw Features
+**Phase 04.2.3.1** — SK_DPD Leakage Removal + OOF Gini
 
-- Status: Planned — awaiting execution
-- Next command: `/gsd-execute-phase 04.2.4`
-- Branch: new branch to be created (e.g., `gsd/phase-04.2.4-lgb-hpo-on-raw-features`)
+- Status: Executing (5 plans, code changes + DFS rebuild + HPO)
+- Branch: `gsd/phase-04.2.3.1-skdpd-leakage-removal-oof-gini`
+
+**Phase 04.2.3.2** — Feature Engineering Completion + XGBoost Re-run (BLOCKED — 2026-04-10)
+
+- Status: ⚠️ BLOCKED after Plan 07 execution — ARCHITECTURAL DECISION REQUIRED
+- Plans: 7 of 7 created, Plans 01-06 executed, Plan 07 encountered critical issues
+- **Critical Finding (2026-04-10):** OOT Gini regression detected
+  - Phase 04.2.3.1 baseline (raw features only): OOT Gini = 0.8594
+  - Plan 06 sanity check (enriched features): OOT Gini = 0.5666 (-33% regression)
+  - **Root cause:** DFS auto-aggregations + Plans 01-05 features introduce noise, not signal
+- **Infrastructure Issue (Plan 07):** HPO test runner stalled at 19+ hours (est. 120-150 min)
+  - 61 Optuna trials created, 56 complete, 5 running/stuck
+  - Model pickle corrupted, unloadable
+  - Best trial AUC 0.5297 (far below baseline)
+- **Decision required:** Roll back to Phase 04.2.3.1 approach OR fix feature engineering
+- **Next command (user decision):**
+  - Option A: `git checkout gsd/phase-04.2.3.1-skdpd-leakage-removal-oof-gini && /gsd-execute-phase 04.2.4` (LightGBM on raw features)
+  - Option B: Continue Phase 04.2.3.2 with stricter feature selection (IV > 0.10 threshold)
+  - Option C: Investigate DFS + Plan 01-05 features for multicollinearity issues
 
 ---
 
@@ -102,7 +119,7 @@ See: `.planning/PROJECT.md` (updated 2026-04-07)
 - **Integration tests:** 2 automated tests (full pipeline + BrierSkill>0); 1 production test for X_tree_dfs.parquet (skipif missing)
 - **CLI wrapper:** `scripts/train_xgboost_raw.py` with --feature-store and --n-trials arguments
 - **Commits:** a002e7a (TDD), 4e9198f (migration), a522893 (integration+CLI)
-- **Duration:** 85 min | **Status:** ✅ Complete
+- **Duration:** 85 min | **Status:** Executing Phase 04.2.3.2
 
 ### 2026-04-07 — Phase 04.2.2-04 TDD tests complete
 

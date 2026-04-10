@@ -108,14 +108,14 @@ _XGB_REG_LAMBDA_MAX: float = 10.0
 # XGBoost Optuna HPO on raw features (Phase 04.2.3)
 # Fixed n_estimators with early stopping, log-scale regularisation,
 # extended hyperparameter ranges for continuous feature space
-_XGB_RAW_N_ESTIMATORS: int = 3000
-_XGB_RAW_EARLY_STOPPING_ROUNDS: int = 100
+_XGB_RAW_N_ESTIMATORS: int = 1000
+_XGB_RAW_EARLY_STOPPING_ROUNDS: int = 50
 _XGB_RAW_MIN_CHILD_WEIGHT_MAX: float = 30.0
 _XGB_RAW_GAMMA_MAX: float = 5.0
 _XGB_RAW_REG_ALPHA_MIN: float = 1e-8
 _XGB_RAW_REG_LAMBDA_MIN: float = 1e-8
 _XGB_RAW_REG_MAX: float = 5.0
-_XGB_RAW_STUDY_NAME: str = "xgboost_raw_v8"
+_XGB_RAW_STUDY_NAME: str = "xgboost_raw_v9"
 
 # Output paths for XGBoost Optuna HPO artefacts
 _HPO_PROGRESS_LOG_PATH: str = "reports/hpo_progress.jsonl"

@@ -1,126 +1,50 @@
-{"trial_number": 543, "trial_id": 3126, "oof_gini": 0.19451744560757422, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T21:59:33.870300"}
-{"trial_number": 544, "trial_id": 3127, "oof_gini": 0.20753324446477306, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T22:05:44.365170"}
-{"trial_number": 545, "trial_id": 3128, "oof_gini": 0.20403416059986013, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T22:11:36.756950"}
-{"trial_number": 546, "trial_id": 3129, "oof_gini": 0.2955514714270706, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T22:19:24.001248"}
-{"trial_number": 548, "trial_id": 3131, "oof_gini": 0.19751680458491072, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T22:40:28.103434"}
-{"trial_number": 0, "trial_id": 0, "oof_gini": 0.6911226357535083, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:04:55.987132"}
-{"trial_number": 1, "trial_id": 1, "oof_gini": 0.635143380109823, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:04:56.009162"}
-{"trial_number": 2, "trial_id": 2, "oof_gini": 0.7184258694325809, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:04:56.040345"}
-{"trial_number": 0, "trial_id": 0, "oof_gini": 0.6911226357535083, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:05:38.552143"}
-{"trial_number": 1, "trial_id": 1, "oof_gini": 0.635143380109823, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:05:38.587597"}
-{"trial_number": 2, "trial_id": 2, "oof_gini": 0.7184258694325809, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:05:38.629494"}
-{"trial_number": 552, "trial_id": 3135, "oof_gini": 0.6828859060402688, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:05:40.393896"}
-{"trial_number": 553, "trial_id": 3136, "oof_gini": 0.6761744966442951, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:05:41.272135"}
-{"trial_number": 554, "trial_id": 3137, "oof_gini": 0.6741915802318488, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:05:43.533634"}
-{"trial_number": 555, "trial_id": 3138, "oof_gini": 0.6816656497864553, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:05:44.307516"}
-{"trial_number": 556, "trial_id": 3139, "oof_gini": 0.6831909701037218, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:05:46.463614"}
-{"trial_number": 557, "trial_id": 3140, "oof_gini": 0.698901769371568, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:05:47.284011"}
-{"trial_number": 558, "trial_id": 3141, "oof_gini": 0.6834960341671752, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:05:49.617744"}
-{"trial_number": 559, "trial_id": 3142, "oof_gini": 0.683953630262355, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:05:50.436462"}
-{"trial_number": 560, "trial_id": 3143, "oof_gini": 0.6850213544844417, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:05:52.651768"}
-{"trial_number": 561, "trial_id": 3144, "oof_gini": 0.6863941427699818, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:05:53.483794"}
-{"trial_number": 562, "trial_id": 3145, "oof_gini": 0.723306894447834, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:05:56.904812"}
-{"trial_number": 563, "trial_id": 3146, "oof_gini": 0.7269676632092739, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:05:57.934962"}
-{"trial_number": 564, "trial_id": 3147, "oof_gini": 0.7182733374008541, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:06:00.629263"}
-{"trial_number": 565, "trial_id": 3148, "oof_gini": 0.7318486882245274, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:06:01.628532"}
-{"trial_number": 566, "trial_id": 3149, "oof_gini": 0.734289200732154, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:06:04.381505"}
-{"trial_number": 567, "trial_id": 3150, "oof_gini": 0.7397803538743135, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:06:05.405007"}
-{"trial_number": 568, "trial_id": 3151, "oof_gini": 0.7388651616839537, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:06:08.032595"}
-{"trial_number": 569, "trial_id": 3152, "oof_gini": 0.7272727272727273, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:06:09.088603"}
-{"trial_number": 570, "trial_id": 3153, "oof_gini": 0.722391702257474, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:06:11.901975"}
-{"trial_number": 571, "trial_id": 3154, "oof_gini": 0.7153752287980477, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:06:13.003052"}
-{"trial_number": 572, "trial_id": 3155, "oof_gini": 0.7361195851128737, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:06:16.256217"}
-{"trial_number": 573, "trial_id": 3156, "oof_gini": 0.7225442342892008, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:06:17.233666"}
-{"trial_number": 574, "trial_id": 3157, "oof_gini": 0.7196461256863944, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:06:19.977715"}
-{"trial_number": 575, "trial_id": 3158, "oof_gini": 0.7037827943868211, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:06:21.010477"}
-{"trial_number": 576, "trial_id": 3159, "oof_gini": 0.7053081147040878, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:06:23.860378"}
-{"trial_number": 577, "trial_id": 3160, "oof_gini": 0.701647345942648, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:06:25.362002"}
-{"trial_number": 578, "trial_id": 3161, "oof_gini": 0.7291031116534472, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:06:28.327782"}
-{"trial_number": 579, "trial_id": 3162, "oof_gini": 0.7126296522269677, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:06:29.305761"}
-{"trial_number": 580, "trial_id": 3163, "oof_gini": 0.7187309334960341, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:06:32.412697"}
-{"trial_number": 581, "trial_id": 3164, "oof_gini": 0.7410006101281268, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:06:33.431112"}
-{"trial_number": 582, "trial_id": 3165, "oof_gini": 0.7062233068944479, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:06:36.463354"}
-{"trial_number": 583, "trial_id": 3166, "oof_gini": 0.7172056131787676, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:06:37.462039"}
-{"trial_number": 584, "trial_id": 3167, "oof_gini": 0.6842586943258087, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:07:19.767465"}
-{"trial_number": 585, "trial_id": 3168, "oof_gini": 0.6853264185478951, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:07:21.108795"}
-{"trial_number": 0, "trial_id": 0, "oof_gini": 0.6911226357535083, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:07:39.666410"}
-{"trial_number": 1, "trial_id": 1, "oof_gini": 0.635143380109823, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:07:39.690727"}
-{"trial_number": 2, "trial_id": 2, "oof_gini": 0.7184258694325809, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:07:39.714916"}
-{"trial_number": 586, "trial_id": 3169, "oof_gini": 0.6822757779133619, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:07:41.363773"}
-{"trial_number": 587, "trial_id": 3170, "oof_gini": 0.6825808419768151, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:07:42.118830"}
-{"trial_number": 0, "trial_id": 0, "oof_gini": 0.6911226357535083, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:11:24.826775"}
-{"trial_number": 1, "trial_id": 1, "oof_gini": 0.635143380109823, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:11:24.850990"}
-{"trial_number": 2, "trial_id": 2, "oof_gini": 0.7184258694325809, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:11:24.874223"}
-{"trial_number": 588, "trial_id": 3171, "oof_gini": 0.6845637583892614, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:11:26.463792"}
-{"trial_number": 589, "trial_id": 3172, "oof_gini": 0.6956985967053078, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:11:27.252280"}
-{"trial_number": 590, "trial_id": 3173, "oof_gini": 0.6845637583892616, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:11:30.369086"}
-{"trial_number": 591, "trial_id": 3174, "oof_gini": 0.6972239170225747, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:11:31.660980"}
-{"trial_number": 592, "trial_id": 3175, "oof_gini": 0.6798352654057351, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:11:34.207868"}
-{"trial_number": 593, "trial_id": 3176, "oof_gini": 0.6850213544844417, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:11:35.111770"}
-{"trial_number": 594, "trial_id": 3177, "oof_gini": 0.6731238560097621, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:11:37.711677"}
-{"trial_number": 595, "trial_id": 3178, "oof_gini": 0.6825808419768153, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:11:38.832724"}
-{"trial_number": 596, "trial_id": 3179, "oof_gini": 0.6969188529591215, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:11:41.165734"}
-{"trial_number": 597, "trial_id": 3180, "oof_gini": 0.6850213544844417, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:11:42.134104"}
-{"trial_number": 598, "trial_id": 3181, "oof_gini": 0.7294081757169006, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:11:45.226033"}
-{"trial_number": 599, "trial_id": 3182, "oof_gini": 0.7321537522879804, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:11:46.318238"}
-{"trial_number": 600, "trial_id": 3183, "oof_gini": 0.7300183038438073, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:11:49.115986"}
-{"trial_number": 601, "trial_id": 3184, "oof_gini": 0.7230018303843806, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:11:50.153876"}
-{"trial_number": 602, "trial_id": 3185, "oof_gini": 0.738255033557047, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:11:52.827656"}
-{"trial_number": 603, "trial_id": 3186, "oof_gini": 0.7050030506406344, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:11:53.940732"}
-{"trial_number": 604, "trial_id": 3187, "oof_gini": 0.7431360585723001, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:11:57.663204"}
-{"trial_number": 605, "trial_id": 3188, "oof_gini": 0.7425259304453935, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:11:58.856933"}
-{"trial_number": 606, "trial_id": 3189, "oof_gini": 0.7278828553996337, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:12:01.732694"}
-{"trial_number": 607, "trial_id": 3190, "oof_gini": 0.732763880414887, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:12:02.736738"}
-{"trial_number": 608, "trial_id": 3191, "oof_gini": 0.7348993288590604, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:12:05.735438"}
-{"trial_number": 609, "trial_id": 3192, "oof_gini": 0.7257474069554606, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:12:06.900062"}
-{"trial_number": 610, "trial_id": 3193, "oof_gini": 0.7147651006711411, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:12:10.105796"}
-{"trial_number": 611, "trial_id": 3194, "oof_gini": 0.7266625991458207, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:12:11.348242"}
-{"trial_number": 612, "trial_id": 3195, "oof_gini": 0.731848688224527, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:12:14.064417"}
-{"trial_number": 613, "trial_id": 3196, "oof_gini": 0.6937156802928615, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:12:15.368055"}
-{"trial_number": 614, "trial_id": 3197, "oof_gini": 0.7440512507626602, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:12:18.092508"}
-{"trial_number": 615, "trial_id": 3198, "oof_gini": 0.7190359975594875, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:12:19.274430"}
-{"trial_number": 616, "trial_id": 3199, "oof_gini": 0.7281879194630871, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:12:22.291570"}
-{"trial_number": 617, "trial_id": 3200, "oof_gini": 0.7350518608907868, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:12:23.301607"}
-{"trial_number": 618, "trial_id": 3201, "oof_gini": 0.7190359975594875, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:12:26.606717"}
-{"trial_number": 619, "trial_id": 3202, "oof_gini": 0.726052471018914, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:12:27.595465"}
-{"trial_number": 551, "trial_id": 3134, "oof_gini": 0.2038353998433804, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:13:35.888428"}
-{"trial_number": 0, "trial_id": 0, "oof_gini": 0.6911226357535083, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:16:16.813648"}
-{"trial_number": 1, "trial_id": 1, "oof_gini": 0.635143380109823, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:16:16.847635"}
-{"trial_number": 2, "trial_id": 2, "oof_gini": 0.7184258694325809, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:16:16.886848"}
-{"trial_number": 621, "trial_id": 3204, "oof_gini": 0.6644295302013421, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:16:18.775704"}
-{"trial_number": 622, "trial_id": 3205, "oof_gini": 0.6821232458816351, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:16:20.083090"}
-{"trial_number": 623, "trial_id": 3206, "oof_gini": 0.6833435021354484, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:16:23.171161"}
-{"trial_number": 624, "trial_id": 3207, "oof_gini": 0.683953630262355, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:16:24.015287"}
-{"trial_number": 625, "trial_id": 3208, "oof_gini": 0.6924954240390482, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:16:26.204009"}
-{"trial_number": 626, "trial_id": 3209, "oof_gini": 0.6813605857230021, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:16:27.012414"}
-{"trial_number": 627, "trial_id": 3210, "oof_gini": 0.6790726052471019, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:16:29.240096"}
-{"trial_number": 628, "trial_id": 3211, "oof_gini": 0.6830384380719954, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:16:30.235108"}
-{"trial_number": 629, "trial_id": 3212, "oof_gini": 0.6921903599755947, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:16:32.984582"}
-{"trial_number": 630, "trial_id": 3213, "oof_gini": 0.6865466748017084, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:16:33.847638"}
-{"trial_number": 631, "trial_id": 3214, "oof_gini": 0.7025625381330078, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:16:36.702130"}
-{"trial_number": 632, "trial_id": 3215, "oof_gini": 0.7126296522269675, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:16:37.676896"}
-{"trial_number": 633, "trial_id": 3216, "oof_gini": 0.7178157413056743, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:16:40.989191"}
-{"trial_number": 634, "trial_id": 3217, "oof_gini": 0.7281879194630871, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:16:41.979820"}
-{"trial_number": 635, "trial_id": 3218, "oof_gini": 0.7263575350823672, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:16:45.113360"}
-{"trial_number": 636, "trial_id": 3219, "oof_gini": 0.7275777913361805, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:16:46.360366"}
-{"trial_number": 637, "trial_id": 3220, "oof_gini": 0.7291031116534472, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:16:49.400617"}
-{"trial_number": 638, "trial_id": 3221, "oof_gini": 0.7272727272727273, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:16:50.664389"}
-{"trial_number": 639, "trial_id": 3222, "oof_gini": 0.7266625991458207, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:16:54.235209"}
-{"trial_number": 640, "trial_id": 3223, "oof_gini": 0.7431360585723001, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:16:55.243302"}
-{"trial_number": 641, "trial_id": 3224, "oof_gini": 0.7385600976205002, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:16:58.387800"}
-{"trial_number": 642, "trial_id": 3225, "oof_gini": 0.7129347162904212, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:16:59.849796"}
-{"trial_number": 643, "trial_id": 3226, "oof_gini": 0.7406955460646736, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:17:03.159458"}
-{"trial_number": 644, "trial_id": 3227, "oof_gini": 0.7400854179377669, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:17:04.166914"}
-{"trial_number": 645, "trial_id": 3228, "oof_gini": 0.704392922513728, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:17:06.909434"}
-{"trial_number": 646, "trial_id": 3229, "oof_gini": 0.7446613788895668, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:17:08.543281"}
-{"trial_number": 647, "trial_id": 3230, "oof_gini": 0.7370347773032335, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:17:11.674847"}
-{"trial_number": 648, "trial_id": 3231, "oof_gini": 0.7388651616839534, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:17:12.894881"}
-{"trial_number": 649, "trial_id": 3232, "oof_gini": 0.7519829164124465, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:17:15.717556"}
-{"trial_number": 650, "trial_id": 3233, "oof_gini": 0.7086638194020742, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:17:17.143525"}
-{"trial_number": 651, "trial_id": 3234, "oof_gini": 0.7269676632092739, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:17:20.269424"}
-{"trial_number": 652, "trial_id": 3235, "oof_gini": 0.714307504575961, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:17:21.267350"}
-{"trial_number": 0, "trial_id": 0, "oof_gini": 0.6911226357535083, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:18:42.384012"}
-{"trial_number": 1, "trial_id": 1, "oof_gini": 0.635143380109823, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:18:42.418166"}
-{"trial_number": 2, "trial_id": 2, "oof_gini": 0.7184258694325809, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:18:42.461507"}
-{"trial_number": 654, "trial_id": 3237, "oof_gini": 0.6850213544844417, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:18:44.911418"}
-{"trial_number": 655, "trial_id": 3238, "oof_gini": 0.679987797437462, "oot_gini": null, "status": "COMPLETE", "timestamp": "2026-04-08T23:18:45.785741"}
+{"trial_number": 0, "trial_id": 62, "oof_gini": 0.4831899746362003, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.4831899746362003, "timestamp": "2026-04-10T05:42:32.957363"}
+{"trial_number": 1, "trial_id": 63, "oof_gini": 0.49105774824997495, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.49105774824997495, "timestamp": "2026-04-10T05:43:09.169988"}
+{"trial_number": 2, "trial_id": 64, "oof_gini": 0.5174894624530941, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5174894624530941, "timestamp": "2026-04-10T05:44:01.978194"}
+{"trial_number": 3, "trial_id": 65, "oof_gini": 0.4964449227178114, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5174894624530941, "timestamp": "2026-04-10T05:44:33.275051"}
+{"trial_number": 4, "trial_id": 66, "oof_gini": 0.5089118792030061, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5174894624530941, "timestamp": "2026-04-10T05:45:00.896450"}
+{"trial_number": 5, "trial_id": 67, "oof_gini": 0.5184660095141749, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5184660095141749, "timestamp": "2026-04-10T05:46:10.501877"}
+{"trial_number": 6, "trial_id": 68, "oof_gini": 0.511839119754188, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5184660095141749, "timestamp": "2026-04-10T05:47:54.310164"}
+{"trial_number": 7, "trial_id": 69, "oof_gini": 0.5214466090877394, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5214466090877394, "timestamp": "2026-04-10T05:49:57.717019"}
+{"trial_number": 8, "trial_id": 70, "oof_gini": 0.5126154140909516, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5214466090877394, "timestamp": "2026-04-10T05:50:43.042174"}
+{"trial_number": 9, "trial_id": 71, "oof_gini": 0.5152129879503766, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5214466090877394, "timestamp": "2026-04-10T05:51:17.609267"}
+{"trial_number": 10, "trial_id": 72, "oof_gini": 0.4547605498019842, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5214466090877394, "timestamp": "2026-04-10T05:51:57.334527"}
+{"trial_number": 11, "trial_id": 73, "oof_gini": 0.487160103524908, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5214466090877394, "timestamp": "2026-04-10T05:52:53.595542"}
+{"trial_number": 12, "trial_id": 74, "oof_gini": 0.49916012384348507, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5214466090877394, "timestamp": "2026-04-10T05:53:49.782064"}
+{"trial_number": 13, "trial_id": 75, "oof_gini": 0.4857025388119329, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5214466090877394, "timestamp": "2026-04-10T05:55:17.786246"}
+{"trial_number": 14, "trial_id": 76, "oof_gini": 0.4521720254151318, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5214466090877394, "timestamp": "2026-04-10T05:55:52.334161"}
+{"trial_number": 15, "trial_id": 77, "oof_gini": 0.4444787580643774, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5214466090877394, "timestamp": "2026-04-10T05:56:17.204532"}
+{"trial_number": 16, "trial_id": 78, "oof_gini": 0.5215397981736549, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5215397981736549, "timestamp": "2026-04-10T05:57:20.083072"}
+{"trial_number": 17, "trial_id": 79, "oof_gini": 0.4958156686824271, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5215397981736549, "timestamp": "2026-04-10T05:57:51.166962"}
+{"trial_number": 18, "trial_id": 80, "oof_gini": 0.5173778923371815, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5215397981736549, "timestamp": "2026-04-10T06:00:03.935591"}
+{"trial_number": 19, "trial_id": 81, "oof_gini": 0.5170537397956523, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5215397981736549, "timestamp": "2026-04-10T06:01:02.304135"}
+{"trial_number": 20, "trial_id": 82, "oof_gini": 0.5222028235345164, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5222028235345164, "timestamp": "2026-04-10T06:02:36.357379"}
+{"trial_number": 21, "trial_id": 83, "oof_gini": 0.5238333014984966, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5238333014984966, "timestamp": "2026-04-10T06:04:45.240513"}
+{"trial_number": 22, "trial_id": 84, "oof_gini": 0.5227710673266874, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5238333014984966, "timestamp": "2026-04-10T06:06:15.077141"}
+{"trial_number": 23, "trial_id": 85, "oof_gini": 0.5228657456936026, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5238333014984966, "timestamp": "2026-04-10T06:08:07.989422"}
+{"trial_number": 24, "trial_id": 86, "oof_gini": 0.517313700833097, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5238333014984966, "timestamp": "2026-04-10T06:09:29.356490"}
+{"trial_number": 25, "trial_id": 87, "oof_gini": 0.5188761492454406, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5238333014984966, "timestamp": "2026-04-10T06:11:38.130466"}
+{"trial_number": 26, "trial_id": 88, "oof_gini": 0.5170211338563733, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5238333014984966, "timestamp": "2026-04-10T06:12:49.902857"}
+{"trial_number": 27, "trial_id": 89, "oof_gini": 0.516475037694369, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5238333014984966, "timestamp": "2026-04-10T06:13:54.259830"}
+{"trial_number": 28, "trial_id": 90, "oof_gini": 0.5173760590502647, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5238333014984966, "timestamp": "2026-04-10T06:15:47.769169"}
+{"trial_number": 29, "trial_id": 91, "oof_gini": 0.5160769259976759, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5238333014984966, "timestamp": "2026-04-10T06:17:07.692168"}
+{"trial_number": 30, "trial_id": 92, "oof_gini": 0.5168887148649397, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5238333014984966, "timestamp": "2026-04-10T06:18:12.839250"}
+{"trial_number": 31, "trial_id": 93, "oof_gini": 0.5245255006780665, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5245255006780665, "timestamp": "2026-04-10T06:19:53.517380"}
+{"trial_number": 32, "trial_id": 94, "oof_gini": 0.520747308567566, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5245255006780665, "timestamp": "2026-04-10T06:21:30.438455"}
+{"trial_number": 33, "trial_id": 95, "oof_gini": 0.5220589279764571, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5245255006780665, "timestamp": "2026-04-10T06:22:58.687624"}
+{"trial_number": 34, "trial_id": 96, "oof_gini": 0.5176925349674499, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5245255006780665, "timestamp": "2026-04-10T06:24:53.250263"}
+{"trial_number": 35, "trial_id": 97, "oof_gini": 0.5142548176853743, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5245255006780665, "timestamp": "2026-04-10T06:25:31.304583"}
+{"trial_number": 36, "trial_id": 98, "oof_gini": 0.5214192283337178, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5245255006780665, "timestamp": "2026-04-10T06:26:39.565169"}
+{"trial_number": 37, "trial_id": 99, "oof_gini": 0.5167354337669889, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5245255006780665, "timestamp": "2026-04-10T06:28:44.868163"}
+{"trial_number": 38, "trial_id": 100, "oof_gini": 0.5213340614657833, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5245255006780665, "timestamp": "2026-04-10T06:30:31.054396"}
+{"trial_number": 39, "trial_id": 101, "oof_gini": 0.5213455158043345, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5245255006780665, "timestamp": "2026-04-10T06:32:11.572207"}
+{"trial_number": 40, "trial_id": 102, "oof_gini": 0.498804888515028, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5245255006780665, "timestamp": "2026-04-10T06:33:40.799450"}
+{"trial_number": 41, "trial_id": 103, "oof_gini": 0.5228728449172468, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5245255006780665, "timestamp": "2026-04-10T06:35:15.039281"}
+{"trial_number": 42, "trial_id": 104, "oof_gini": 0.523524786407467, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5245255006780665, "timestamp": "2026-04-10T06:36:44.891824"}
+{"trial_number": 43, "trial_id": 105, "oof_gini": 0.5227706195897552, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5245255006780665, "timestamp": "2026-04-10T06:38:22.215286"}
+{"trial_number": 44, "trial_id": 106, "oof_gini": 0.5180136073329242, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5245255006780665, "timestamp": "2026-04-10T06:39:32.133658"}
+{"trial_number": 45, "trial_id": 107, "oof_gini": 0.5127137357451463, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5245255006780665, "timestamp": "2026-04-10T06:40:32.239035"}
+{"trial_number": 46, "trial_id": 108, "oof_gini": 0.5216989083195569, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5245255006780665, "timestamp": "2026-04-10T06:42:43.755003"}
+{"trial_number": 47, "trial_id": 109, "oof_gini": 0.5185630075394496, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5245255006780665, "timestamp": "2026-04-10T06:43:41.377428"}
+{"trial_number": 48, "trial_id": 110, "oof_gini": 0.5207493599013104, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5245255006780665, "timestamp": "2026-04-10T06:45:20.651622"}
+{"trial_number": 49, "trial_id": 111, "oof_gini": 0.5180821057910874, "oot_gini": null, "status": "COMPLETE", "best_oof_gini_so_far": 0.5245255006780665, "timestamp": "2026-04-10T06:47:12.125464"}
