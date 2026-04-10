@@ -32,9 +32,9 @@ try:
 except ImportError:
     Categorical = Double = Integer = BooleanNullable = None  # type: ignore
 
-from credit_engine.features import select_features_by_iv
-from credit_engine.model import train_xgboost_optuna
-from credit_engine.utils import gini_coefficient
+from src.features import select_features_by_iv
+from src.model import train_xgboost_optuna
+from src.utils import gini_coefficient
 
 # Constants
 _DEFAULT_AGG_PRIMITIVES = [

@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from credit_engine.features import (
+from src.features import (
     apply_feature_store,
     apply_raw_feature_store,
     build_feature_store,
@@ -1625,7 +1625,7 @@ class TestKnnTargetEncoding:
 
     def test_k_neighbours_respected(self, knn_encoding_data, monkeypatch):
         """With k=3 and 10 training rows, the KNN uses n_neighbors=3."""
-        from credit_engine.features import _NAN_SENTINEL
+        from src.features import _NAN_SENTINEL
         from sklearn.neighbors import KNeighborsClassifier
 
         # Create smaller dataset
@@ -1899,7 +1899,7 @@ class TestCombinedStore:
         Act: Load combined parquet
         Assert: Shape == (307,511 rows, >= 63 columns minimum)
         """
-        from credit_engine.features import build_combined_feature_store
+        from src.features import build_combined_feature_store
 
         X_combined = build_combined_feature_store()
         assert X_combined.shape[0] == 307511, f"Row mismatch: {X_combined.shape[0]}"
@@ -1914,7 +1914,7 @@ class TestCombinedStore:
         Act: Check for NaN in all columns
         Assert: All NaN replaced with -999 sentinel
         """
-        from credit_engine.features import build_combined_feature_store
+        from src.features import build_combined_feature_store
 
         X_combined = build_combined_feature_store()
         nan_count = X_combined.isna().sum().sum()
@@ -1927,7 +1927,7 @@ class TestCombinedStore:
         Act: Check for EXT_SOURCE_3_MISSING_FLAG column
         Assert: Column exists; values are binary (0/1)
         """
-        from credit_engine.features import build_combined_feature_store
+        from src.features import build_combined_feature_store
 
         X_combined = build_combined_feature_store()
         assert "EXT_SOURCE_3_MISSING_FLAG" in X_combined.columns, "Missing flag column not found"
@@ -1941,7 +1941,7 @@ class TestCombinedStore:
         Act: Compare row count and index
         Assert: len(combined_store) == len(y_train) == 307,511
         """
-        from credit_engine.features import build_combined_feature_store
+        from src.features import build_combined_feature_store
 
         X_combined = build_combined_feature_store()
         y_train = pd.read_parquet("data/processed/y_train.parquet")
@@ -2274,7 +2274,7 @@ class TestEngineerTimeFeatures:
                          Bureau 2005 has 1 row [-1] with STATUS [0] (clean)
                          → 3 rows in 3m, 2 DPD → rate = 2/3 ≈ 0.667
         """
-        from credit_engine.features import engineer_time_features
+        from src.features import engineer_time_features
 
         result = engineer_time_features(synthetic_bureau_tables)
 
@@ -2308,7 +2308,7 @@ class TestEngineerTimeFeatures:
           - Bureau 2004 DPD: MONTHS_BALANCE [-1, -2] with STATUS [1, 1]
           - Min MONTHS_BALANCE = -2 → -(-2) = 2.0 months ago
         """
-        from credit_engine.features import engineer_time_features
+        from src.features import engineer_time_features
 
         result = engineer_time_features(synthetic_bureau_tables)
 
@@ -2337,7 +2337,7 @@ class TestEngineerTimeFeatures:
         SK_ID_CURR 1006: DAYS_CREDIT = [-200]
           → age = 200/365.25 ≈ 0.5475 years
         """
-        from credit_engine.features import engineer_time_features
+        from src.features import engineer_time_features
 
         result = engineer_time_features(synthetic_bureau_tables)
 
@@ -2362,7 +2362,7 @@ class TestEngineerTimeFeatures:
         - No NaN values (all should be -999 sentinel)
         - All columns are numeric
         """
-        from credit_engine.features import engineer_time_features
+        from src.features import engineer_time_features
 
         result = engineer_time_features(synthetic_bureau_tables)
 
@@ -2386,7 +2386,7 @@ class TestEngineerTimeFeatures:
 
         Skips gracefully if data/bureau.csv not found.
         """
-        from credit_engine.features import engineer_time_features
+        from src.features import engineer_time_features
 
         data_dir = Path("data")
         if not (data_dir / "bureau.csv").exists() or not (data_dir / "bureau_balance.csv").exists():

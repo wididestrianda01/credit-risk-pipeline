@@ -10,10 +10,10 @@ import pandas as pd
 import pytest
 from sklearn.model_selection import train_test_split
 
-from credit_engine.data_loader import load_data
-from credit_engine.features import engineer_instalment_streaks
-from credit_engine.model import train_lightgbm_optuna
-from credit_engine.utils import gini_coefficient
+from src.data_loader import load_data
+from src.features import engineer_instalment_streaks
+from src.model import train_lightgbm_optuna
+from src.utils import gini_coefficient
 
 
 # Suppress optuna verbosity

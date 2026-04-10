@@ -28,7 +28,7 @@ to collapse N:M relationships. features.py adds 150+ derived features on top.
 
 Usage
 -----
-    from credit_engine.data_loader import load_data, build_training_frame, save_training_frame
+    from src.data_loader import load_data, build_training_frame, save_training_frame
 
     # Low-level: raw joined DataFrame
     df = load_data(data_dir="dataset/", mode="train")

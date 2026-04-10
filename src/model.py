@@ -37,7 +37,7 @@ from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from credit_engine.utils import evaluate_model, gini_coefficient, ks_statistic, plot_roc_and_pr
+from src.utils import evaluate_model, gini_coefficient, ks_statistic, plot_roc_and_pr
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -3630,7 +3630,7 @@ def filter_dfs_by_iv(
     **Security:** Any 'SK_ID' columns should be dropped by the caller before
     IV filtering (DFS entityset should drop_contains=['SK_ID']).
     """
-    from credit_engine.features import select_features_by_iv
+    from src.features import select_features_by_iv
 
     # Compute IV for all numeric features
     iv_dict = select_features_by_iv(X_dfs, y, min_iv=iv_threshold, bins=10)

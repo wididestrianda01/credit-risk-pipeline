@@ -28,7 +28,7 @@ import pytest
 
 pytest.importorskip("featuretools", reason="featuretools not installed — skip auto_features tests")
 
-from credit_engine.auto_features import (
+from src.auto_features import (
     _LEAKY_SKDPD_COLS,
     _build_entity_set,
     _load_entity_tables,
@@ -901,7 +901,7 @@ class TestDFSEvaluation:
         Act: Run correlation deduplication with default threshold
         Assert: No pairs remain with |r| > 0.90
         """
-        from credit_engine.auto_features import deduplicate_dfs_features
+        from src.auto_features import deduplicate_dfs_features
 
         # Create a small matrix with one highly correlated pair
         X = pd.DataFrame(
@@ -946,7 +946,7 @@ class TestDFSEvaluation:
         Act: Compute delta = gini_dfs - gini_raw
         Assert: Delta computed and verdict assigned correctly
         """
-        from credit_engine.auto_features import evaluate_dfs_features
+        from src.auto_features import evaluate_dfs_features
         from unittest.mock import MagicMock
         import tempfile
 
@@ -963,7 +963,7 @@ class TestDFSEvaluation:
             return model, metrics, X_test, y_test, {}
 
         monkeypatch.setattr(
-            "credit_engine.auto_features.train_xgboost_optuna",
+            "src.auto_features.train_xgboost_optuna",
             mock_train_xgboost_optuna
         )
 
@@ -1026,7 +1026,7 @@ class TestDFSEvaluation:
         Act: Call evaluate_dfs_features
         Assert: Decision logic respects threshold
         """
-        from credit_engine.auto_features import evaluate_dfs_features
+        from src.auto_features import evaluate_dfs_features
         from unittest.mock import MagicMock
         import tempfile
 
@@ -1042,7 +1042,7 @@ class TestDFSEvaluation:
             return model, {}, X_test, y_test, {}
 
         monkeypatch.setattr(
-            "credit_engine.auto_features.train_xgboost_optuna",
+            "src.auto_features.train_xgboost_optuna",
             mock_train_xgboost_optuna
         )
 
@@ -1140,7 +1140,7 @@ class TestWoodworkFix:
 
         Verifies that mode, median, and other non-numeric primitives have been removed.
         """
-        from credit_engine.auto_features import _DEFAULT_AGG_PRIMITIVES
+        from src.auto_features import _DEFAULT_AGG_PRIMITIVES
 
         # Check that primitives are exactly the numeric-only set
         expected = {"count", "mean", "sum", "std", "num_unique"}
@@ -1193,7 +1193,7 @@ class TestDFSCorrelationDedup:
         1. deduplicate_dfs_features returns a list of column names to keep
         2. Highly correlated features are removed (fewer columns after dedup)
         """
-        from credit_engine.auto_features import deduplicate_dfs_features
+        from src.auto_features import deduplicate_dfs_features
 
         # Create mock X_dfs with some highly correlated features
         train_ids = list(y_train.index)
@@ -1343,7 +1343,7 @@ class TestDFSAggregations:
 
     def test_deduplicate_dfs_features_uses_0_95_threshold(self):
         """D-28: deduplicate_dfs_features default threshold is 0.95 (not 0.90)."""
-        from credit_engine.auto_features import deduplicate_dfs_features
+        from src.auto_features import deduplicate_dfs_features
         import inspect
 
         # Check function signature

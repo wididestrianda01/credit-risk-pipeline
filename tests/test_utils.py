@@ -19,7 +19,7 @@ from sklearn.linear_model import LogisticRegression
 matplotlib.use("Agg")  # non-interactive backend — must be set before pyplot import
 import matplotlib.pyplot as plt  # noqa: E402
 
-from credit_engine.utils import (
+from src.utils import (
     evaluate_model,
     gini_coefficient,
     ks_statistic,
@@ -325,7 +325,7 @@ class TestAdversarialValidationReport:
         """Output dict must have keys: auc, shifted_features, verdict, n_train, n_test."""
         import pandas as pd
 
-        from credit_engine.utils import adversarial_validation_report
+        from src.utils import adversarial_validation_report
 
         X_train, X_test = mock_identical_dist
         X_train_df = pd.DataFrame(X_train, columns=[f"f{i}" for i in range(10)])
@@ -341,7 +341,7 @@ class TestAdversarialValidationReport:
         """When X_train and X_test are from same distribution, AUC should be < 0.60."""
         import pandas as pd
 
-        from credit_engine.utils import adversarial_validation_report
+        from src.utils import adversarial_validation_report
 
         X_train, X_test = mock_identical_dist
         X_train_df = pd.DataFrame(X_train, columns=[f"f{i}" for i in range(10)])
@@ -357,7 +357,7 @@ class TestAdversarialValidationReport:
         """AUC < 0.55 should give verdict == 'safe'."""
         import pandas as pd
 
-        from credit_engine.utils import adversarial_validation_report
+        from src.utils import adversarial_validation_report
 
         X_train, X_test = mock_identical_dist
         X_train_df = pd.DataFrame(X_train, columns=[f"f{i}" for i in range(10)])
@@ -372,7 +372,7 @@ class TestAdversarialValidationReport:
         """AUC between 0.55 and 0.65 should give verdict == 'investigate'."""
         import pandas as pd
 
-        from credit_engine.utils import adversarial_validation_report
+        from src.utils import adversarial_validation_report
 
         X_train, X_test = mock_shifted_dist
         X_train_df = pd.DataFrame(X_train, columns=[f"f{i}" for i in range(10)])
@@ -390,7 +390,7 @@ class TestAdversarialValidationReport:
         """shifted_features must be a list of feature names."""
         import pandas as pd
 
-        from credit_engine.utils import adversarial_validation_report
+        from src.utils import adversarial_validation_report
 
         X_train, X_test = mock_identical_dist
         X_train_df = pd.DataFrame(X_train, columns=[f"f{i}" for i in range(10)])
@@ -406,7 +406,7 @@ class TestAdversarialValidationReport:
         """n_train and n_test must match input shapes."""
         import pandas as pd
 
-        from credit_engine.utils import adversarial_validation_report
+        from src.utils import adversarial_validation_report
 
         X_train, X_test = mock_identical_dist
         X_train_df = pd.DataFrame(X_train, columns=[f"f{i}" for i in range(10)])
@@ -422,7 +422,7 @@ class TestAdversarialValidationReport:
         import json
         import pandas as pd
 
-        from credit_engine.utils import adversarial_validation_report
+        from src.utils import adversarial_validation_report
 
         X_train, X_test = mock_identical_dist
         X_train_df = pd.DataFrame(X_train, columns=[f"f{i}" for i in range(10)])
@@ -442,7 +442,7 @@ class TestAdversarialValidationReport:
         """AUC must always be in [0, 1]."""
         import pandas as pd
 
-        from credit_engine.utils import adversarial_validation_report
+        from src.utils import adversarial_validation_report
 
         X_train, X_test = mock_identical_dist
         X_train_df = pd.DataFrame(X_train, columns=[f"f{i}" for i in range(10)])
@@ -456,7 +456,7 @@ class TestAdversarialValidationReport:
         """Input DataFrames with different columns must raise ValueError."""
         import pandas as pd
 
-        from credit_engine.utils import adversarial_validation_report
+        from src.utils import adversarial_validation_report
 
         X_train, X_test = mock_identical_dist
         X_train_df = pd.DataFrame(X_train, columns=[f"f{i}" for i in range(10)])

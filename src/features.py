@@ -2088,7 +2088,7 @@ def build_combined_feature_store(
     """
     import json
 
-    from credit_engine.model import apply_ext_source_imputer
+    from src.model import apply_ext_source_imputer
 
     if output_path is None:
         output_path = _PROJECT_ROOT / "data" / "processed" / "X_combined_features.parquet"
@@ -2138,7 +2138,7 @@ def build_combined_feature_store(
     # Step 4: If decision="commit", load and merge DFS features
     X_combined = X_imputed.copy()
     if dfs_decision == "commit":
-        from credit_engine.auto_features import apply_featuretools_feature_store
+        from src.auto_features import apply_featuretools_feature_store
 
         X_dfs = apply_featuretools_feature_store(_PROJECT_ROOT / "data" / "processed" / "X_featuretools.parquet")
         # Ensure index alignment
@@ -2467,7 +2467,7 @@ def build_dfs_feature_store(
     AssertionError
         If final shape does not satisfy (307511, N>155).
     """
-    from credit_engine.auto_features import build_featuretools_feature_store
+    from src.auto_features import build_featuretools_feature_store
 
     data_dir = Path(data_dir)
     output_dir = _PROJECT_ROOT / "data" / "processed"

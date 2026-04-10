@@ -1,7 +1,7 @@
 """
 test_data_loader.py
 -------------------
-Unit and integration tests for credit_engine/data_loader.py.
+Unit and integration tests for src/data_loader.py.
 
 Tests use synthetic CSVs written to a temporary directory so they run
 without the real dataset and without network access.
@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from credit_engine.data_loader import (
+from src.data_loader import (
     build_training_frame,
     load_data,
     save_training_frame,
@@ -537,7 +537,7 @@ class TestInstallmentStreaks:
 
     def test_consecutive_late_streak_three_in_row(self, data_dir):
         """3 consecutive late payments → max streak = 3."""
-        from credit_engine.data_loader import _compute_installment_streaks
+        from src.data_loader import _compute_installment_streaks
 
         inst = pd.read_csv(data_dir / "installments_payments.csv")
         # Create a new applicant with 3 consecutive late payments
@@ -562,7 +562,7 @@ class TestInstallmentStreaks:
 
     def test_no_late_payments_streak_zero(self, data_dir):
         """All on-time payments → streak = 0."""
-        from credit_engine.data_loader import _compute_installment_streaks
+        from src.data_loader import _compute_installment_streaks
 
         inst_df = pd.DataFrame({
             'SK_ID_CURR': [888888, 888888, 888888],
@@ -580,7 +580,7 @@ class TestInstallmentStreaks:
 
     def test_streak_resets_on_on_time_payment(self):
         """Late, on-time, late, late → max streak = 2."""
-        from credit_engine.data_loader import _compute_installment_streaks
+        from src.data_loader import _compute_installment_streaks
 
         inst_df = pd.DataFrame({
             'SK_ID_CURR': [777777, 777777, 777777, 777777],
@@ -597,7 +597,7 @@ class TestInstallmentStreaks:
 
     def test_returns_sk_id_curr_indexed_dataframe(self):
         """Result is indexed by SK_ID_CURR."""
-        from credit_engine.data_loader import _compute_installment_streaks
+        from src.data_loader import _compute_installment_streaks
 
         inst_df = pd.DataFrame({
             'SK_ID_CURR': [666666, 666666],
@@ -616,7 +616,7 @@ class TestInstallmentStreaks:
 
     def test_months_since_last_late_computed(self):
         """Most recent late payment at DAYS_INSTALMENT=-60 → months_since ≈ 2."""
-        from credit_engine.data_loader import _compute_installment_streaks
+        from src.data_loader import _compute_installment_streaks
 
         inst_df = pd.DataFrame({
             'SK_ID_CURR': [555555, 555555, 555555],
@@ -639,7 +639,7 @@ class TestBureauDpdRecency:
 
     def test_clean_bureau_returns_nan_months_since(self):
         """All STATUS in {'C', 'X', '0'} → months_since_last_dpd = NaN."""
-        from credit_engine.data_loader import _compute_bureau_dpd_recency
+        from src.data_loader import _compute_bureau_dpd_recency
 
         bbal_df = pd.DataFrame({
             'SK_ID_BUREAU': [500001, 500001, 500001],
@@ -655,7 +655,7 @@ class TestBureauDpdRecency:
 
     def test_dpd_recency_computed_correctly(self):
         """STATUS='1' at MONTHS_BALANCE=-1 → months_since ≈ 1."""
-        from credit_engine.data_loader import _compute_bureau_dpd_recency
+        from src.data_loader import _compute_bureau_dpd_recency
 
         bbal_df = pd.DataFrame({
             'SK_ID_BUREAU': [500002, 500002],
@@ -672,7 +672,7 @@ class TestBureauDpdRecency:
 
     def test_last_3m_rate_computed(self):
         """2 out of 3 most recent months have DPD → rate ≈ 0.667."""
-        from credit_engine.data_loader import _compute_bureau_dpd_recency
+        from src.data_loader import _compute_bureau_dpd_recency
 
         bbal_df = pd.DataFrame({
             'SK_ID_BUREAU': [500003, 500003, 500003],
@@ -689,7 +689,7 @@ class TestBureauDpdRecency:
 
     def test_dpd_trajectory_worsening(self):
         """Last 6m DPD rate > prior 6m rate → trajectory > 0."""
-        from credit_engine.data_loader import _compute_bureau_dpd_recency
+        from src.data_loader import _compute_bureau_dpd_recency
 
         bbal_df = pd.DataFrame({
             'SK_ID_BUREAU': [500004] * 12,
@@ -712,7 +712,7 @@ class TestPaymentTrend:
 
     def test_increasing_payments_positive_slope(self):
         """Increasing AMT_PAYMENT over time → slope > 0."""
-        from credit_engine.data_loader import _compute_payment_amount_trend
+        from src.data_loader import _compute_payment_amount_trend
 
         # DAYS_ENTRY_PAYMENT is negative and increases over time (becomes less negative).
         # Most negative = oldest, least negative = newest.
@@ -732,7 +732,7 @@ class TestPaymentTrend:
 
     def test_fewer_than_3_points_slope_zero(self):
         """< 3 data points → slope = 0.0."""
-        from credit_engine.data_loader import _compute_payment_amount_trend
+        from src.data_loader import _compute_payment_amount_trend
 
         inst_df = pd.DataFrame({
             'SK_ID_CURR': [100102, 100102],
@@ -750,7 +750,7 @@ class TestPaymentTrend:
 
     def test_returns_sk_id_curr_indexed(self):
         """Result indexed by SK_ID_CURR with 'inst_payment_trend_slope' column."""
-        from credit_engine.data_loader import _compute_payment_amount_trend
+        from src.data_loader import _compute_payment_amount_trend
 
         inst_df = pd.DataFrame({
             'SK_ID_CURR': [100103, 100103, 100103],

@@ -33,7 +33,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from credit_engine.model import (
+from src.model import (
     _AverageEnsemble,
     _TemporalCV,
     _make_cv,
@@ -92,7 +92,7 @@ def _redirect_hpo_progress_log(monkeypatch, tmp_path):
     the production reports/hpo_progress.jsonl, which would contaminate HPO
     monitoring dashboards for real training runs.
     """
-    import credit_engine.model as _model
+    import src.model as _model
     monkeypatch.setattr(_model, "_HPO_PROGRESS_LOG_PATH", str(tmp_path / "hpo_progress.jsonl"))
 
 
@@ -139,7 +139,7 @@ def mock_data_parquet_path(mock_data, tmp_path_factory):
     Returns the path string to the parquet file. Used by tests that need
     the new path-based API for train_xgboost_optuna().
     """
-    import credit_engine.model as model_module
+    import src.model as model_module
 
     X, y = mock_data
     X_with_target = X.copy()
@@ -444,7 +444,7 @@ def test_threshold_search_uses_cv_validation_only(benchmark_splits, monkeypatch)
     call. Each call must receive a fold-sized slice (< len(X_train)),
     confirming the function never sees the test set.
     """
-    import credit_engine.model as model_module
+    import src.model as model_module
 
     X_train, y_train, X_test, y_test = benchmark_splits
     call_sizes: list[int] = []
@@ -466,7 +466,7 @@ def test_threshold_search_uses_cv_validation_only(benchmark_splits, monkeypatch)
 
 def test_benchmark_csv_saved(benchmark_splits, tmp_path, monkeypatch):
     """benchmark_imbalance_strategies saves results to reports/imbalance_benchmark.csv."""
-    import credit_engine.model as model_module
+    import src.model as model_module
 
     # Redirect the save path to tmp_path so tests don't pollute the working tree
     monkeypatch.setattr(model_module, "_BENCHMARK_REPORT_PATH", str(tmp_path / "imbalance_benchmark.csv"))
@@ -518,7 +518,7 @@ def xgb_optuna_result(tmp_path_factory):
        deadlocks when multiple sequential fits run in the same process.
     """
     import optuna as _optuna
-    import credit_engine.model as _model
+    import src.model as _model
     import xgboost as _xgb
 
     mp = pytest.MonkeyPatch()
@@ -691,8 +691,8 @@ def test_oof_gini_consistency(mock_data_parquet_path, monkeypatch):
     Note: OOF predictions only include samples from X_train (after OOT+test splits).
     So we compute expected Gini only on the corresponding y_train subset.
     """
-    from credit_engine.utils import gini_coefficient
-    from credit_engine.model import _TEMPORAL_SORT_COL, _TEST_SIZE
+    from src.utils import gini_coefficient
+    from src.model import _TEMPORAL_SORT_COL, _TEST_SIZE
     import optuna as _optuna
     _orig = _optuna.create_study
     monkeypatch.setattr(_optuna, "create_study", lambda **kw: _orig(**{k: v for k, v in kw.items() if k != "storage"}))
@@ -979,7 +979,7 @@ def test_train_lightgbm_optuna_best_params_values_finite(lgb_optuna_result):
 
 def test_train_lightgbm_optuna_model_saved(mock_data, tmp_path, monkeypatch):
     """Model is saved to disk at the configured path."""
-    import credit_engine.model as model_module
+    import src.model as model_module
     monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb.pkl"))
     monkeypatch.setattr(model_module, "_LGB_OPTUNA_PARAMS_PATH", str(tmp_path / "lgb.json"))
     monkeypatch.setattr(model_module, "_LGB_OPTUNA_FIGURE_PATH", str(tmp_path / "lgb_roc.png"))
@@ -991,7 +991,7 @@ def test_train_lightgbm_optuna_model_saved(mock_data, tmp_path, monkeypatch):
 
 def test_train_lightgbm_optuna_params_json_valid(mock_data, tmp_path, monkeypatch):
     """Params JSON is valid, deserializable, and contains all 9 keys."""
-    import credit_engine.model as model_module
+    import src.model as model_module
     monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb.pkl"))
     params_path = tmp_path / "lgb.json"
     monkeypatch.setattr(model_module, "_LGB_OPTUNA_PARAMS_PATH", str(params_path))
@@ -1007,7 +1007,7 @@ def test_train_lightgbm_optuna_params_json_valid(mock_data, tmp_path, monkeypatc
 
 def test_train_lightgbm_optuna_model_round_trip(mock_data, tmp_path, monkeypatch):
     """Save → load → predict_proba produces identical output."""
-    import credit_engine.model as model_module
+    import src.model as model_module
     model_path = tmp_path / "lgb.pkl"
     monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(model_path))
     monkeypatch.setattr(model_module, "_LGB_OPTUNA_PARAMS_PATH", str(tmp_path / "lgb.json"))
@@ -1084,7 +1084,7 @@ def test_train_lightgbm_optuna_warns_when_temporal_col_absent(mock_data, tmp_pat
     the warning, LGB silently falls back to StratifiedKFold and CV Gini can be
     inflated by 0.02–0.05, misleading Optuna into over-tuning.
     """
-    import credit_engine.model as model_module
+    import src.model as model_module
 
     monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb.pkl"))
     monkeypatch.setattr(
@@ -1112,7 +1112,7 @@ def test_train_lightgbm_optuna_warns_when_temporal_col_absent(mock_data, tmp_pat
 
 def test_train_lightgbm_optuna_no_warn_when_temporal_col_present(mock_data, tmp_path, monkeypatch):
     """No UserWarning about temporal fallback when _TEMPORAL_SORT_COL is in X."""
-    import credit_engine.model as model_module
+    import src.model as model_module
 
     monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb.pkl"))
     monkeypatch.setattr(
@@ -1149,7 +1149,7 @@ def test_train_lightgbm_optuna_scale_pos_weight_path(mock_data, tmp_path, monkey
     instead of is_unbalance (which compresses leaf outputs toward majority-class
     mean, reducing rank separation on skewed credit data).
     """
-    import credit_engine.model as model_module
+    import src.model as model_module
 
     monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb.pkl"))
     monkeypatch.setattr(
@@ -1177,7 +1177,7 @@ def test_train_lightgbm_optuna_num_leaves_max_respected(mock_data, tmp_path, mon
     Confirms the raw-feature path's wider num_leaves ceiling (300) is correctly
     propagated through the objective — tested here with a tight ceiling of 5.
     """
-    import credit_engine.model as model_module
+    import src.model as model_module
 
     monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb.pkl"))
     monkeypatch.setattr(
@@ -1238,7 +1238,7 @@ def calibration_result(calibration_inputs, tmp_path_factory):
     tmp_path_factory provides a module-scoped temp directory, unlike
     tmp_path which is function-scoped and incompatible with module fixtures.
     """
-    import credit_engine.model as model_module
+    import src.model as model_module
 
     tmp = tmp_path_factory.mktemp("calibration")
     model_module._CALIBRATED_MODEL_PATH = str(tmp / "lgb_calibrated.pkl")
@@ -1303,7 +1303,7 @@ def test_calibrate_model_probabilities_sum_to_one(calibration_result, calibratio
 
 def test_calibrate_model_saves_file(calibration_inputs, tmp_path, monkeypatch):
     """calibrate_model saves a pickle file at the configured path."""
-    import credit_engine.model as model_module
+    import src.model as model_module
 
     out_path = tmp_path / "cal.pkl"
     monkeypatch.setattr(model_module, "_CALIBRATED_MODEL_PATH", str(out_path))
@@ -1316,7 +1316,7 @@ def test_calibrate_model_saves_file(calibration_inputs, tmp_path, monkeypatch):
 
 def test_calibrate_model_saved_file_is_loadable(calibration_inputs, tmp_path, monkeypatch):
     """Saved calibrated model round-trips via joblib and predicts correctly."""
-    import credit_engine.model as model_module
+    import src.model as model_module
 
     out_path = tmp_path / "cal.pkl"
     monkeypatch.setattr(model_module, "_CALIBRATED_MODEL_PATH", str(out_path))
@@ -1333,7 +1333,7 @@ def test_calibrate_model_saved_file_is_loadable(calibration_inputs, tmp_path, mo
 
 def test_calibrate_model_no_stdout(calibration_inputs, tmp_path, monkeypatch, capsys):
     """calibrate_model must not write to stdout."""
-    import credit_engine.model as model_module
+    import src.model as model_module
 
     monkeypatch.setattr(model_module, "_CALIBRATED_MODEL_PATH", str(tmp_path / "cal.pkl"))
     monkeypatch.setattr(model_module, "_CALIBRATION_FIGURE_PATH", str(tmp_path / "fig.png"))
@@ -1412,7 +1412,7 @@ class TestEnsemble:
 
 def test_calibrate_model_isotonic_method(calibration_inputs, tmp_path, monkeypatch):
     """calibrate_model with method='isotonic' returns a valid calibrated model."""
-    import credit_engine.model as model_module
+    import src.model as model_module
 
     monkeypatch.setattr(model_module, "_CALIBRATED_MODEL_PATH", str(tmp_path / "iso.pkl"))
     monkeypatch.setattr(model_module, "_CALIBRATION_FIGURE_PATH", str(tmp_path / "iso_fig.png"))
@@ -1571,7 +1571,7 @@ class TestXGBoostExtendedSearchSpace:
     @pytest.fixture(scope="class")
     def xgb_best_params(self, tmp_path_factory):
         """Run train_xgboost_optuna once and return best_params dict."""
-        import credit_engine.model as model_module
+        import src.model as model_module
         import optuna as _optuna
         tmp = tmp_path_factory.mktemp("xgb_ext")
         mp = pytest.MonkeyPatch()
@@ -1624,7 +1624,7 @@ class TestXGBoostExtendedSearchSpace:
 
     def test_min_child_weight_constant_extended_to_15(self):
         """_XGB_MIN_CHILD_WEIGHT_MAX must be extended to at least 15."""
-        from credit_engine.model import _XGB_MIN_CHILD_WEIGHT_MAX
+        from src.model import _XGB_MIN_CHILD_WEIGHT_MAX
         assert _XGB_MIN_CHILD_WEIGHT_MAX >= 15, (
             f"_XGB_MIN_CHILD_WEIGHT_MAX={_XGB_MIN_CHILD_WEIGHT_MAX} — "
             "must be >= 15 per subagent recommendation (100-sample leaf rule)"
@@ -1661,7 +1661,7 @@ class TestEnsembleTemporalCV:
 
     def test_ensemble_uses_temporal_cv_when_sort_col_present(self, monkeypatch):
         """_make_cv must receive non-None groups_train when prev_days_decision_mean is in X."""
-        import credit_engine.model as model_module
+        import src.model as model_module
 
         received_groups: list = []
         original_make_cv = model_module._make_cv
@@ -1683,7 +1683,7 @@ class TestEnsembleTemporalCV:
 
     def test_ensemble_falls_back_to_stratified_when_no_sort_col(self, monkeypatch):
         """_make_cv must receive groups_train=None when prev_days_decision_mean is absent."""
-        import credit_engine.model as model_module
+        import src.model as model_module
 
         received_groups: list = []
         original_make_cv = model_module._make_cv
@@ -1711,7 +1711,7 @@ class TestEnsembleTemporalCV:
 @pytest.fixture(scope="module")
 def ensemble_workflow_result(tmp_path_factory):
     """Run run_ensemble_workflow once per module using default (non-HPO) params."""
-    import credit_engine.model as model_module
+    import src.model as model_module
     tmp = tmp_path_factory.mktemp("ensemble_wf")
     mp = pytest.MonkeyPatch()
     mp.setattr(model_module, "_ENSEMBLE_WORKFLOW_MODEL_PATH", str(tmp / "ens.pkl"))
@@ -1764,7 +1764,7 @@ class TestRunEnsembleWorkflow:
         self, tmp_path, monkeypatch
     ):
         """Ensemble model file is written when improvement >= _ENSEMBLE_PERSIST_THRESHOLD."""
-        import credit_engine.model as model_module
+        import src.model as model_module
         out_path = tmp_path / "ens.pkl"
         weights_path = tmp_path / "weights.json"
         monkeypatch.setattr(model_module, "_ENSEMBLE_WORKFLOW_MODEL_PATH", str(out_path))
@@ -1793,7 +1793,7 @@ class TestRunEnsembleWorkflow:
         self, tmp_path, monkeypatch
     ):
         """Ensemble model file is NOT written when improvement < threshold."""
-        import credit_engine.model as model_module
+        import src.model as model_module
         out_path = tmp_path / "ens_skip.pkl"
         weights_path = tmp_path / "weights_skip.json"
         monkeypatch.setattr(model_module, "_ENSEMBLE_WORKFLOW_MODEL_PATH", str(out_path))
@@ -1818,7 +1818,7 @@ class TestRunEnsembleWorkflow:
 
     def test_weights_json_written_when_persisted(self, tmp_path, monkeypatch):
         """Ensemble weights JSON is written alongside the model when persisted."""
-        import credit_engine.model as model_module
+        import src.model as model_module
         out_path = tmp_path / "ens_w.pkl"
         weights_path = tmp_path / "weights_w.json"
         monkeypatch.setattr(model_module, "_ENSEMBLE_WORKFLOW_MODEL_PATH", str(out_path))
@@ -1844,7 +1844,7 @@ class TestRunEnsembleWorkflow:
 
     def test_accepts_X_raw_parameter(self, tmp_path, monkeypatch):
         """run_ensemble_workflow must accept optional X_raw parameter."""
-        import credit_engine.model as model_module
+        import src.model as model_module
         out_path = tmp_path / "ens_raw.pkl"
         weights_path = tmp_path / "weights_raw.json"
         monkeypatch.setattr(model_module, "_ENSEMBLE_WORKFLOW_MODEL_PATH", str(out_path))
@@ -1868,7 +1868,7 @@ class TestRunEnsembleWorkflow:
 
     def test_X_raw_none_fallback_to_X(self, tmp_path, monkeypatch):
         """When X_raw=None (default), tree models use X (backward compatible)."""
-        import credit_engine.model as model_module
+        import src.model as model_module
         out_path = tmp_path / "ens_fallback.pkl"
         weights_path = tmp_path / "weights_fallback.json"
         monkeypatch.setattr(model_module, "_ENSEMBLE_WORKFLOW_MODEL_PATH", str(out_path))
@@ -1892,7 +1892,7 @@ class TestRunEnsembleWorkflow:
 
     def test_X_raw_used_by_tree_models(self, tmp_path, monkeypatch):
         """When X_raw is provided, tree models receive X_raw (not X)."""
-        import credit_engine.model as model_module
+        import src.model as model_module
         out_path = tmp_path / "ens_raw_verify.pkl"
         weights_path = tmp_path / "weights_raw_verify.json"
         monkeypatch.setattr(model_module, "_ENSEMBLE_WORKFLOW_MODEL_PATH", str(out_path))
@@ -1926,13 +1926,13 @@ class TestRunEnsembleWorkflow:
 # Priority 2.2 — train_catboost_optuna() + prepare_catboost_features()
 # ---------------------------------------------------------------------------
 
-from credit_engine.model import train_catboost_optuna, prepare_catboost_features  # noqa: E402
+from src.model import train_catboost_optuna, prepare_catboost_features  # noqa: E402
 
 
 @pytest.fixture(scope="module")
 def catboost_result(tmp_path_factory):
     """Run train_catboost_optuna once per module (n_trials=2 for speed)."""
-    import credit_engine.model as model_module
+    import src.model as model_module
     tmp = tmp_path_factory.mktemp("catboost")
     mp = pytest.MonkeyPatch()
     mp.setattr(model_module, "_CAT_MODEL_PATH", str(tmp / "cat.pkl"))
@@ -1983,7 +1983,7 @@ class TestCatBoostOptuna:
 
     def test_model_artifact_saved(self, catboost_result, tmp_path, monkeypatch):
         """CatBoost model file is persisted to disk."""
-        import credit_engine.model as model_module
+        import src.model as model_module
         out = tmp_path / "cat.pkl"
         monkeypatch.setattr(model_module, "_CAT_MODEL_PATH", str(out))
         monkeypatch.setattr(model_module, "_CAT_PARAMS_PATH", str(tmp_path / "p.json"))
@@ -1997,7 +1997,7 @@ class TestCatBoostOptuna:
 
     def test_params_artifact_saved(self, catboost_result, tmp_path, monkeypatch):
         """CatBoost params JSON is persisted to disk."""
-        import credit_engine.model as model_module
+        import src.model as model_module
         params_path = tmp_path / "cat_p.json"
         monkeypatch.setattr(model_module, "_CAT_MODEL_PATH", str(tmp_path / "cat.pkl"))
         monkeypatch.setattr(model_module, "_CAT_PARAMS_PATH", str(params_path))
@@ -2011,7 +2011,7 @@ class TestCatBoostOptuna:
 
     def test_no_stdout(self, tmp_path, monkeypatch, capsys):
         """train_catboost_optuna must not write to stdout."""
-        import credit_engine.model as model_module
+        import src.model as model_module
         monkeypatch.setattr(model_module, "_CAT_MODEL_PATH", str(tmp_path / "cat.pkl"))
         monkeypatch.setattr(model_module, "_CAT_PARAMS_PATH", str(tmp_path / "p.json"))
         monkeypatch.setattr(model_module, "_CAT_FIGURE_PATH", str(tmp_path / "f.png"))
@@ -2063,7 +2063,7 @@ class TestCalibrateModelRawPath:
         Gini is a rank-based metric, so any monotone increasing transform
         (like Platt sigmoid) preserves the ranking and hence Gini.
         """
-        import credit_engine.model as model_module
+        import src.model as model_module
 
         # Train an uncalibrated model on mock raw features
         X, y = mock_data
@@ -2078,7 +2078,7 @@ class TestCalibrateModelRawPath:
 
         # Capture uncalibrated Gini before calibration
         y_prob_uncal = pipeline.predict_proba(X_test)[:, 1]
-        from credit_engine.utils import gini_coefficient
+        from src.utils import gini_coefficient
         gini_uncal = gini_coefficient(y_test, y_prob_uncal)
 
         # Calibrate and check Gini is preserved (monotone transform)
@@ -2104,7 +2104,7 @@ class TestCalibrateModelRawPath:
 
     def test_calibrate_model_raw_improves_brier(self, mock_data, monkeypatch):
         """Calibrated model has lower Brier score than uncalibrated."""
-        import credit_engine.model as model_module
+        import src.model as model_module
         from sklearn.metrics import brier_score_loss
 
         X, y = mock_data
@@ -2142,7 +2142,7 @@ class TestCalibrateModelRawPath:
         self, mock_data, monkeypatch
     ):
         """calibrate_model() output probabilities are in [0, 1]."""
-        import credit_engine.model as model_module
+        import src.model as model_module
 
         X, y = mock_data
         from sklearn.model_selection import train_test_split as tts
@@ -2220,7 +2220,7 @@ class TestLGBApiExtensions:
 
     def test_boosting_type_gbdt_trains_without_error(self, mock_raw_data, tmp_path, monkeypatch):
         """boosting_type='gbdt' (default) trains successfully on mock data."""
-        import credit_engine.model as model_module
+        import src.model as model_module
         X, y = mock_raw_data
         monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb.pkl"))
         monkeypatch.setattr(model_module, "_LGB_OPTUNA_PARAMS_PATH", str(tmp_path / "params.json"))
@@ -2233,7 +2233,7 @@ class TestLGBApiExtensions:
 
     def test_boosting_type_dart_trains_without_error(self, mock_raw_data, tmp_path, monkeypatch):
         """boosting_type='dart' trains successfully; early stopping skipped gracefully."""
-        import credit_engine.model as model_module
+        import src.model as model_module
         X, y = mock_raw_data
         monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb_dart.pkl"))
         monkeypatch.setattr(model_module, "_LGB_OPTUNA_PARAMS_PATH", str(tmp_path / "params_dart.json"))
@@ -2247,7 +2247,7 @@ class TestLGBApiExtensions:
 
     def test_boosting_type_goss_trains_without_error(self, mock_raw_data, tmp_path, monkeypatch):
         """boosting_type='goss' trains successfully and adds top_rate/other_rate."""
-        import credit_engine.model as model_module
+        import src.model as model_module
         X, y = mock_raw_data
         monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb_goss.pkl"))
         monkeypatch.setattr(model_module, "_LGB_OPTUNA_PARAMS_PATH", str(tmp_path / "params_goss.json"))
@@ -2280,7 +2280,7 @@ class TestLGBApiExtensions:
         self, mock_raw_data, tmp_path, monkeypatch
     ):
         """Valid monotone_constraints dict trains successfully."""
-        import credit_engine.model as model_module
+        import src.model as model_module
         X, y = mock_raw_data
         monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb_mc.pkl"))
         monkeypatch.setattr(model_module, "_LGB_OPTUNA_PARAMS_PATH", str(tmp_path / "params_mc.json"))
@@ -2573,7 +2573,7 @@ class TestExtendedHPOWave0:
 
         Expected Failure (RED): ImportError or AttributeError (function not yet defined)
         """
-        from credit_engine.model import train_lightgbm_extended_hpo
+        from src.model import train_lightgbm_extended_hpo
 
         X, y = mock_data
 
@@ -2606,7 +2606,7 @@ class TestExtendedHPOWave0:
 
         Expected Failure (RED): ImportError or AttributeError (function not yet defined)
         """
-        from credit_engine.model import apply_target_encoding_fold_safe
+        from src.model import apply_target_encoding_fold_safe
 
         X, y = mock_data
 
@@ -2650,7 +2650,7 @@ class TestExtendedHPOWave0:
 
         Expected Failure (RED): ImportError or AttributeError (function not yet defined)
         """
-        from credit_engine.model import train_catboost_extended_hpo
+        from src.model import train_catboost_extended_hpo
 
         X, y = mock_data
 
@@ -2695,7 +2695,7 @@ class TestExtendedHPOWave0:
 
         Expected Failure (RED): ImportError or AttributeError (function not yet defined)
         """
-        from credit_engine.model import filter_dfs_by_iv
+        from src.model import filter_dfs_by_iv
 
         X, y = mock_data
 
@@ -2726,7 +2726,7 @@ class TestExtendedHPOWave0:
         assert X_filtered.shape[1] < X_dfs.shape[1], "No features were filtered"
 
         # Verify all remaining features have IV >= 0.1 (spot check a few)
-        from credit_engine.features import compute_woe_iv
+        from src.features import compute_woe_iv
 
         for col in X_filtered.columns[:5]:  # Check first 5
             _, iv = compute_woe_iv(X_filtered, col, y)
@@ -2750,7 +2750,7 @@ class TestExtendedHPOWave0:
 
         Expected Failure (RED): NotImplementedError from stub function being called
         """
-        from credit_engine.model import train_lightgbm_extended_hpo
+        from src.model import train_lightgbm_extended_hpo
 
         X, y = mock_data
 
@@ -2774,7 +2774,7 @@ class TestExtendedHPOWave0:
 
 def test_xgboost_study_name_is_v8():
     """D-13: Optuna study name is xgboost_raw_v8 (NaN-init OOF fix + raw probs, no rank-norm)."""
-    from credit_engine.model import _XGB_RAW_STUDY_NAME
+    from src.model import _XGB_RAW_STUDY_NAME
     assert _XGB_RAW_STUDY_NAME == "xgboost_raw_v8"
 
 
@@ -2845,7 +2845,7 @@ class TestTrainXGBoostOptunaRawFeatures:
         trials from contaminating the production SQLite study DB.
         Also redirect hpo_progress.jsonl writes to tmp_path."""
         import optuna as _optuna
-        import credit_engine.model as _model
+        import src.model as _model
         _orig = _optuna.create_study
         monkeypatch.setattr(
             _optuna,
@@ -2912,7 +2912,7 @@ class TestTrainXGBoostOptunaRawFeatures:
         - train_xgboost_optuna raises ValueError with message about TEMPORAL_SORT_COL
         - Error is not suppressed; bubbles up to caller
         """
-        import credit_engine.model as model_module
+        import src.model as model_module
 
         # Create a parquet without the temporal sort column
         rng = np.random.default_rng(42)
