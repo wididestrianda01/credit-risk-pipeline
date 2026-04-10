@@ -2594,7 +2594,7 @@ class TestExtendedHPOWave0:
         assert not X_train_enc.isna().any().any(), "NaN found in encoded X_train"
         assert not X_test_enc.isna().any().any(), "NaN found in encoded X_test"
 
-def test_dfs_iv_filter_removes_low_signal(self, mock_data):
+    def test_dfs_iv_filter_removes_low_signal(self, mock_data):
         """
         DFS feature filtering by Information Value threshold.
 
