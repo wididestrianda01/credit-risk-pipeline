@@ -277,6 +277,46 @@ _ENSEMBLE_3MODEL_WORKFLOW_WEIGHTS_PATH: Path = _PROJECT_ROOT / "reports" / "ense
 # Extended HPO (Wave 0) — Phase 4.1
 # Per-model extended hyperparameter optimization with higher trial budgets
 # and per-model feature pipelines (raw features, target encoding, DFS).
+# LightGBM HPO on Raw Features (Phase 04.2.4) — 3-store × 3-strategy ablation
+# Fixed n_estimators ceiling with early stopping; 50 trials per run
+_LGB_RAW_N_ESTIMATORS: int = 1000  # Fixed ceiling, not tuned (per D-07)
+_LGB_OPTUNA_N_TRIALS: int = 50     # Per D-10
+_LGB_EARLY_STOPPING_ROUNDS: int = 50  # From D-07
+_LGB_METRIC: str = "auc"  # From D-09 — CRITICAL: not "binary_logloss"
+
+# Feature stores for 3-store ablation (D-01)
+_FEATURE_STORES: dict[str, Path] = {
+    "X_train": _PROJECT_ROOT / "data" / "processed" / "X_train.parquet",
+    "X_tree_raw": _PROJECT_ROOT / "data" / "processed" / "X_tree_raw.parquet",
+    "X_tree_dfs": _PROJECT_ROOT / "data" / "processed" / "X_tree_dfs.parquet",
+}
+
+# Imbalance strategies for 3-strategy ablation (D-02)
+_IMBALANCE_STRATEGIES: list[str] = ["scale_pos_weight", "is_unbalance", "smote"]
+_STORE_TAGS: list[str] = ["Xtrain", "Xtreeraw", "Xtreeds"]  # For study naming (per D-17)
+
+# LightGBM HPO search space ceiling constants (per D-10, lgb.md)
+_LGB_LEARNING_RATE_MIN: float = 0.005  # From D-11
+_LGB_LEARNING_RATE_MAX: float = 0.1
+_LGB_NUM_LEAVES_MIN: int = 20
+_LGB_NUM_LEAVES_MAX: int = 300  # From D-10
+_LGB_MAX_DEPTH_MIN: int = 3     # From D-10 (lgb.md)
+_LGB_MAX_DEPTH_MAX: int = 8
+_LGB_MIN_CHILD_SAMPLES_MIN: int = 50   # From D-10 (expanded from 5)
+_LGB_MIN_CHILD_SAMPLES_MAX: int = 500  # From D-10 (expanded from 100)
+_LGB_MIN_CHILD_WEIGHT_MIN: float = 1e-4  # From D-10 (new)
+_LGB_MIN_CHILD_WEIGHT_MAX: float = 1e-1
+_LGB_SUBSAMPLE_MIN: float = 0.5
+_LGB_SUBSAMPLE_MAX: float = 1.0
+_LGB_COLSAMPLE_BYTREE_MIN: float = 0.5
+_LGB_COLSAMPLE_BYTREE_MAX: float = 1.0
+_LGB_REG_ALPHA_MIN: float = 1e-4  # From D-10
+_LGB_REG_ALPHA_MAX: float = 10.0
+_LGB_REG_LAMBDA_MIN: float = 1e-4  # From D-10
+_LGB_REG_LAMBDA_MAX: float = 10.0
+_LGB_PATH_SMOOTH_MIN: float = 0.0  # From D-10
+_LGB_PATH_SMOOTH_MAX: float = 10.0
+
 _LGB_EXTENDED_OPTUNA_N_TRIALS: int = 150
 
 # LightGBM Raw Features (Continuous-Only) HPO — search space bounds
@@ -3007,165 +3047,6 @@ def apply_ext_source_imputer(
 # ---------------------------------------------------------------------------
 # Wave 0 Stubs (Phase 4.1) — Extended HPO, target encoding, DFS
 # ---------------------------------------------------------------------------
-
-def train_lightgbm_extended_hpo(
-    X: pd.DataFrame,
-    y: pd.Series,
-    n_trials: int = _LGB_EXTENDED_OPTUNA_N_TRIALS,
-) -> object:
-    """
-    Extended HPO for LightGBM on raw continuous features (150 trials).
-
-    Non-regression: warm-start from Phase 4 best params, ensure final Gini >= 0.5514.
-    Optuna study persists in SQLite DB — resumable across runs.
-
-    Parameters
-    ----------
-    X : pd.DataFrame
-        Feature matrix (raw continuous features, 63 columns).
-    y : pd.Series
-        Binary target series.
-    n_trials : int
-        Number of Optuna trials (default 150).
-
-    Returns
-    -------
-    LGBMClassifier
-        Fitted LightGBM classifier (retrained on full X, y with best params).
-
-    Raises
-    ------
-    RuntimeError
-        If final best Gini < 0.5514 (Phase 4 LGB baseline).
-    """
-    import optuna
-    from lightgbm import LGBMClassifier
-    import lightgbm as lgb
-
-    # Auto-detect temporal CV groups from _TEMPORAL_SORT_COL
-    # If not present, use standard stratified CV (for unit tests with mock data)
-    if _TEMPORAL_SORT_COL in X.columns:
-        groups = X[_TEMPORAL_SORT_COL].values
-    else:
-        groups = None
-
-    # Resume or create Optuna study
-    study_name = "lightgbm_extended_study"
-    storage = f"sqlite:///{_OPTUNA_DB_PATH}"
-    try:
-        study = optuna.load_study(study_name=study_name, storage=storage, load_if_exists=True)
-        if len(study.trials) > 0:
-            print(f"Loaded existing LGB study with {len(study.trials)} trials")
-        else:
-            # Study exists but is empty; warm-start with Phase 4 best params
-            prior_best = {
-                'num_leaves': 127,
-                'max_depth': 8,
-                'learning_rate': 0.1,
-                'n_estimators': 350,
-                'min_child_samples': 20,
-                'subsample': 0.9,
-                'colsample_bytree': 0.8,
-                'reg_alpha': 0.1,
-                'reg_lambda': 9.5
-            }
-            study.enqueue_trial(prior_best)
-            print("Created new LGB study, warm-started with Phase 4 best params")
-    except Exception:
-        # Create new study with full initialization
-        study = optuna.create_study(
-            study_name=study_name,
-            storage=storage,
-            direction="maximize",
-            sampler=optuna.samplers.TPESampler(seed=42),
-            pruner=optuna.pruners.MedianPruner(n_warmup_steps=10, n_startup_trials=10),
-            load_if_exists=True
-        )
-        # Warm-start with Phase 4 best params (LGB baseline from final_model_eval.json)
-        prior_best = {
-            'num_leaves': 127,
-            'max_depth': 8,
-            'learning_rate': 0.1,
-            'n_estimators': 350,
-            'min_child_samples': 20,
-            'subsample': 0.9,
-            'colsample_bytree': 0.8,
-            'reg_alpha': 0.1,
-            'reg_lambda': 9.5
-        }
-        if len(study.trials) == 0:
-            study.enqueue_trial(prior_best)
-        print("Created new LGB study, warm-started with Phase 4 best params")
-
-    # Phase 4 baseline for non-regression check (STRICT)
-    PHASE4_LGB_BASELINE = 0.5514
-
-    # Define objective function
-    def objective(trial):
-        params = {
-            'num_leaves': trial.suggest_int('num_leaves', _LGB_RAW_NUM_LEAVES_MIN, _LGB_RAW_NUM_LEAVES_MAX),
-            'max_depth': trial.suggest_int('max_depth', _LGB_RAW_MAX_DEPTH_MIN, _LGB_RAW_MAX_DEPTH_MAX),
-            'learning_rate': trial.suggest_float('learning_rate', _LGB_RAW_LEARNING_RATE_MIN, _LGB_RAW_LEARNING_RATE_MAX, log=True),
-            'n_estimators': trial.suggest_int('n_estimators', _LGB_RAW_N_ESTIMATORS_MIN, _LGB_RAW_N_ESTIMATORS_MAX),
-            'min_child_samples': trial.suggest_int('min_child_samples', _LGB_RAW_MIN_CHILD_SAMPLES_MIN, _LGB_RAW_MIN_CHILD_SAMPLES_MAX),
-            'subsample': trial.suggest_float('subsample', _LGB_RAW_SUBSAMPLE_MIN, _LGB_RAW_SUBSAMPLE_MAX),
-            'colsample_bytree': trial.suggest_float('colsample_bytree', _LGB_RAW_COLSAMPLE_BYTREE_MIN, _LGB_RAW_COLSAMPLE_BYTREE_MAX),
-            'reg_alpha': trial.suggest_float('reg_alpha', _LGB_RAW_REG_ALPHA_MIN, _LGB_RAW_REG_ALPHA_MAX, log=True),
-            'reg_lambda': trial.suggest_float('reg_lambda', _LGB_RAW_REG_LAMBDA_MIN, _LGB_RAW_REG_LAMBDA_MAX, log=True),
-            'is_unbalance': True,
-            'verbose': -1,
-        }
-
-        # Cross-validated AUC with temporal CV
-        cv = _make_cv(groups_train=groups, n_splits=_CV_N_SPLITS)
-        auc_scores = []
-        for fold_idx, (train_idx, val_idx) in enumerate(cv.split(X, y)):
-            X_tr, X_va = X.iloc[train_idx], X.iloc[val_idx]
-            y_tr, y_va = y.iloc[train_idx], y.iloc[val_idx]
-
-            # Train LGB with early stopping
-            lgb_model = LGBMClassifier(**params, callbacks=[lgb.early_stopping(_LGB_OBJ_EARLY_STOPPING_ROUNDS)])
-            lgb_model.fit(X_tr, y_tr, eval_set=[(X_va, y_va)], eval_metric='auc')
-
-            # Compute AUC on validation fold
-            auc = roc_auc_score(y_va, lgb_model.predict_proba(X_va)[:, 1])
-            auc_scores.append(auc)
-
-            # Report intermediate value for pruning
-            trial.report(np.mean(auc_scores), fold_idx)
-            if trial.should_prune():
-                raise optuna.exceptions.TrialPruned()
-
-        return np.mean(auc_scores)
-
-    # Optimize
-    study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
-    best_auc = study.best_value
-    best_gini = 2 * best_auc - 1
-    print(f"LGB HPO complete. Best AUC: {best_auc:.4f}, Best Gini: {best_gini:.4f}")
-
-    # Non-regression check (STRICT)
-    if best_gini < PHASE4_LGB_BASELINE:
-        raise RuntimeError(
-            f"Non-regression violated: LGB Gini {best_gini:.4f} < Phase 4 baseline {PHASE4_LGB_BASELINE:.4f}"
-        )
-
-    # Refit on full data with best params
-    best_params = study.best_params.copy()
-    best_params['is_unbalance'] = True
-    best_params['verbose'] = -1
-    best_n_estimators = best_params['n_estimators']
-    best_params['n_estimators'] = int(best_n_estimators * 1.2)  # Slightly increase trees to compensate for CV variance
-
-    final_model = LGBMClassifier(**best_params)
-    final_model.fit(X, y)
-
-    # Save model
-    joblib.dump(final_model, _PROJECT_ROOT / "models" / "lightgbm_extended.pkl")
-    print(f"Saved LGB model to models/lightgbm_extended.pkl")
-
-    return final_model
-
 
 def apply_target_encoding_fold_safe(
     X_train: pd.DataFrame,
