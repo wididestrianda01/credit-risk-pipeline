@@ -1761,6 +1761,26 @@ def train_lightgbm_optuna(
     # Temporal CV
     cv = _make_cv(groups=groups)
 
+    # Determine OOT index (most recent 20% by temporal order, if groups present)
+    # Per Task 1: OOT is the most-recent 20% of samples, OOF is the remaining 80%
+    if groups is not None:
+        # Assume groups are time periods (e.g., application year)
+        # OOT is the top 20% of time values
+        unique_times = sorted(groups.unique())
+        oot_threshold = unique_times[int(len(unique_times) * 0.8)]
+        oot_mask = groups >= oot_threshold
+        oot_indices = np.where(oot_mask)[0]
+        oof_indices = np.where(~oot_mask)[0]
+    else:
+        # Fallback: OOT is bottom 20% of indices (if no temporal groups)
+        oot_size = int(len(y) * 0.2)
+        oot_indices = np.arange(len(y) - oot_size, len(y))
+        oof_indices = np.arange(len(y) - oot_size)
+
+    # Initialize predictions arrays with NaN (NaN marks unvalidated samples per XGB pattern)
+    oof_preds = np.full(len(oof_indices), np.nan)
+    oot_preds = np.full(len(oot_indices), np.nan)
+
     # HPO objective with full parameter search space per D-10
     def objective(trial: optuna.Trial) -> float:
         """
@@ -1768,6 +1788,9 @@ def train_lightgbm_optuna(
 
         Imbalance strategy applied within CV folds (SMOTE) or in model params (scale_pos_weight, is_unbalance).
         Returns OOT Gini as the optimization metric.
+
+        OOT (Out-of-Time): most-recent 20% of data by temporal order, used as optimization gate.
+        OOF (Out-of-Fold): remaining 80%, accumulated across CV folds for development set discrimination.
         """
         # Suggest hyperparameters (all per CONTEXT.md D-10)
         params = {
@@ -1816,10 +1839,10 @@ def train_lightgbm_optuna(
                 params["monotone_constraints"] = monotone_map
 
         # Train with temporal CV (OOF + OOT Gini)
-        oof_preds = np.zeros(len(y))
-        oot_preds = np.zeros(len(y))
-        oof_actuals = np.zeros(len(y))
-        oot_actuals = np.zeros(len(y))
+        # Use nonlocal to access outer scope oof_preds and oot_preds arrays
+        nonlocal oof_preds, oot_preds
+        oof_preds_trial = np.full(len(oof_indices), np.nan)
+        oot_preds_trial = np.full(len(oot_indices), np.nan)
 
         best_iteration_list = []
 
@@ -1853,15 +1876,33 @@ def train_lightgbm_optuna(
             # Capture best_iteration (per D-08)
             best_iteration_list.append(model.best_iteration_)
 
-            # Predictions
-            oof_preds[test_idx] = model.predict_proba(X_test)[:, 1]
-            oot_preds[test_idx] = model.predict_proba(X_test)[:, 1]  # Placeholder — OOT logic deferred
-            oof_actuals[test_idx] = y_test
-            oot_actuals[test_idx] = y_test
+            # Accumulate predictions into OOF and OOT arrays
+            # OOF: accumulate test_idx predictions in oof_preds_trial
+            oof_test_idx = np.intersect1d(test_idx, oof_indices)
+            if len(oof_test_idx) > 0:
+                oof_positions = np.searchsorted(oof_indices, oof_test_idx)
+                oof_preds_trial[oof_positions] = model.predict_proba(X_test.iloc[np.isin(test_idx, oof_test_idx)])[:, 1]
+
+            # OOT: accumulate test_idx predictions in oot_preds_trial
+            oot_test_idx = np.intersect1d(test_idx, oot_indices)
+            if len(oot_test_idx) > 0:
+                oot_positions = np.searchsorted(oot_indices, oot_test_idx)
+                oot_preds_trial[oot_positions] = model.predict_proba(X_test.iloc[np.isin(test_idx, oot_test_idx)])[:, 1]
+
+        # Update outer scope arrays
+        oof_preds = oof_preds_trial
+        oot_preds = oot_preds_trial
 
         # Compute OOT Gini (primary metric for HPO)
+        # Remove NaN predictions (folds that didn't touch OOT)
         from sklearn.metrics import roc_auc_score
-        oot_gini = 2 * roc_auc_score(oot_actuals, oot_preds) - 1
+        oot_valid = ~np.isnan(oot_preds)
+        if oot_valid.sum() > 0:
+            oot_gini = 2 * roc_auc_score(y.iloc[oot_indices][oot_valid], oot_preds[oot_valid]) - 1
+        else:
+            # Fallback to OOF Gini if OOT is empty (rare edge case)
+            oof_valid = ~np.isnan(oof_preds)
+            oot_gini = 2 * roc_auc_score(y.iloc[oof_indices][oof_valid], oof_preds[oof_valid]) - 1
 
         # Set user_attr for best_iteration (per D-08)
         trial.set_user_attr("best_iteration", int(np.mean(best_iteration_list)))
@@ -1899,16 +1940,67 @@ def train_lightgbm_optuna(
     # Run HPO
     study.optimize(objective, n_trials=n_trials)
 
-    # Placeholder — Tasks 3-4 will implement artifact saving and calibration
-    # For now, return stub
+    # Task 2: Best-model selection and return tuple per XGBoost pattern
     best_trial = study.best_trial
     best_params = best_trial.params
-    model = None  # Temporary stub
-    metrics = {}
-    X_test = X.iloc[:100]
-    y_test = y.iloc[:100]
+    best_iteration = best_trial.user_attrs.get("best_iteration", _LGB_RAW_N_ESTIMATORS)
 
-    return model, metrics, X_test, y_test, best_params
+    # Refit best model on full training set with best parameters + best_iteration
+    best_model = lgb.LGBMClassifier(
+        **best_params,
+        n_estimators=best_iteration + 1,  # +1 because best_iteration is 0-indexed
+    )
+
+    # Train on full X, y (no CV for final model)
+    best_model.fit(X, y, callbacks=[lgb.log_evaluation(period=0)])
+
+    # Split for calibration (70% train, 30% calibration)
+    # Use temporal CV if groups present; else stratified
+    if groups is not None:
+        # Temporal split: train on older 70%, calibrate on newer 30%
+        sorted_indices = np.argsort(groups.values)
+        split_idx = int(len(sorted_indices) * 0.7)
+        train_indices = sorted_indices[:split_idx]
+        calib_indices = sorted_indices[split_idx:]
+        X_train_cal, X_calib = X.iloc[train_indices], X.iloc[calib_indices]
+        y_train_cal, y_calib = y.iloc[train_indices], y.iloc[calib_indices]
+    else:
+        # Stratified split
+        from sklearn.model_selection import train_test_split
+        X_train_cal, X_calib, y_train_cal, y_calib = train_test_split(
+            X, y, test_size=0.3, random_state=42, stratify=y
+        )
+
+    # Apply Platt calibration
+    calibrated_model = calibrate_model(
+        best_model, X_train_cal, y_train_cal, X_calib, y_calib
+    )
+
+    # Evaluate on OOT test split (hold out most-recent 20%)
+    if groups is not None:
+        oot_threshold = np.percentile(groups, 80)
+        test_mask = groups >= oot_threshold
+        X_test = X[test_mask]
+        y_test = y[test_mask]
+    else:
+        # Fallback: bottom 20% held out
+        test_size = int(len(y) * 0.2)
+        X_test = X.iloc[-test_size:]
+        y_test = y.iloc[-test_size:]
+
+    metrics = evaluate_model(calibrated_model, X_test, y_test, model_name="LGB_RAW")
+
+    # Compute OOF Gini on full dataset (via final calibrated model)
+    y_pred_full = calibrated_model.predict_proba(X)[:, 1]
+    oof_gini = 2 * roc_auc_score(y, y_pred_full) - 1
+    metrics["oof_gini"] = oof_gini
+
+    # Compute OOT Gini on test set
+    oot_gini = 2 * roc_auc_score(y_test, calibrated_model.predict_proba(X_test)[:, 1]) - 1
+    metrics["oot_gini"] = oot_gini
+
+    # Return tuple per XGBoost pattern
+    return calibrated_model, metrics, X_test, y_test, best_params
 
 
 # ---------------------------------------------------------------------------
