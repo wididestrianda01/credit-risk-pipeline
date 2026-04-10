@@ -2032,6 +2032,120 @@ def train_lightgbm_optuna(
     return calibrated_model, metrics, X_test, y_test, best_params
 
 
+def run_lightgbm_ablation_workflow(
+    n_trials: int = _LGB_OPTUNA_N_TRIALS,
+) -> dict:
+    """
+    Execute 3-store × 3-strategy LightGBM ablation and aggregate results.
+
+    Runs train_lightgbm_optuna() 9 times with all combinations of:
+    - Feature stores: X_train, X_tree_raw, X_tree_dfs
+    - Imbalance strategies: scale_pos_weight, is_unbalance, smote
+
+    Aggregates results, selects best model by OOT Gini, saves comparison table.
+
+    Parameters
+    ----------
+    n_trials : int
+        Number of Optuna trials per ablation cell (default _LGB_OPTUNA_N_TRIALS = 50).
+
+    Returns
+    -------
+    dict[(store_name, strategy) -> (model, metrics, X_test, y_test, best_params)]
+        Results dict with 9 entries, one per ablation cell.
+        Keys are tuples like ("X_train", "scale_pos_weight").
+    """
+    results: dict = {}
+    best_model_key = None
+    best_oot_gini = -1.0
+
+    stores = [
+        ("X_train", _PROJECT_ROOT / "data" / "processed" / "X_train.parquet"),
+        ("X_tree_raw", _PROJECT_ROOT / "data" / "processed" / "X_tree_raw.parquet"),
+        ("X_tree_dfs", _PROJECT_ROOT / "data" / "processed" / "X_tree_dfs.parquet"),
+    ]
+    strategies = ["scale_pos_weight", "is_unbalance", "smote"]
+
+    comparison_rows = []
+
+    for store_name, store_path in stores:
+        for strategy in strategies:
+            key = (store_name, strategy)
+            print(f"\n{'='*60}")
+            print(f"Running: {store_name} + {strategy}")
+            print(f"{'='*60}")
+
+            try:
+                model, metrics, X_test, y_test, best_params = train_lightgbm_optuna(
+                    feature_store_path=str(store_path),
+                    n_trials=n_trials,
+                    imbalance_strategy=strategy,
+                )
+
+                results[key] = (model, metrics, X_test, y_test, best_params)
+
+                # Track best model by OOT Gini
+                oot_gini = metrics.get("oot_gini", metrics.get("Gini", 0.0))
+                if oot_gini > best_oot_gini:
+                    best_oot_gini = oot_gini
+                    best_model_key = key
+
+                # Log metrics
+                print(f"Gini: {metrics.get('Gini', 'N/A'):.4f}")
+                print(f"OOT Gini: {oot_gini:.4f}")
+                print(f"KS: {metrics.get('KS', 'N/A'):.4f}")
+                print(f"BrierSkill: {metrics.get('BrierSkill', 'N/A'):.4f}")
+
+                # Append to comparison table
+                comparison_rows.append({
+                    "Store": store_name,
+                    "Strategy": strategy,
+                    "Gini": metrics.get("Gini", np.nan),
+                    "OOT_Gini": oot_gini,
+                    "OOF_Gini": metrics.get("oof_gini", np.nan),
+                    "KS": metrics.get("KS", np.nan),
+                    "Brier": metrics.get("Brier", np.nan),
+                    "BrierSkill": metrics.get("BrierSkill", np.nan),
+                    "AUC_ROC": metrics.get("AUC-ROC", np.nan),
+                })
+
+            except Exception as e:
+                print(f"ERROR: {key} failed — {e}")
+                continue
+
+    # Save comparison table
+    comparison_df = pd.DataFrame(comparison_rows)
+    comparison_path = _PROJECT_ROOT / "reports" / "lgb_raw_ablation_comparison.csv"
+    comparison_path.parent.mkdir(parents=True, exist_ok=True)
+    comparison_df.to_csv(comparison_path, index=False)
+    print(f"\nSaved comparison table to {comparison_path}")
+
+    # Report best model
+    if best_model_key is not None:
+        best_store, best_strategy = best_model_key
+        best_metrics = results[best_model_key][1]
+        print(f"\n{'='*60}")
+        print(f"BEST MODEL: {best_store} + {best_strategy}")
+        print(f"OOT Gini: {best_oot_gini:.4f}")
+        print(f"BrierSkill: {best_metrics.get('BrierSkill', 'N/A'):.4f}")
+        print(f"{'='*60}")
+
+        # Verify gates
+        if best_oot_gini > 0.60:
+            print("✓ OOT Gini gate PASSED (> 0.60)")
+        else:
+            print(f"✗ OOT Gini gate FAILED (< 0.60, actual: {best_oot_gini:.4f})")
+
+        if best_metrics.get("BrierSkill", 0) > 0:
+            print("✓ BrierSkill gate PASSED (> 0)")
+        else:
+            print(f"✗ BrierSkill gate FAILED")
+    else:
+        print("ERROR: No valid model from ablation")
+
+    return results
+
+
 # ---------------------------------------------------------------------------
 # Probability calibration
 # ---------------------------------------------------------------------------
