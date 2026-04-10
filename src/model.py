@@ -1690,6 +1690,8 @@ def train_lightgbm_optuna(
     n_trials: int = _LGB_OPTUNA_N_TRIALS,
     imbalance_strategy: str = "scale_pos_weight",
     groups: pd.Series | None = None,
+    boosting_type: str = "gbdt",
+    monotone_constraints: dict | None = None,
 ) -> tuple[object, dict, pd.DataFrame, pd.Series, dict]:
     """
     Train LightGBM with Optuna HPO on raw feature store.
@@ -1710,6 +1712,13 @@ def train_lightgbm_optuna(
         Strategy for class imbalance: "scale_pos_weight" | "is_unbalance" | "smote"
     groups : pd.Series, optional
         Temporal CV groups (e.g., application year); if None, temporal CV auto-detected from DATA_LOAD_YEAR.
+    boosting_type : str, optional
+        LGB boosting algorithm: "gbdt" (default) | "dart" | "goss".
+        DART adds drop_rate to the Optuna search space; GOSS adds top_rate/other_rate.
+        Early stopping is disabled for DART (unsupported by LGB).
+    monotone_constraints : dict[str, int] | None, optional
+        Column-name → direction (+1 increasing, -1 decreasing, 0 none).
+        Keys must all exist in X columns. Overrides the EXT_SOURCE auto-detect.
 
     Returns
     -------
@@ -1750,6 +1759,20 @@ def train_lightgbm_optuna(
             f"imbalance_strategy must be one of {_IMBALANCE_STRATEGIES}, "
             f"got {imbalance_strategy!r}."
         )
+
+    _VALID_BOOSTING_TYPES = {"gbdt", "dart", "goss"}
+    if boosting_type not in _VALID_BOOSTING_TYPES:
+        raise ValueError(
+            f"boosting_type must be one of {sorted(_VALID_BOOSTING_TYPES)}, "
+            f"got {boosting_type!r}."
+        )
+
+    if monotone_constraints is not None:
+        unknown_keys = set(monotone_constraints.keys()) - set(X.columns)
+        if unknown_keys:
+            raise ValueError(
+                f"monotone_constraints keys not found in X: {sorted(unknown_keys)}"
+            )
 
     n_pos = int(y.sum())
     n_neg = int((y == 0).sum())
@@ -1799,6 +1822,7 @@ def train_lightgbm_optuna(
             "objective": "binary",
             "metric": _LGB_METRIC,  # "auc" — CRITICAL per D-09
             "verbosity": -1,
+            "boosting_type": boosting_type,
             "n_estimators": _LGB_RAW_N_ESTIMATORS,  # Fixed to 1000 per D-07
             "learning_rate": trial.suggest_float("learning_rate", _LGB_LEARNING_RATE_MIN, _LGB_LEARNING_RATE_MAX, log=True),
             "num_leaves": trial.suggest_int("num_leaves", _LGB_NUM_LEAVES_MIN, _LGB_NUM_LEAVES_MAX),
@@ -1813,8 +1837,16 @@ def train_lightgbm_optuna(
             "random_state": 42,
         }
 
+        # Boosting-type-specific hyperparameters
+        if boosting_type == "dart":
+            params["drop_rate"] = trial.suggest_float("drop_rate", 0.05, 0.3)
+        elif boosting_type == "goss":
+            params["top_rate"] = trial.suggest_float("top_rate", 0.05, 0.5)
+            params["other_rate"] = trial.suggest_float("other_rate", 0.05, 0.3)
+
         # Apply bagging_freq=1 when subsample < 1.0 (per D-03 from CONTEXT.md and lgb.md)
-        if params["subsample"] < 1.0:
+        # GOSS uses its own sampling and cannot use bagging_freq
+        if params["subsample"] < 1.0 and boosting_type != "goss":
             params["bagging_freq"] = 1
 
         # Apply imbalance strategy
@@ -1829,16 +1861,20 @@ def train_lightgbm_optuna(
         else:
             raise ValueError(f"Unknown imbalance_strategy: {imbalance_strategy}")
 
-        # Monotone constraints on EXT_SOURCE_* columns (per D-19, preserved from prior LGB)
-        # These are external credit bureau scores: higher score → lower default risk
-        # Monotone constraint = -1 (decreasing default probability with increasing score)
-        if "EXT_SOURCE_1" in X.columns:
-            monotone_map = {}
-            for col in X.columns:
-                if col.startswith("EXT_SOURCE_"):
-                    monotone_map[col] = -1
+        # Monotone constraints: explicit argument wins; fall back to EXT_SOURCE auto-detect
+        if monotone_constraints is not None:
+            params["monotone_constraints"] = [
+                monotone_constraints.get(c, 0) for c in X.columns
+            ]
+        elif "EXT_SOURCE_1" in X.columns:
+            # Auto-detect: external credit bureau scores → decreasing default probability
+            monotone_map = {
+                col: -1 for col in X.columns if col.startswith("EXT_SOURCE_")
+            }
             if monotone_map:
-                params["monotone_constraints"] = monotone_map
+                params["monotone_constraints"] = [
+                    monotone_map.get(c, 0) for c in X.columns
+                ]
 
         # Train with temporal CV (OOF + OOT Gini)
         # Use nonlocal to access outer scope oof_preds and oot_preds arrays
@@ -1865,14 +1901,17 @@ def train_lightgbm_optuna(
 
             # Train model
             model = lgb.LGBMClassifier(**params)
+            # DART does not support early stopping in LightGBM
+            fit_callbacks = [lgb.log_evaluation(period=0)]
+            if boosting_type != "dart":
+                fit_callbacks.append(
+                    lgb.early_stopping(_LGB_EARLY_STOPPING_ROUNDS, verbose=False)
+                )
             model.fit(
                 X_train if imbalance_strategy != "smote" else X_train_sm,
                 y_train if imbalance_strategy != "smote" else y_train_sm,
                 eval_set=[(X_test, y_test)],
-                callbacks=[
-                    lgb.log_evaluation(period=0),
-                    lgb.early_stopping(_LGB_EARLY_STOPPING_ROUNDS, verbose=False),
-                ],
+                callbacks=fit_callbacks,
             )
 
             # Capture best_iteration (per D-08)
@@ -1951,6 +1990,7 @@ def train_lightgbm_optuna(
     best_model = lgb.LGBMClassifier(
         **best_params,
         n_estimators=best_iteration + 1,  # +1 because best_iteration is 0-indexed
+        boosting_type=boosting_type,
     )
 
     # Train on full X, y (no CV for final model)

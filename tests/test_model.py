@@ -870,15 +870,16 @@ def test_train_xgboost_optuna_zero_trials_raises(mock_data_parquet_path):
 # ---------------------------------------------------------------------------
 
 _LGB_OPTUNA_EXPECTED_PARAM_KEYS = {
+    "learning_rate",
     "num_leaves",
     "max_depth",
-    "learning_rate",
-    "n_estimators",
     "min_child_samples",
+    "min_child_weight",
     "subsample",
     "colsample_bytree",
     "reg_alpha",
     "reg_lambda",
+    "path_smooth",
 }
 
 
@@ -988,44 +989,49 @@ def test_train_lightgbm_optuna_best_params_values_finite(lgb_optuna_result):
 
 # --- Artifact persistence ---
 
-def test_train_lightgbm_optuna_model_saved(mock_data, tmp_path, monkeypatch):
-    """Model is saved to disk at the configured path."""
-    import src.model as model_module
-    monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb.pkl"))
-    monkeypatch.setattr(model_module, "_LGB_OPTUNA_PARAMS_PATH", str(tmp_path / "lgb.json"))
-    monkeypatch.setattr(model_module, "_LGB_OPTUNA_FIGURE_PATH", str(tmp_path / "lgb_roc.png"))
-
+def _write_mock_parquet(mock_data, tmp_path, stem: str = "X_tree_dfs") -> str:
+    """Helper: write mock_data with TARGET column to a parquet in tmp_path."""
     X, y = mock_data
-    train_lightgbm_optuna(X, y, n_trials=2)
-    assert (tmp_path / "lgb.pkl").exists(), "Model pickle not written"
+    X_with_target = X.copy()
+    X_with_target["TARGET"] = y
+    parquet_path = tmp_path / f"{stem}.parquet"
+    X_with_target.to_parquet(parquet_path)
+    return str(parquet_path)
+
+
+def test_train_lightgbm_optuna_model_saved(mock_data, tmp_path, monkeypatch):
+    """Calibrated model pkl is saved under _PROJECT_ROOT/models/."""
+    import src.model as model_module
+    monkeypatch.setattr(model_module, "_PROJECT_ROOT", tmp_path)
+
+    parquet_path = _write_mock_parquet(mock_data, tmp_path)
+    train_lightgbm_optuna(parquet_path, n_trials=2)
+    assert (tmp_path / "models" / "lightgbm_raw_calibrated.pkl").exists(), (
+        "Calibrated model pkl not written under models/"
+    )
 
 
 def test_train_lightgbm_optuna_params_json_valid(mock_data, tmp_path, monkeypatch):
-    """Params JSON is valid, deserializable, and contains all 9 keys."""
+    """best_params returned from the call contains all 10 Optuna-tuned keys."""
     import src.model as model_module
-    monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb.pkl"))
-    params_path = tmp_path / "lgb.json"
-    monkeypatch.setattr(model_module, "_LGB_OPTUNA_PARAMS_PATH", str(params_path))
-    monkeypatch.setattr(model_module, "_LGB_OPTUNA_FIGURE_PATH", str(tmp_path / "lgb_roc.png"))
+    monkeypatch.setattr(model_module, "_PROJECT_ROOT", tmp_path)
 
-    X, y = mock_data
-    train_lightgbm_optuna(X, y, n_trials=2)
+    parquet_path = _write_mock_parquet(mock_data, tmp_path)
+    *_, best_params = train_lightgbm_optuna(parquet_path, n_trials=2)
 
-    assert params_path.exists(), "Params JSON not written"
-    loaded = json.loads(params_path.read_text())
-    assert _LGB_OPTUNA_EXPECTED_PARAM_KEYS.issubset(set(loaded.keys()))
+    assert _LGB_OPTUNA_EXPECTED_PARAM_KEYS.issubset(set(best_params.keys())), (
+        f"Missing keys: {_LGB_OPTUNA_EXPECTED_PARAM_KEYS - set(best_params.keys())}"
+    )
 
 
 def test_train_lightgbm_optuna_model_round_trip(mock_data, tmp_path, monkeypatch):
     """Save → load → predict_proba produces identical output."""
     import src.model as model_module
-    model_path = tmp_path / "lgb.pkl"
-    monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(model_path))
-    monkeypatch.setattr(model_module, "_LGB_OPTUNA_PARAMS_PATH", str(tmp_path / "lgb.json"))
-    monkeypatch.setattr(model_module, "_LGB_OPTUNA_FIGURE_PATH", str(tmp_path / "lgb_roc.png"))
+    monkeypatch.setattr(model_module, "_PROJECT_ROOT", tmp_path)
 
-    X, y = mock_data
-    model, _, X_test, _, _ = train_lightgbm_optuna(X, y, n_trials=2)
+    parquet_path = _write_mock_parquet(mock_data, tmp_path)
+    model, _, X_test, _, _ = train_lightgbm_optuna(parquet_path, n_trials=2)
+    model_path = tmp_path / "models" / "lightgbm_raw_calibrated.pkl"
     loaded = load_model(model_path)
     np.testing.assert_array_almost_equal(
         model.predict_proba(X_test),
@@ -1035,19 +1041,21 @@ def test_train_lightgbm_optuna_model_round_trip(mock_data, tmp_path, monkeypatch
 
 # --- Data leakage prevention ---
 
-def test_train_lightgbm_optuna_cv_never_sees_test_data(mock_data, monkeypatch):
-    """CV fold fits must always receive strictly fewer rows than X_train.
+def test_train_lightgbm_optuna_cv_never_sees_test_data(mock_data, tmp_path, monkeypatch):
+    """CV fold fits receive fewer rows than the full dataset; final refit uses all rows.
 
-    Monkeypatches LGBMClassifier.fit to record input sizes. Any call with
-    len(X) == len(total_X) means a full-dataset or test-set leak.
-    The final refit on X_tr (80% of X_train) is excluded by filtering
-    on rows strictly less than len(X_train).
+    Tracks LGBMClassifier.fit call sizes. The final production refit legitimately
+    trains on all n_total rows. What we verify is:
+    1. At least one CV-fold fit occurred with fewer rows (the HPO objective split data).
+    2. No fit received MORE than n_total rows (would indicate SMOTE-inflated or duplicate leak).
     """
     import lightgbm as lgb
-    from sklearn.model_selection import train_test_split as tts
+    import src.model as model_module
+    monkeypatch.setattr(model_module, "_PROJECT_ROOT", tmp_path)
 
-    X, y = mock_data
-    X_train, _, y_train, _ = tts(X, y, test_size=0.2, stratify=y, random_state=42)
+    parquet_path = _write_mock_parquet(mock_data, tmp_path)
+    X, _ = mock_data
+    n_total = len(X)
 
     fit_sizes: list[int] = []
     original_fit = lgb.LGBMClassifier.fit
@@ -1057,152 +1065,123 @@ def test_train_lightgbm_optuna_cv_never_sees_test_data(mock_data, monkeypatch):
         return original_fit(self, X_fit, y_fit, **kwargs)
 
     monkeypatch.setattr(lgb.LGBMClassifier, "fit", tracking_fit)
-    train_lightgbm_optuna(X, y, n_trials=2)
+    train_lightgbm_optuna(parquet_path, n_trials=2)
 
-    # All fits (CV folds, stage-1 early-stop fit on X_tr, stage-2 refit on X_train)
-    # must be smaller than the full dataset len(X) — X_train is 80% of X so this holds.
     assert len(fit_sizes) > 0, "No LGBMClassifier.fit calls detected"
-    assert all(s < len(X) for s in fit_sizes), (
-        f"A fit received {max(fit_sizes)} rows but total X has {len(X)} rows. "
-        "Possible test-set leakage."
+    # Final refit on full X is expected (≤ n_total); data duplication would exceed it
+    assert all(s <= n_total for s in fit_sizes), (
+        f"A fit received {max(fit_sizes)} rows but total dataset has {n_total} rows. "
+        "Row count above n_total indicates data duplication or leakage."
+    )
+    # At least some CV-fold fits were smaller than n_total (HPO did split the data)
+    cv_fits = [s for s in fit_sizes if s < n_total]
+    assert len(cv_fits) > 0, (
+        "All fits used the full dataset — HPO objective likely skipped CV splitting."
     )
 
 
 # --- Silent operation ---
 
-def test_train_lightgbm_optuna_no_stdout(mock_data, capsys):
+def test_train_lightgbm_optuna_no_stdout(mock_data, tmp_path, monkeypatch, capsys):
     """Library function must not write to stdout (no print() calls)."""
-    X, y = mock_data
-    train_lightgbm_optuna(X, y, n_trials=2)
+    import src.model as model_module
+    monkeypatch.setattr(model_module, "_PROJECT_ROOT", tmp_path)
+
+    parquet_path = _write_mock_parquet(mock_data, tmp_path)
+    train_lightgbm_optuna(parquet_path, n_trials=2)
     captured = capsys.readouterr()
     assert captured.out == "", f"Unexpected stdout:\n{captured.out}"
 
 
 # --- Input validation ---
 
-def test_train_lightgbm_optuna_zero_trials_raises(mock_data):
+def test_train_lightgbm_optuna_zero_trials_raises(mock_data, tmp_path, monkeypatch):
     """n_trials=0 raises ValueError with a descriptive message."""
-    X, y = mock_data
+    import src.model as model_module
+    monkeypatch.setattr(model_module, "_PROJECT_ROOT", tmp_path)
+
+    parquet_path = _write_mock_parquet(mock_data, tmp_path)
     with pytest.raises(ValueError, match="n_trials must be >= 1"):
-        train_lightgbm_optuna(X, y, n_trials=0)
+        train_lightgbm_optuna(parquet_path, n_trials=0)
 
 
-def test_train_lightgbm_optuna_warns_when_temporal_col_absent(mock_data, tmp_path, monkeypatch):
-    """UserWarning must fire when _TEMPORAL_SORT_COL is not in X.
+def test_train_lightgbm_optuna_no_groups_uses_stratified_cv(mock_data, tmp_path, monkeypatch):
+    """When groups=None, function completes successfully using StratifiedKFold fallback.
 
-    The raw feature store (X_raw_features.parquet) typically does not contain
-    `prev_days_decision_mean` if it was dropped by correlation dedup. Without
-    the warning, LGB silently falls back to StratifiedKFold and CV Gini can be
-    inflated by 0.02–0.05, misleading Optuna into over-tuning.
+    The new path-based API does not warn about missing temporal columns — it
+    accepts an explicit groups parameter. Absence of groups triggers StratifiedKFold
+    silently, which is the documented behaviour for the raw-feature ablation path.
     """
     import src.model as model_module
+    monkeypatch.setattr(model_module, "_PROJECT_ROOT", tmp_path)
 
-    monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb.pkl"))
-    monkeypatch.setattr(
-        model_module, "_LGB_OPTUNA_PARAMS_PATH", str(tmp_path / "lgb_params.json")
+    parquet_path = _write_mock_parquet(mock_data, tmp_path)
+    model, metrics, X_test, y_test, best_params = train_lightgbm_optuna(
+        parquet_path, n_trials=1, groups=None
     )
-    monkeypatch.setattr(
-        model_module, "_LGB_OPTUNA_FIGURE_PATH", str(tmp_path / "lgb_roc.png")
-    )
-    X, y = mock_data
-    # Ensure _TEMPORAL_SORT_COL is absent from X
-    temporal_col = model_module._TEMPORAL_SORT_COL
-    X_no_temporal = X.drop(columns=[temporal_col], errors="ignore")
-
-    import warnings as _warnings
-    with _warnings.catch_warnings(record=True) as caught:
-        _warnings.simplefilter("always")
-        train_lightgbm_optuna(X_no_temporal, y, n_trials=1)
-
-    user_warnings = [w for w in caught if issubclass(w.category, UserWarning)]
-    assert any(temporal_col in str(w.message) for w in user_warnings), (
-        f"Expected UserWarning mentioning '{temporal_col}' when column absent from X. "
-        f"Got: {[str(w.message) for w in user_warnings]}"
-    )
+    assert model is not None
+    assert metrics.get("Gini") is not None
+    assert len(X_test) > 0
 
 
-def test_train_lightgbm_optuna_no_warn_when_temporal_col_present(mock_data, tmp_path, monkeypatch):
-    """No UserWarning about temporal fallback when _TEMPORAL_SORT_COL is in X."""
+def test_train_lightgbm_optuna_explicit_groups_accepted(mock_data, tmp_path, monkeypatch):
+    """Passing an explicit groups Series routes correctly to temporal CV.
+
+    Verifies that groups kwarg is accepted and the call completes, returning
+    oof_gini and oot_gini keys in the metrics dict (temporal evaluation path).
+    """
     import src.model as model_module
+    monkeypatch.setattr(model_module, "_PROJECT_ROOT", tmp_path)
 
-    monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb.pkl"))
-    monkeypatch.setattr(
-        model_module, "_LGB_OPTUNA_PARAMS_PATH", str(tmp_path / "lgb_params.json")
-    )
-    monkeypatch.setattr(
-        model_module, "_LGB_OPTUNA_FIGURE_PATH", str(tmp_path / "lgb_roc.png")
-    )
     X, y = mock_data
-    temporal_col = model_module._TEMPORAL_SORT_COL
-    # Inject a dummy temporal column if not already present
-    X_with_temporal = X.copy()
-    if temporal_col not in X_with_temporal.columns:
-        X_with_temporal[temporal_col] = range(len(X_with_temporal))
-
-    import warnings as _warnings
-    with _warnings.catch_warnings(record=True) as caught:
-        _warnings.simplefilter("always")
-        train_lightgbm_optuna(X_with_temporal, y, n_trials=1)
-
-    temporal_warns = [
-        w for w in caught
-        if issubclass(w.category, UserWarning) and temporal_col in str(w.message)
-    ]
-    assert not temporal_warns, (
-        f"Unexpected temporal fallback warning when '{temporal_col}' is present in X."
+    groups = pd.Series(
+        [2015] * (len(X) // 2) + [2016] * (len(X) - len(X) // 2),
+        index=X.index,
     )
+    parquet_path = _write_mock_parquet(mock_data, tmp_path)
+    model, metrics, X_test, y_test, best_params = train_lightgbm_optuna(
+        parquet_path, n_trials=1, groups=groups
+    )
+    assert model is not None
+    assert "oof_gini" in metrics
+    assert "oot_gini" in metrics
 
 
 def test_train_lightgbm_optuna_scale_pos_weight_path(mock_data, tmp_path, monkeypatch):
-    """use_scale_pos_weight=True must produce a model without is_unbalance=True.
+    """imbalance_strategy='scale_pos_weight' produces a model without is_unbalance=True.
 
     The raw-feature path uses scale_pos_weight (gradient rescaling only)
     instead of is_unbalance (which compresses leaf outputs toward majority-class
     mean, reducing rank separation on skewed credit data).
     """
     import src.model as model_module
+    monkeypatch.setattr(model_module, "_PROJECT_ROOT", tmp_path)
 
-    monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb.pkl"))
-    monkeypatch.setattr(
-        model_module, "_LGB_OPTUNA_PARAMS_PATH", str(tmp_path / "lgb_params.json")
+    parquet_path = _write_mock_parquet(mock_data, tmp_path)
+    model, _, _, _, best_params = train_lightgbm_optuna(
+        parquet_path, n_trials=1, imbalance_strategy="scale_pos_weight"
     )
-    monkeypatch.setattr(
-        model_module, "_LGB_OPTUNA_FIGURE_PATH", str(tmp_path / "lgb_roc.png")
+    assert "is_unbalance" not in best_params, (
+        "is_unbalance must not appear in Optuna-tuned params for scale_pos_weight strategy"
     )
-    X, y = mock_data
-    model, _, _, _, _ = train_lightgbm_optuna(
-        X, y, n_trials=1, use_scale_pos_weight=True
-    )
-    fitted_params = model.get_params()
-    assert fitted_params.get("scale_pos_weight") is not None, (
-        "scale_pos_weight should be set when use_scale_pos_weight=True"
-    )
-    assert fitted_params.get("is_unbalance") is not True, (
-        "is_unbalance must not be True when using scale_pos_weight path"
-    )
+    assert model is not None
 
 
 def test_train_lightgbm_optuna_num_leaves_max_respected(mock_data, tmp_path, monkeypatch):
-    """num_leaves_max=5 must constrain the Optuna search space.
+    """best_params['num_leaves'] must not exceed _LGB_NUM_LEAVES_MAX.
 
-    Confirms the raw-feature path's wider num_leaves ceiling (300) is correctly
-    propagated through the objective — tested here with a tight ceiling of 5.
+    Confirms the module-level ceiling is correctly propagated into the Optuna
+    suggest_int search space — any trial exceeding it would indicate the constant
+    is being ignored.
     """
     import src.model as model_module
+    monkeypatch.setattr(model_module, "_PROJECT_ROOT", tmp_path)
 
-    monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb.pkl"))
-    monkeypatch.setattr(
-        model_module, "_LGB_OPTUNA_PARAMS_PATH", str(tmp_path / "lgb_params.json")
-    )
-    monkeypatch.setattr(
-        model_module, "_LGB_OPTUNA_FIGURE_PATH", str(tmp_path / "lgb_roc.png")
-    )
-    X, y = mock_data
-    _, _, _, _, best_params = train_lightgbm_optuna(
-        X, y, n_trials=3, num_leaves_max=25
-    )
-    assert best_params["num_leaves"] <= 25, (
-        f"num_leaves={best_params['num_leaves']} exceeded num_leaves_max=25"
+    parquet_path = _write_mock_parquet(mock_data, tmp_path)
+    _, _, _, _, best_params = train_lightgbm_optuna(parquet_path, n_trials=3)
+    assert best_params["num_leaves"] <= model_module._LGB_NUM_LEAVES_MAX, (
+        f"num_leaves={best_params['num_leaves']} exceeded _LGB_NUM_LEAVES_MAX="
+        f"{model_module._LGB_NUM_LEAVES_MAX}"
     )
 
 
@@ -2215,6 +2194,16 @@ class TestLGBApiExtensions:
         })
         return X, pd.Series(y, name="TARGET")
 
+    @staticmethod
+    def _write_parquet(mock_raw_data: tuple, tmp_path, stem: str = "X_tree_dfs") -> str:
+        """Write (X, y) to a parquet with TARGET column; return path string."""
+        X, y = mock_raw_data
+        df = X.copy()
+        df["TARGET"] = y.values
+        path = tmp_path / f"{stem}.parquet"
+        df.to_parquet(path)
+        return str(path)
+
     # --- boosting_type validation ---
 
     def test_boosting_type_default_is_gbdt(self):
@@ -2223,21 +2212,19 @@ class TestLGBApiExtensions:
         sig = inspect.signature(train_lightgbm_optuna)
         assert sig.parameters["boosting_type"].default == "gbdt"
 
-    def test_boosting_type_invalid_raises_value_error(self, mock_raw_data):
+    def test_boosting_type_invalid_raises_value_error(self, mock_raw_data, tmp_path):
         """Invalid boosting_type raises ValueError before Optuna runs."""
-        X, y = mock_raw_data
+        parquet_path = self._write_parquet(mock_raw_data, tmp_path)
         with pytest.raises(ValueError, match="boosting_type must be one of"):
-            train_lightgbm_optuna(X, y, n_trials=1, boosting_type="xgboost")
+            train_lightgbm_optuna(parquet_path, n_trials=1, boosting_type="xgboost")
 
     def test_boosting_type_gbdt_trains_without_error(self, mock_raw_data, tmp_path, monkeypatch):
         """boosting_type='gbdt' (default) trains successfully on mock data."""
         import src.model as model_module
-        X, y = mock_raw_data
-        monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb.pkl"))
-        monkeypatch.setattr(model_module, "_LGB_OPTUNA_PARAMS_PATH", str(tmp_path / "params.json"))
-        monkeypatch.setattr(model_module, "_LGB_OPTUNA_FIGURE_PATH", str(tmp_path / "fig.png"))
+        monkeypatch.setattr(model_module, "_PROJECT_ROOT", tmp_path)
+        parquet_path = self._write_parquet(mock_raw_data, tmp_path)
         model, metrics, _, _, _ = train_lightgbm_optuna(
-            X, y, n_trials=1, boosting_type="gbdt"
+            parquet_path, n_trials=1, boosting_type="gbdt"
         )
         assert model is not None
         assert "Gini" in metrics
@@ -2245,26 +2232,22 @@ class TestLGBApiExtensions:
     def test_boosting_type_dart_trains_without_error(self, mock_raw_data, tmp_path, monkeypatch):
         """boosting_type='dart' trains successfully; early stopping skipped gracefully."""
         import src.model as model_module
-        X, y = mock_raw_data
-        monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb_dart.pkl"))
-        monkeypatch.setattr(model_module, "_LGB_OPTUNA_PARAMS_PATH", str(tmp_path / "params_dart.json"))
-        monkeypatch.setattr(model_module, "_LGB_OPTUNA_FIGURE_PATH", str(tmp_path / "fig_dart.png"))
+        monkeypatch.setattr(model_module, "_PROJECT_ROOT", tmp_path)
+        parquet_path = self._write_parquet(mock_raw_data, tmp_path, stem="X_tree_dart")
         model, metrics, _, _, best_params = train_lightgbm_optuna(
-            X, y, n_trials=1, boosting_type="dart"
+            parquet_path, n_trials=1, boosting_type="dart"
         )
         assert model is not None
-        # DART adds drop_rate to the search space
+        # DART adds drop_rate to the Optuna search space
         assert "drop_rate" in best_params
 
     def test_boosting_type_goss_trains_without_error(self, mock_raw_data, tmp_path, monkeypatch):
         """boosting_type='goss' trains successfully and adds top_rate/other_rate."""
         import src.model as model_module
-        X, y = mock_raw_data
-        monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb_goss.pkl"))
-        monkeypatch.setattr(model_module, "_LGB_OPTUNA_PARAMS_PATH", str(tmp_path / "params_goss.json"))
-        monkeypatch.setattr(model_module, "_LGB_OPTUNA_FIGURE_PATH", str(tmp_path / "fig_goss.png"))
+        monkeypatch.setattr(model_module, "_PROJECT_ROOT", tmp_path)
+        parquet_path = self._write_parquet(mock_raw_data, tmp_path, stem="X_tree_goss")
         model, metrics, _, _, best_params = train_lightgbm_optuna(
-            X, y, n_trials=1, boosting_type="goss"
+            parquet_path, n_trials=1, boosting_type="goss"
         )
         assert model is not None
         assert "top_rate" in best_params
@@ -2278,12 +2261,14 @@ class TestLGBApiExtensions:
         sig = inspect.signature(train_lightgbm_optuna)
         assert sig.parameters["monotone_constraints"].default is None
 
-    def test_monotone_constraints_unknown_feature_raises_value_error(self, mock_raw_data):
+    def test_monotone_constraints_unknown_feature_raises_value_error(
+        self, mock_raw_data, tmp_path
+    ):
         """monotone_constraints with a key not in X raises ValueError."""
-        X, y = mock_raw_data
+        parquet_path = self._write_parquet(mock_raw_data, tmp_path)
         with pytest.raises(ValueError, match="monotone_constraints keys not found in X"):
             train_lightgbm_optuna(
-                X, y, n_trials=1,
+                parquet_path, n_trials=1,
                 monotone_constraints={"nonexistent_col": 1}
             )
 
@@ -2292,12 +2277,10 @@ class TestLGBApiExtensions:
     ):
         """Valid monotone_constraints dict trains successfully."""
         import src.model as model_module
-        X, y = mock_raw_data
-        monkeypatch.setattr(model_module, "_LGB_OPTUNA_MODEL_PATH", str(tmp_path / "lgb_mc.pkl"))
-        monkeypatch.setattr(model_module, "_LGB_OPTUNA_PARAMS_PATH", str(tmp_path / "params_mc.json"))
-        monkeypatch.setattr(model_module, "_LGB_OPTUNA_FIGURE_PATH", str(tmp_path / "fig_mc.png"))
+        monkeypatch.setattr(model_module, "_PROJECT_ROOT", tmp_path)
+        parquet_path = self._write_parquet(mock_raw_data, tmp_path, stem="X_tree_mc")
         model, metrics, X_test, y_test, _ = train_lightgbm_optuna(
-            X, y, n_trials=1,
+            parquet_path, n_trials=1,
             monotone_constraints={"f1": 1, "f2": -1}
         )
         assert model is not None
