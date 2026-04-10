@@ -45,7 +45,6 @@ from src.model import (
     load_model,
     run_ensemble_workflow,
     save_model,
-    train_catboost_extended_hpo,
     train_ensemble,
     train_ext_source_imputer,
     train_lightgbm_optuna,
@@ -1962,13 +1961,13 @@ class TestCatBoostOptuna:
         )
 
     def test_best_params_within_search_space(self, catboost_result):
-        """Sampled depth ≤ 8 and l2_leaf_reg ≤ 20 per subagent recommendations."""
+        """Sampled depth ≤ 10 and l2_leaf_reg ≤ 30 per updated HPO bounds."""
         _, _, _, _, best_params = catboost_result
-        assert best_params["depth"] <= 8, (
-            f"depth={best_params['depth']} exceeds upper bound 8"
+        assert best_params["depth"] <= 10, (
+            f"depth={best_params['depth']} exceeds upper bound 10"
         )
-        assert best_params["l2_leaf_reg"] <= 20.0, (
-            f"l2_leaf_reg={best_params['l2_leaf_reg']:.2f} exceeds upper bound 20"
+        assert best_params["l2_leaf_reg"] <= 30.0, (
+            f"l2_leaf_reg={best_params['l2_leaf_reg']:.2f} exceeds upper bound 30"
         )
 
     def test_model_artifact_saved(self, catboost_result, tmp_path, monkeypatch):
@@ -2595,51 +2594,7 @@ class TestExtendedHPOWave0:
         assert not X_train_enc.isna().any().any(), "NaN found in encoded X_train"
         assert not X_test_enc.isna().any().any(), "NaN found in encoded X_test"
 
-    def test_catboost_native_categorical_cat_features_param(self, mock_data):
-        """
-        CatBoost native categorical support with cat_features parameter.
-
-        Arrange:
-        - Mock X with 67 continuous + 4 categorical columns
-        - cat_features: ['CODE_GENDER', 'NAME_EDUCATION_TYPE', 'NAME_INCOME_TYPE', 'ORGANIZATION_TYPE']
-
-        Act:
-        - Call train_catboost_extended_hpo(X, y, n_trials=50, cat_features=[...])
-
-        Assert:
-        - Model is fitted (has predict_proba method)
-        - Model.cat_features matches input cat_features list
-
-        Expected Failure (RED): ImportError or AttributeError (function not yet defined)
-        """
-        from src.model import train_catboost_extended_hpo
-
-        X, y = mock_data
-
-        # Create mock categorical columns
-        X_with_cat = X.copy()
-        X_with_cat["CODE_GENDER"] = pd.cut(X.iloc[:, 0], bins=3, labels=["M", "F", "X"])
-        X_with_cat["NAME_EDUCATION_TYPE"] = pd.cut(X.iloc[:, 1], bins=2, labels=["HS", "College"])
-        X_with_cat["NAME_INCOME_TYPE"] = pd.cut(X.iloc[:, 0], bins=2, labels=["Working", "Pensioner"])
-        X_with_cat["ORGANIZATION_TYPE"] = pd.cut(X.iloc[:, 1], bins=2, labels=["Private", "Government"])
-
-        cat_features = [
-            "CODE_GENDER",
-            "NAME_EDUCATION_TYPE",
-            "NAME_INCOME_TYPE",
-            "ORGANIZATION_TYPE",
-        ]
-
-        # Call extended HPO
-        model = train_catboost_extended_hpo(X_with_cat, y, n_trials=50, cat_features=cat_features)
-
-        # Verify model has predict_proba
-        assert hasattr(model, "predict_proba"), "Model missing predict_proba method"
-
-        # Verify cat_features attribute (CatBoost stores this)
-        assert hasattr(model, "cat_features"), "Model missing cat_features attribute"
-
-    def test_dfs_iv_filter_removes_low_signal(self, mock_data):
+def test_dfs_iv_filter_removes_low_signal(self, mock_data):
         """
         DFS feature filtering by Information Value threshold.
 

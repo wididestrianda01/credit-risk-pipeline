@@ -195,12 +195,12 @@ _ENSEMBLE_WORKFLOW_WEIGHTS_PATH: Path = _PROJECT_ROOT / "reports" / "ensemble_we
 #   share regularisation across the full depth-level, not per-leaf.
 # bagging_temperature/random_strength: CatBoost's native stochastic gradient
 #   boosting — equivalent to subsample/colsample_bytree in LGB/XGB.
-_CAT_DEPTH_MIN: int = 4
-_CAT_DEPTH_MAX: int = 8
-_CAT_LEARNING_RATE_MIN: float = 0.02
+_CAT_DEPTH_MIN: int = 5
+_CAT_DEPTH_MAX: int = 10
+_CAT_LEARNING_RATE_MIN: float = 0.01
 _CAT_LEARNING_RATE_MAX: float = 0.2
-_CAT_L2_LEAF_REG_MIN: float = 1.0
-_CAT_L2_LEAF_REG_MAX: float = 20.0
+_CAT_L2_LEAF_REG_MIN: float = 0.1
+_CAT_L2_LEAF_REG_MAX: float = 30.0
 _CAT_BAGGING_TEMP_MIN: float = 0.0
 _CAT_BAGGING_TEMP_MAX: float = 1.0
 _CAT_RANDOM_STRENGTH_MIN: float = 0.0
@@ -210,8 +210,10 @@ _CAT_ITERATIONS: int = 1000
 _CAT_OBJ_EARLY_STOPPING_ROUNDS: int = 30   # fast config triage inside Optuna
 _CAT_EARLY_STOPPING_ROUNDS: int = 50        # full patience for final refit
 _CAT_FINAL_VAL_SIZE: float = 0.2
-_CAT_OPTUNA_N_TRIALS: int = 100
-_CAT_MODEL_PATH: Path = _PROJECT_ROOT / "models" / "catboost_combined.pkl"
+_CAT_OPTUNA_N_TRIALS: int = 50
+_CAT_MODEL_PATH: Path = _PROJECT_ROOT / "models" / "catboost_raw_calibrated.pkl"
+_CAT_RAW_MIN_DATA_IN_LEAF_MIN: int = 5
+_CAT_RAW_MIN_DATA_IN_LEAF_MAX: int = 50
 _CAT_PARAMS_PATH: Path = _PROJECT_ROOT / "models" / "catboost_params.json"
 _CAT_FIGURE_PATH: Path = _PROJECT_ROOT / "reports" / "figures" / "catboost_roc_pr.png"
 # Raw categorical column names that CatBoost can consume natively.
@@ -3379,179 +3381,6 @@ def apply_target_encoding_fold_safe(
     X_test_encoded[cat_cols] = X_test_encoded[cat_cols].astype(float)
 
     return X_train_encoded, X_test_encoded
-
-
-def train_catboost_extended_hpo(
-    X: pd.DataFrame,
-    y: pd.Series,
-    n_trials: int = _CAT_EXTENDED_OPTUNA_N_TRIALS,
-    cat_features: list | None = None,
-) -> object:
-    """
-    Extended HPO for CatBoost with native categorical support (50 trials).
-
-    Non-regression: ensure final Gini >= 0.5461 (Phase 4 CatBoost baseline).
-    Optuna study persists in SQLite DB — resumable across runs.
-
-    Parameters
-    ----------
-    X : pd.DataFrame
-        Feature matrix (mixed continuous and categorical).
-    y : pd.Series
-        Binary target series.
-    n_trials : int
-        Number of Optuna trials (default 50).
-    cat_features : list or None
-        List of categorical column names for native CatBoost handling.
-
-    Returns
-    -------
-    CatBoostClassifier
-        Fitted CatBoost classifier with cat_features attribute.
-
-    Raises
-    ------
-    RuntimeError
-        If final best Gini < 0.5461 (Phase 4 CatBoost baseline).
-    """
-    import optuna
-
-    # Auto-detect temporal CV groups from _TEMPORAL_SORT_COL
-    # If not present, use standard stratified CV (for unit tests with mock data)
-    if _TEMPORAL_SORT_COL in X.columns:
-        groups = X[_TEMPORAL_SORT_COL].values
-    else:
-        groups = None
-
-    # Resume or create Optuna study
-    study_name = "catboost_extended_study"
-    storage = f"sqlite:///{_OPTUNA_DB_PATH}"
-    try:
-        study = optuna.load_study(study_name=study_name, storage=storage, load_if_exists=True)
-        if len(study.trials) > 0:
-            print(f"Loaded existing CatBoost study with {len(study.trials)} trials")
-        else:
-            # Study exists but is empty; warm-start with Phase 4 best params
-            prior_best = {
-                'depth': 6,
-                'learning_rate': 0.08,
-                'iterations': 800,
-                'l2_leaf_reg': 5.0,
-                'bagging_temperature': 0.3,
-                'random_strength': 0.5
-            }
-            study.enqueue_trial(prior_best)
-            print("Created new CatBoost study, warm-started with Phase 4 best params")
-    except Exception:
-        # Create new study with full initialization
-        study = optuna.create_study(
-            study_name=study_name,
-            storage=storage,
-            direction="maximize",
-            sampler=optuna.samplers.TPESampler(seed=42),
-            pruner=optuna.pruners.MedianPruner(n_warmup_steps=10, n_startup_trials=10),
-            load_if_exists=True
-        )
-        # Warm-start with Phase 4 best params
-        prior_best = {
-            'depth': 6,
-            'learning_rate': 0.08,
-            'iterations': 800,
-            'l2_leaf_reg': 5.0,
-            'bagging_temperature': 0.3,
-            'random_strength': 0.5
-        }
-        if len(study.trials) == 0:
-            study.enqueue_trial(prior_best)
-        print("Created new CatBoost study, warm-started with Phase 4 best params")
-
-    # Phase 4 baseline for non-regression check (STRICT)
-    PHASE4_CAT_BASELINE = 0.5461
-
-    # Define objective function
-    def objective(trial):
-        params = {
-            'depth': trial.suggest_int('depth', _CAT_RAW_DEPTH_MIN, _CAT_RAW_DEPTH_MAX),
-            'learning_rate': trial.suggest_float('learning_rate', _CAT_RAW_LEARNING_RATE_MIN, _CAT_RAW_LEARNING_RATE_MAX, log=True),
-            'iterations': trial.suggest_int('iterations', _CAT_RAW_ITERATIONS_MIN, _CAT_RAW_ITERATIONS_MAX),
-            'l2_leaf_reg': trial.suggest_float('l2_leaf_reg', _CAT_RAW_L2_LEAF_REG_MIN, _CAT_RAW_L2_LEAF_REG_MAX, log=True),
-            'bagging_temperature': trial.suggest_float('bagging_temperature', _CAT_BAGGING_TEMP_MIN, _CAT_BAGGING_TEMP_MAX),
-            'random_strength': trial.suggest_float('random_strength', _CAT_RANDOM_STRENGTH_MIN, _CAT_RANDOM_STRENGTH_MAX),
-            'bootstrap_type': 'Bayesian',
-            'verbose': 0,
-            'allow_writing_files': False,
-            'random_state': 42,
-        }
-
-        # Cross-validated AUC with temporal CV
-        cv = _make_cv(groups_train=groups, n_splits=_CV_N_SPLITS)
-        auc_scores = []
-        for fold_idx, (train_idx, val_idx) in enumerate(cv.split(X, y)):
-            X_tr, X_va = X.iloc[train_idx], X.iloc[val_idx]
-            y_tr, y_va = y.iloc[train_idx], y.iloc[val_idx]
-
-            # Train CatBoost with native categorical support
-            cat_model = CatBoostClassifier(**params)
-            if cat_features:
-                cat_model.fit(
-                    X_tr, y_tr,
-                    eval_set=[(X_va, y_va)],
-                    cat_features=cat_features,
-                    verbose=0,
-                    early_stopping_rounds=_CAT_OBJ_EARLY_STOPPING_ROUNDS
-                )
-            else:
-                cat_model.fit(
-                    X_tr, y_tr,
-                    eval_set=[(X_va, y_va)],
-                    verbose=0,
-                    early_stopping_rounds=_CAT_OBJ_EARLY_STOPPING_ROUNDS
-                )
-
-            # Compute AUC on validation fold
-            auc = roc_auc_score(y_va, cat_model.predict_proba(X_va)[:, 1])
-            auc_scores.append(auc)
-
-            # Report intermediate value for pruning
-            trial.report(np.mean(auc_scores), fold_idx)
-            if trial.should_prune():
-                raise optuna.exceptions.TrialPruned()
-
-        return np.mean(auc_scores)
-
-    # Optimize
-    study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
-    best_auc = study.best_value
-    best_gini = 2 * best_auc - 1
-    print(f"CatBoost HPO complete. Best AUC: {best_auc:.4f}, Best Gini: {best_gini:.4f}")
-
-    # Non-regression check (STRICT)
-    if best_gini < PHASE4_CAT_BASELINE:
-        raise RuntimeError(
-            f"Non-regression violated: CatBoost Gini {best_gini:.4f} < Phase 4 baseline {PHASE4_CAT_BASELINE:.4f}"
-        )
-
-    # Refit on full data with best params
-    best_params = study.best_params.copy()
-    best_params['bootstrap_type'] = 'Bayesian'
-    best_params['verbose'] = 0
-    best_params['allow_writing_files'] = False
-    best_params['random_state'] = 42
-
-    final_model = CatBoostClassifier(**best_params)
-    if cat_features:
-        final_model.fit(X, y, cat_features=cat_features, verbose=0)
-    else:
-        final_model.fit(X, y, verbose=0)
-
-    # Store cat_features as attribute for downstream reference
-    final_model.cat_features = cat_features
-
-    # Save model
-    joblib.dump(final_model, _PROJECT_ROOT / "models" / "catboost_extended.pkl")
-    print(f"Saved CatBoost model to models/catboost_extended.pkl")
-
-    return final_model
 
 
 def train_xgboost_extended_hpo(
