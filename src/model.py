@@ -37,6 +37,7 @@ from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
+from src.features import _PROJECT_ROOT
 from src.utils import evaluate_model, gini_coefficient, ks_statistic, plot_roc_and_pr
 
 # ---------------------------------------------------------------------------
@@ -118,10 +119,10 @@ _XGB_RAW_REG_MAX: float = 5.0
 _XGB_RAW_STUDY_NAME: str = "xgboost_raw_v9"
 
 # Output paths for XGBoost Optuna HPO artefacts
-_HPO_PROGRESS_LOG_PATH: str = "reports/hpo_progress.jsonl"
-_XGB_OPTUNA_MODEL_PATH: str = "models/xgboost_best.pkl"
-_XGB_OPTUNA_PARAMS_PATH: str = "models/xgboost_params.json"
-_XGB_OPTUNA_FIGURE_PATH: str = "reports/figures/xgboost_roc_pr.png"
+_HPO_PROGRESS_LOG_PATH: Path = _PROJECT_ROOT / "reports" / "hpo_progress.jsonl"
+_XGB_OPTUNA_MODEL_PATH: Path = _PROJECT_ROOT / "models" / "xgboost_best.pkl"
+_XGB_OPTUNA_PARAMS_PATH: Path = _PROJECT_ROOT / "models" / "xgboost_params.json"
+_XGB_OPTUNA_FIGURE_PATH: Path = _PROJECT_ROOT / "reports" / "figures" / "xgboost_roc_pr.png"
 
 # LightGBM Optuna HPO — search space bounds
 # num_leaves 20–300: controls model expressiveness (leaf-wise growth);
@@ -172,20 +173,20 @@ _LGB_GOSS_OTHER_RATE_MIN: float = 0.01
 _LGB_GOSS_OTHER_RATE_MAX: float = 0.1
 
 # Output paths for LightGBM Optuna HPO artefacts
-_LGB_OPTUNA_MODEL_PATH: str = "models/lightgbm_best.pkl"
-_LGB_OPTUNA_PARAMS_PATH: str = "models/lightgbm_params.json"
-_LGB_OPTUNA_FIGURE_PATH: str = "reports/figures/lightgbm_roc_pr.png"
+_LGB_OPTUNA_MODEL_PATH: Path = _PROJECT_ROOT / "models" / "lightgbm_best.pkl"
+_LGB_OPTUNA_PARAMS_PATH: Path = _PROJECT_ROOT / "models" / "lightgbm_params.json"
+_LGB_OPTUNA_FIGURE_PATH: Path = _PROJECT_ROOT / "reports" / "figures" / "lightgbm_roc_pr.png"
 
 # Output path for the imbalance benchmark comparison table
-_BENCHMARK_REPORT_PATH: str = "reports/imbalance_benchmark.csv"
+_BENCHMARK_REPORT_PATH: Path = _PROJECT_ROOT / "reports" / "imbalance_benchmark.csv"
 
 # Ensemble workflow constants
 # _ENSEMBLE_PERSIST_THRESHOLD: minimum Gini improvement over the best single model
 # required to save the ensemble artefact.  0.005 = half a Gini point — a meaningful
 # improvement that exceeds model variance noise on held-out credit data.
 _ENSEMBLE_PERSIST_THRESHOLD: float = 0.005
-_ENSEMBLE_WORKFLOW_MODEL_PATH: str = "models/ensemble_best.pkl"
-_ENSEMBLE_WORKFLOW_WEIGHTS_PATH: str = "reports/ensemble_weights.json"
+_ENSEMBLE_WORKFLOW_MODEL_PATH: Path = _PROJECT_ROOT / "models" / "ensemble_best.pkl"
+_ENSEMBLE_WORKFLOW_WEIGHTS_PATH: Path = _PROJECT_ROOT / "reports" / "ensemble_weights.json"
 
 # CatBoost Optuna HPO — search space bounds (validated by subagent analysis)
 # depth 4–8: CatBoost uses symmetric (oblivious) trees; depth>8 rarely helps
@@ -210,9 +211,9 @@ _CAT_OBJ_EARLY_STOPPING_ROUNDS: int = 30   # fast config triage inside Optuna
 _CAT_EARLY_STOPPING_ROUNDS: int = 50        # full patience for final refit
 _CAT_FINAL_VAL_SIZE: float = 0.2
 _CAT_OPTUNA_N_TRIALS: int = 100
-_CAT_MODEL_PATH: str = "models/catboost_combined.pkl"
-_CAT_PARAMS_PATH: str = "models/catboost_params.json"
-_CAT_FIGURE_PATH: str = "reports/figures/catboost_roc_pr.png"
+_CAT_MODEL_PATH: Path = _PROJECT_ROOT / "models" / "catboost_combined.pkl"
+_CAT_PARAMS_PATH: Path = _PROJECT_ROOT / "models" / "catboost_params.json"
+_CAT_FIGURE_PATH: Path = _PROJECT_ROOT / "reports" / "figures" / "catboost_roc_pr.png"
 # Raw categorical column names that CatBoost can consume natively.
 # These columns are WoE-encoded in X_woe; prepare_catboost_features()
 # swaps them back to raw strings when df_raw is supplied.
@@ -227,8 +228,8 @@ _CATBOOST_RAW_CATS: list[str] = [
 # 70/30 train/calibration split: enough calibration data to fit Platt sigmoid
 # without starving the base model of training signal.
 _CALIB_SPLIT: float = 0.3
-_CALIBRATED_MODEL_PATH: str = "models/lightgbm_calibrated.pkl"
-_CALIBRATION_FIGURE_PATH: str = "reports/figures/calibration_reliability.png"
+_CALIBRATED_MODEL_PATH: Path = _PROJECT_ROOT / "models" / "lightgbm_calibrated.pkl"
+_CALIBRATION_FIGURE_PATH: Path = _PROJECT_ROOT / "reports" / "figures" / "calibration_reliability.png"
 _CALIBRATION_N_BINS: int = 20
 
 # Strategy labels — kept as module constants so downstream tasks can reference
@@ -270,8 +271,8 @@ _ENSEMBLE_CAT_DEFAULTS: dict = {
     "verbose": 0,
     "allow_writing_files": False,
 }
-_ENSEMBLE_3MODEL_WORKFLOW_MODEL_PATH: str = "models/ensemble_3model_best.pkl"
-_ENSEMBLE_3MODEL_WORKFLOW_WEIGHTS_PATH: str = "reports/ensemble_3model_weights.json"
+_ENSEMBLE_3MODEL_WORKFLOW_MODEL_PATH: Path = _PROJECT_ROOT / "models" / "ensemble_3model_best.pkl"
+_ENSEMBLE_3MODEL_WORKFLOW_WEIGHTS_PATH: Path = _PROJECT_ROOT / "reports" / "ensemble_3model_weights.json"
 
 # Extended HPO (Wave 0) — Phase 4.1
 # Per-model extended hyperparameter optimization with higher trial budgets
@@ -333,9 +334,7 @@ _XGB_RAW_GAMMA_MAX: float = 3.0
 
 # Optuna study persistence constants — absolute path prevents test runs from
 # resolving to the production DB when pytest CWD == project root.
-_OPTUNA_DB_PATH: str = str(
-    Path(__file__).resolve().parents[1] / "models" / "optuna_studies.db"
-)
+_OPTUNA_DB_PATH: Path = _PROJECT_ROOT / "models" / "optuna_studies.db"
 
 # Optuna Studies Database Metadata
 # ============================================================================
@@ -369,10 +368,10 @@ class _OOFGiniMonitorCallback:
     Per D-17 (leakage gate) and D-18 (automated monitoring), replaces manual user oversight.
     """
 
-    def __init__(self, progress_log_path: str = "reports/hpo_progress.jsonl",
+    def __init__(self, progress_log_path: str | Path | None = None,
                  oof_gini_threshold: float = 0.85, consecutive_threshold: int = 3,
                  min_oof_gini_threshold: float = 0.30, min_gini_consecutive_threshold: int = 5):
-        self.progress_log_path = Path(progress_log_path)
+        self.progress_log_path = Path(progress_log_path) if progress_log_path is not None else _HPO_PROGRESS_LOG_PATH
         self.oof_gini_threshold = oof_gini_threshold
         self.consecutive_threshold = consecutive_threshold
         self.min_oof_gini_threshold = min_oof_gini_threshold
@@ -750,7 +749,7 @@ def train_logistic_baseline(
     plt.close(fig)
 
     # --- Persist pipeline ---
-    save_model(pipeline, "models/logistic_baseline.pkl")
+    save_model(pipeline, _PROJECT_ROOT / "models" / "logistic_baseline.pkl")
 
     return pipeline, metrics_dict, X_train, X_test, y_train, y_test
 
@@ -1457,7 +1456,7 @@ def train_xgboost_optuna(
         metrics_best["oot_gini"] = oot_gini
 
     # --- ROC + PR figure for best model ---
-    figure_path = Path("reports/figures/xgboost_raw_roc_pr.png")
+    figure_path = _PROJECT_ROOT / "reports" / "figures" / "xgboost_raw_roc_pr.png"
     figure_path.parent.mkdir(parents=True, exist_ok=True)
     fig = plot_roc_and_pr(model_best, X_test, y_test, "XGBoost (Raw)", save_path=str(figure_path))
     plt.close(fig)
@@ -1478,16 +1477,16 @@ def train_xgboost_optuna(
         metrics_dict["oot_gini"] = oot_gini
 
     # --- Persist best (uncalibrated) model ---
-    save_model(model_best, "models/xgboost_raw_best.pkl")
+    save_model(model_best, _PROJECT_ROOT / "models" / "xgboost_raw_best.pkl")
 
     # --- Persist params ---
-    params_path = Path("models/xgboost_raw_params.json")
+    params_path = _PROJECT_ROOT / "models" / "xgboost_raw_params.json"
     params_path.parent.mkdir(parents=True, exist_ok=True)
     with params_path.open("w") as fh:
         _json.dump(best_params, fh, indent=2)
 
     # --- Persist evaluation metrics ---
-    eval_path = Path("reports/xgboost_raw_eval.json")
+    eval_path = _PROJECT_ROOT / "reports" / "xgboost_raw_eval.json"
     eval_path.parent.mkdir(parents=True, exist_ok=True)
     with eval_path.open("w") as fh:
         _json.dump(metrics_dict, fh, indent=2)
@@ -2937,12 +2936,12 @@ def train_ext_source_imputer(
     imputer.fit(X_obs, y_obs)
 
     # Save imputer to disk
-    imputer_path = Path("models/ext_source_imputation_lgb.pkl")
+    imputer_path = _PROJECT_ROOT / "models" / "ext_source_imputation_lgb.pkl"
     imputer_path.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(imputer, imputer_path)
 
     # Save best params for reference
-    params_path = Path("models/ext_source_imputation_params.json")
+    params_path = _PROJECT_ROOT / "models" / "ext_source_imputation_params.json"
     with params_path.open("w") as fh:
         json_dump(best_params, fh, indent=2)
 
@@ -3162,7 +3161,7 @@ def train_lightgbm_extended_hpo(
     final_model.fit(X, y)
 
     # Save model
-    joblib.dump(final_model, "models/lightgbm_extended.pkl")
+    joblib.dump(final_model, _PROJECT_ROOT / "models" / "lightgbm_extended.pkl")
     print(f"Saved LGB model to models/lightgbm_extended.pkl")
 
     return final_model
@@ -3422,7 +3421,7 @@ def train_catboost_extended_hpo(
     final_model.cat_features = cat_features
 
     # Save model
-    joblib.dump(final_model, "models/catboost_extended.pkl")
+    joblib.dump(final_model, _PROJECT_ROOT / "models" / "catboost_extended.pkl")
     print(f"Saved CatBoost model to models/catboost_extended.pkl")
 
     return final_model
@@ -3586,7 +3585,7 @@ def train_xgboost_extended_hpo(
     final_model.fit(X, y, verbose=False)
 
     # Save model
-    joblib.dump(final_model, "models/xgboost_extended.pkl")
+    joblib.dump(final_model, _PROJECT_ROOT / "models" / "xgboost_extended.pkl")
     print(f"Saved XGBoost model to models/xgboost_extended.pkl")
 
     return final_model
@@ -3804,7 +3803,7 @@ def train_ensemble_variant_a(
 
     # Save ensemble if improvement sufficient
     if persisted:
-        joblib.dump(meta_model, "models/ensemble_variant_a.pkl")
+        joblib.dump(meta_model, _PROJECT_ROOT / "models" / "ensemble_variant_a.pkl")
         print(f"Ensemble Variant A persisted (improvement: {improvement:+.4f})")
     else:
         print(
@@ -3955,7 +3954,7 @@ def train_ensemble_variant_b(
     persisted = improvement >= _ENSEMBLE_PERSIST_THRESHOLD
 
     if persisted:
-        joblib.dump(meta_model, "models/ensemble_variant_b.pkl")
+        joblib.dump(meta_model, _PROJECT_ROOT / "models" / "ensemble_variant_b.pkl")
         print(f"Ensemble Variant B persisted (improvement: {improvement:+.4f})")
     else:
         print(
