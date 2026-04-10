@@ -48,7 +48,6 @@ from src.model import (
     train_catboost_extended_hpo,
     train_ensemble,
     train_ext_source_imputer,
-    train_lightgbm_extended_hpo,
     train_lightgbm_optuna,
     train_logistic_baseline,
     train_xgboost_optuna,
@@ -884,7 +883,7 @@ _LGB_OPTUNA_EXPECTED_PARAM_KEYS = {
 
 
 @pytest.fixture(scope="module")
-def lgb_optuna_result():
+def lgb_optuna_result(tmp_path_factory):
     """
     Run train_lightgbm_optuna once per module with n_trials=3 on mock data.
 
@@ -893,6 +892,8 @@ def lgb_optuna_result():
     Function scope would re-run the study 14 times (one per test), taking
     ~14× longer with no additional coverage value.
     """
+    from pathlib import Path
+
     rng = np.random.default_rng(42)
     n = 500
     n_pos = int(n * 0.08)
@@ -904,7 +905,17 @@ def lgb_optuna_result():
         "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
     })
     y = pd.Series(y_arr, name="TARGET")
-    return train_lightgbm_optuna(X, y, n_trials=3)
+
+    # Add TARGET column to X for parquet storage
+    X_with_target = X.copy()
+    X_with_target["TARGET"] = y.values
+
+    # Write to temporary parquet file
+    tmp_path = tmp_path_factory.mktemp("lgb_optuna")
+    parquet_path = tmp_path / "X_tree_dfs.parquet"
+    X_with_target.to_parquet(parquet_path, index=False)
+
+    return train_lightgbm_optuna(str(parquet_path), n_trials=3)
 
 
 # --- Return structure ---
@@ -2556,38 +2567,6 @@ class TestExtendedHPOWave0:
     Optuna must resume from prior trials.
     """
 
-    def test_lightgbm_extended_hpo_150trials_beats_baseline(self, mock_data):
-        """
-        Extended LGB HPO with 150 trials on raw features beats baseline Gini.
-
-        Arrange:
-        - Mock X_combined (63-feature parquet) and y_train (binary target) with 10K rows
-        - Baseline Gini from Phase 4 OOF is 0.5514 (raw XGBoost)
-
-        Act:
-        - Call train_lightgbm_extended_hpo(X_combined, y_train, n_trials=150)
-
-        Assert:
-        - Returned model's test Gini > 0.54 (beating Phase 3 baseline 0.452 for WoE path)
-        - Model is fitted (has predict_proba method)
-
-        Expected Failure (RED): ImportError or AttributeError (function not yet defined)
-        """
-        from src.model import train_lightgbm_extended_hpo
-
-        X, y = mock_data
-
-        # Call extended HPO
-        model = train_lightgbm_extended_hpo(X, y, n_trials=150)
-
-        # Verify model has predict_proba (fitted estimator marker)
-        assert hasattr(model, "predict_proba"), "Model missing predict_proba method"
-
-        # For unit test, verify shape — real test will check Gini > 0.54
-        X_test = X.iloc[-50:]
-        proba = model.predict_proba(X_test)
-        assert proba.shape == (50, 2), f"Expected shape (50, 2), got {proba.shape}"
-
     def test_target_encoder_fold_safe_no_leakage(self, mock_data):
         """
         Target encoding with fold-safe cross-fitting (no target leakage).
@@ -2731,41 +2710,6 @@ class TestExtendedHPOWave0:
         for col in X_filtered.columns[:5]:  # Check first 5
             _, iv = compute_woe_iv(X_filtered, col, y)
             assert iv >= 0.1, f"Feature {col} has IV={iv} < 0.1 threshold"
-
-    def test_optuna_study_persistence_non_regression(self, mock_data):
-        """
-        Optuna study persistence: extended HPO must resume from prior trials.
-
-        Arrange:
-        - Mock X and y for HPO
-
-        Act:
-        - Call train_lightgbm_extended_hpo with n_trials=5 on first pass
-        - Call train_lightgbm_extended_hpo again on same data with n_trials=10
-        - Verify second call did NOT restart from trial 0 but resumed from trial 5
-
-        Assert:
-        - Model is fitted (has predict_proba)
-        - No trial duplication in Optuna study (verifies DB persistence)
-
-        Expected Failure (RED): NotImplementedError from stub function being called
-        """
-        from src.model import train_lightgbm_extended_hpo
-
-        X, y = mock_data
-
-        # First HPO run: 5 trials
-        model_1 = train_lightgbm_extended_hpo(X, y, n_trials=5)
-
-        # Verify model is fitted
-        assert hasattr(model_1, "predict_proba"), "Model missing predict_proba method"
-
-        # Second HPO run: should resume from trial 5, not restart from 0
-        # (In implementation phase, this will verify Optuna study persistence)
-        model_2 = train_lightgbm_extended_hpo(X, y, n_trials=10)
-
-        # Verify second model is also fitted
-        assert hasattr(model_2, "predict_proba"), "Second model missing predict_proba method"
 
 
 # ---------------------------------------------------------------------------

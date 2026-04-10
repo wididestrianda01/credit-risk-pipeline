@@ -1759,7 +1759,9 @@ def train_lightgbm_optuna(
         raise ValueError("y has no negative samples.")
 
     # Temporal CV
-    cv = _make_cv(groups=groups)
+    # Convert groups to numpy array if provided; _make_cv expects (groups_train, n_splits)
+    groups_array = groups.values if groups is not None else None
+    cv = _make_cv(groups_train=groups_array, n_splits=_CV_N_SPLITS)
 
     # Determine OOT index (most recent 20% by temporal order, if groups present)
     # Per Task 1: OOT is the most-recent 20% of samples, OOF is the remaining 80%
@@ -1971,9 +1973,15 @@ def train_lightgbm_optuna(
             X, y, test_size=0.3, random_state=42, stratify=y
         )
 
-    # Apply Platt calibration
-    calibrated_model = calibrate_model(
-        best_model, X_train_cal, y_train_cal, X_calib, y_calib
+    # Task 2: Apply Platt calibration with output paths for best model
+    # Paths are determined based on store and strategy (saved to reports/ and models/)
+    model_path = _PROJECT_ROOT / "models" / "lightgbm_raw_calibrated.pkl"
+    figure_path = _PROJECT_ROOT / "reports" / "figures" / "lgb_raw_calibration_plot.png"
+
+    calibrated_model, brier_uncal, brier_cal = calibrate_model(
+        best_model, X_train_cal, y_train_cal, X_calib, y_calib,
+        output_model_path=str(model_path),
+        output_figure_path=str(figure_path)
     )
 
     # Evaluate on OOT test split (hold out most-recent 20%)
@@ -1998,6 +2006,27 @@ def train_lightgbm_optuna(
     # Compute OOT Gini on test set
     oot_gini = 2 * roc_auc_score(y_test, calibrated_model.predict_proba(X_test)[:, 1]) - 1
     metrics["oot_gini"] = oot_gini
+
+    # Task 1: Persist metrics JSON for orchestrator (Phase 04.2.6)
+    # Determine output filename based on store_path and imbalance_strategy
+    store_name = Path(feature_store_path).stem  # e.g., "X_tree_dfs"
+    store_tag_map = {
+        "X_train": "Xtrain",
+        "X_tree_raw": "Xtreeraw",
+        "X_tree_dfs": "Xtreeds",
+    }
+    store_tag = store_tag_map.get(store_name, store_name)
+    metrics_filename = f"lgb_raw_{store_tag}_{imbalance_strategy}_metrics.json"
+    metrics_path = _PROJECT_ROOT / "reports" / metrics_filename
+
+    # Ensure reports/ exists
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Save metrics dict to JSON
+    with metrics_path.open("w") as f:
+        json.dump(metrics, f, indent=2)
+
+    logger.info(f"Saved metrics to {metrics_path}")
 
     # Return tuple per XGBoost pattern
     return calibrated_model, metrics, X_test, y_test, best_params
