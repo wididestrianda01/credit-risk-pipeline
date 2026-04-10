@@ -1932,12 +1932,14 @@ def catboost_result(tmp_path_factory):
     y_arr = np.zeros(n, dtype=int)
     y_arr[:40] = 1
     rng.shuffle(y_arr)
-    X = pd.DataFrame({
+    df = pd.DataFrame({
         "f1": np.where(y_arr == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
         "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
+        "TARGET": y_arr,
     })
-    y = pd.Series(y_arr, name="TARGET")
-    return train_catboost_optuna(X, y, n_trials=2)
+    feature_store_path = tmp / "X_tree_raw.parquet"
+    df.to_parquet(feature_store_path)
+    return train_catboost_optuna(str(feature_store_path), n_trials=2)
 
 
 class TestCatBoostOptuna:
@@ -1980,8 +1982,10 @@ class TestCatBoostOptuna:
         rng = np.random.default_rng(7)
         n = 300
         y_arr = np.zeros(n, dtype=int); y_arr[:24] = 1; rng.shuffle(y_arr)
-        X = pd.DataFrame({"f1": rng.normal(0, 1, n), "f2": rng.normal(0, 1, n)})
-        train_catboost_optuna(X, pd.Series(y_arr, name="TARGET"), n_trials=1)
+        df = pd.DataFrame({"f1": rng.normal(0, 1, n), "f2": rng.normal(0, 1, n), "TARGET": y_arr})
+        feature_store_path = tmp_path / "X_tree_raw.parquet"
+        df.to_parquet(feature_store_path)
+        train_catboost_optuna(str(feature_store_path), n_trials=1)
         assert out.exists(), "CatBoost model file not written"
 
     def test_params_artifact_saved(self, catboost_result, tmp_path, monkeypatch):
@@ -1994,8 +1998,10 @@ class TestCatBoostOptuna:
         rng = np.random.default_rng(8)
         n = 300
         y_arr = np.zeros(n, dtype=int); y_arr[:24] = 1; rng.shuffle(y_arr)
-        X = pd.DataFrame({"f1": rng.normal(0, 1, n), "f2": rng.normal(0, 1, n)})
-        train_catboost_optuna(X, pd.Series(y_arr, name="TARGET"), n_trials=1)
+        df = pd.DataFrame({"f1": rng.normal(0, 1, n), "f2": rng.normal(0, 1, n), "TARGET": y_arr})
+        feature_store_path = tmp_path / "X_tree_raw.parquet"
+        df.to_parquet(feature_store_path)
+        train_catboost_optuna(str(feature_store_path), n_trials=1)
         assert params_path.exists(), "CatBoost params JSON not written"
 
     def test_no_stdout(self, tmp_path, monkeypatch, capsys):
@@ -2007,8 +2013,10 @@ class TestCatBoostOptuna:
         rng = np.random.default_rng(9)
         n = 300
         y_arr = np.zeros(n, dtype=int); y_arr[:24] = 1; rng.shuffle(y_arr)
-        X = pd.DataFrame({"f1": rng.normal(0, 1, n), "f2": rng.normal(0, 1, n)})
-        train_catboost_optuna(X, pd.Series(y_arr, name="TARGET"), n_trials=1)
+        df = pd.DataFrame({"f1": rng.normal(0, 1, n), "f2": rng.normal(0, 1, n), "TARGET": y_arr})
+        feature_store_path = tmp_path / "X_tree_raw.parquet"
+        df.to_parquet(feature_store_path)
+        train_catboost_optuna(str(feature_store_path), n_trials=1)
         assert capsys.readouterr().out == "", "train_catboost_optuna wrote to stdout"
 
 
