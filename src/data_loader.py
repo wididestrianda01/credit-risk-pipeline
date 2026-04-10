@@ -31,10 +31,10 @@ Usage
     from src.data_loader import load_data, build_training_frame, save_training_frame
 
     # Low-level: raw joined DataFrame
-    df = load_data(data_dir="dataset/", mode="train")
+    df = load_data(data_dir="data/", mode="train")
 
     # High-level: clean (X, y) pair ready for feature engineering
-    X, y = build_training_frame(data_dir="dataset/")
+    X, y = build_training_frame(data_dir="data/")
     save_training_frame(X, y, output_dir="data/processed/")
 """
 

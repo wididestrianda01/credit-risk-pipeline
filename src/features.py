@@ -2449,7 +2449,7 @@ def build_dfs_feature_store(
     Parameters
     ----------
     data_dir : Path | str
-        Directory containing raw data CSVs (dataset/ folder).
+        Directory containing raw data CSVs (data/ folder).
 
     Returns
     -------
