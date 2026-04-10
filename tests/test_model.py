@@ -945,9 +945,9 @@ def test_train_lightgbm_optuna_split_sizes(mock_data, lgb_optuna_result):
 # --- Metrics ---
 
 def test_train_lightgbm_optuna_metrics_keys(lgb_optuna_result):
-    """metrics dict has all evaluate_model keys."""
+    """metrics dict has all evaluate_model keys plus oof_gini and oot_gini."""
     _, metrics, *_ = lgb_optuna_result
-    expected = {"Model", "AUC-ROC", "Gini", "KS", "Brier", "BrierSkill", "AvgPrecision"}
+    expected = {"Model", "AUC-ROC", "Gini", "KS", "Brier", "BrierSkill", "AvgPrecision", "oof_gini", "oot_gini"}
     assert set(metrics.keys()) == expected
 
 
