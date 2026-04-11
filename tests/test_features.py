@@ -27,6 +27,7 @@ from src.features import (
     engineer_instalment_streaks,
     engineer_secondary_features,
     select_features_by_iv,
+    _engineer_ext_source,
 )
 
 
@@ -2580,3 +2581,64 @@ class TestWave1Features:
         assert result.iloc[3] >= 0, "Zero AMT_CREDIT clipped to 1.0 produces a valid (large) ratio"
         # NaN AMT_CREDIT (row 5): missing credit amount must be sentinel, not a fictitious ratio
         assert result.iloc[5] == _NAN_SENTINEL, "NaN AMT_CREDIT must yield sentinel (CR-01 fix)"
+
+
+# ---------------------------------------------------------------------------
+# Phase 04.2.9 — EXT_SOURCE_NUM_AVAILABLE + Protected Features Tests
+# ---------------------------------------------------------------------------
+
+
+def test_ext_source_num_available_all_present():
+    """EXT_SOURCE_NUM_AVAILABLE counts 3 when all sources present."""
+    df = pd.DataFrame({
+        "EXT_SOURCE_1": [0.5],
+        "EXT_SOURCE_2": [0.6],
+        "EXT_SOURCE_3": [0.7],
+    })
+    result = _engineer_ext_source(df)
+    assert "EXT_SOURCE_NUM_AVAILABLE" in result.columns, "EXT_SOURCE_NUM_AVAILABLE missing"
+    assert result["EXT_SOURCE_NUM_AVAILABLE"].iloc[0] == 3.0
+
+
+def test_ext_source_num_available_one_nan():
+    """EXT_SOURCE_NUM_AVAILABLE counts 2 when 1 source is NaN."""
+    df = pd.DataFrame({
+        "EXT_SOURCE_1": [0.5],
+        "EXT_SOURCE_2": [np.nan],
+        "EXT_SOURCE_3": [0.7],
+    })
+    result = _engineer_ext_source(df)
+    assert "EXT_SOURCE_NUM_AVAILABLE" in result.columns
+    assert result["EXT_SOURCE_NUM_AVAILABLE"].iloc[0] == 2.0
+
+
+def test_ext_source_num_available_all_nan():
+    """EXT_SOURCE_NUM_AVAILABLE is 0.0 when all sources are NaN."""
+    df = pd.DataFrame({
+        "EXT_SOURCE_1": [np.nan],
+        "EXT_SOURCE_2": [np.nan],
+        "EXT_SOURCE_3": [np.nan],
+    })
+    result = _engineer_ext_source(df)
+    assert "EXT_SOURCE_NUM_AVAILABLE" in result.columns
+    assert result["EXT_SOURCE_NUM_AVAILABLE"].iloc[0] == 0.0
+
+
+def test_engineer_application_features_includes_annuity_income_ratio(application_fixture):
+    """ANNUITY_INCOME_RATIO created by engineer_application_features."""
+    X_eng = engineer_application_features(application_fixture)
+    assert "ANNUITY_INCOME_RATIO" in X_eng.columns, "ANNUITY_INCOME_RATIO not created by engineer_application_features"
+
+
+def test_engineer_application_features_includes_employed_to_age_ratio(application_fixture):
+    """EMPLOYED_TO_AGE_RATIO created by engineer_application_features."""
+    X_eng = engineer_application_features(application_fixture)
+    assert "EMPLOYED_TO_AGE_RATIO" in X_eng.columns, "EMPLOYED_TO_AGE_RATIO not created by engineer_application_features"
+
+
+def test_ext_source_num_available_in_engineered_features(application_fixture):
+    """EXT_SOURCE_NUM_AVAILABLE created by engineer_application_features."""
+    X_eng = engineer_application_features(application_fixture)
+    assert "EXT_SOURCE_NUM_AVAILABLE" in X_eng.columns, "EXT_SOURCE_NUM_AVAILABLE not created"
+    # Check values are in expected range [0, 3]
+    assert (X_eng["EXT_SOURCE_NUM_AVAILABLE"].isin([0.0, 1.0, 2.0, 3.0])).all(), "Values outside [0,3] range"
