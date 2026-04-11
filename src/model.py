@@ -2612,8 +2612,10 @@ def train_ensemble_3model(
         n_pos = (y_fold_train == 1).sum()
         scale_pos_weight = float(n_neg) / float(n_pos) if n_pos > 0 else 1.0
 
-        # LightGBM
-        lgb_params_fold = {**lgb_params, "scale_pos_weight": scale_pos_weight}
+        # LightGBM — use is_unbalance=True to match standalone HPO strategy;
+        # scale_pos_weight causes OOF rank reversal vs standalone LGB
+        lgb_params_fold = {k: v for k, v in lgb_params.items() if k != "scale_pos_weight"}
+        lgb_params_fold["is_unbalance"] = True
         lgb_fold = lgb.LGBMClassifier(**lgb_params_fold)
         lgb_fold.fit(X_fold_train, y_fold_train)
         oof_lgb[val_idx] = lgb_fold.predict_proba(X_fold_val)[:, 1]
@@ -2635,7 +2637,8 @@ def train_ensemble_3model(
     n_pos_train = (y_train == 1).sum()
     scale_pos_weight_train = float(n_neg_train) / float(n_pos_train) if n_pos_train > 0 else 1.0
 
-    lgb_params_final = {**lgb_params, "scale_pos_weight": scale_pos_weight_train}
+    lgb_params_final = {k: v for k, v in lgb_params.items() if k != "scale_pos_weight"}
+    lgb_params_final["is_unbalance"] = True
     lgb_final = lgb.LGBMClassifier(**lgb_params_final)
     lgb_final.fit(X_train, y_train)
 

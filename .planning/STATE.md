@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-04-11T17:00:42.904612Z"
+last_updated: "2026-04-11T17:30:00.000000Z"
 progress:
   total_phases: 13
-  completed_phases: 10
+  completed_phases: 11
   total_plans: 48
-  completed_plans: 44
-  percent: 92
+  completed_plans: 47
+  percent: 98
 ---
 
 # Project State
@@ -22,7 +22,7 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-07)
 
 **Core value:** Calibrated PD feeding EL = PD × LGD × EAD, Gini ≥ 0.70
-**Current focus:** Phase 04.2.6 — Ensemble + Gini gate (unblocked as of 2026-04-11)
+**Current focus:** Phase 04.3 — SHAP + fairness (unblocked; LGB OOT Gini=0.5746 is primary model)
 
 ---
 
@@ -38,35 +38,38 @@ See: `.planning/PROJECT.md` (updated 2026-04-07)
 
 ## Active Phase
 
-**Phase 04.2.6** — Ensemble + Gini Gate
+**Phase 04.3** — SHAP + Fairness (next)
 
-### Phase 04.2.6-01 (COMPLETE — 2026-04-11)
-- Status: ✅ Complete — Research and context documented
+- Primary model: `models/lightgbm_raw_calibrated.pkl` (OOT Gini=0.5746, KS=0.4302)
+- Scope: SHAP TreeExplainer on LGB, global beeswarm/bar plots, fairness (demographic parity + equalised odds by age/gender)
+- Regulatory scope: GDPR Art. 22 adverse action notices + EU AI Act Art. 6 high-risk AI
+
+---
+
+## Recently Completed Phases
+
+### Phase 04.2.6 — Ensemble + Gini Gate (COMPLETE — 2026-04-11)
+
+- Status: ✅ Complete (3/3 plans; calibrated artifact deferred pending ~45-min full script run)
 - Branch: `gsd/phase-04.2.7-feature-engineering-enhancement-pass`
-- Artifacts: `.planning/phases/04.2.6-ensemble-gini-gate/04.2.6-CONTEXT.md`, `04.2.6-RESEARCH.md`
-
-### Phase 04.2.6-02 (COMPLETE — 2026-04-11)
-- Status: ✅ Complete — Ensemble orchestration and gate evaluation
-- **Results:**
-  - 3-model OOF stacking: LGB (0.5114 OOF) + XGB (0.5393 OOF) + CatBoost (0.5388 OOF)
-  - Ensemble OOT Gini: 0.5416 (improvement +0.0023, <0.005 threshold)
-  - Gate result: **investigate** (ensemble Gini 0.5416 < 0.58 minimum threshold)
-  - Meta-learner coefficients: XGB=3.045 (dominant), CatBoost=1.605, LGB=−1.816 (variance reduction)
-- **Artifacts created:**
-  - `scripts/run_ensemble.py` (403 lines): Ensemble orchestration with Basel CRE36.54 temporal validation
-  - `reports/model_benchmark.csv` (6 lines): 5-model comparison table (LR/XGB/LGB/CatBoost/Ensemble)
-  - `reports/ensemble_weights.json` (27 lines): Regulatory meta-learner coefficients and gate documentation
-- **Commit:** f1b9e31
-- **Summary:** `.planning/phases/04.2.6-ensemble-gini-gate/04.2.6-02-SUMMARY.md`
+- Gate result: **investigate** — ensemble Gini 0.5416 < 0.58 minimum; improvement +0.0023 < 0.005 threshold
+- **Decision:** Best single model (LGB Gini 0.5746) proceeds to Phase 04.3; ensemble not persisted as primary
 - **Ensemble inputs (all valid, Basel CRE36.54 compliant):**
-  | Model | Feature store | OOT Gini | KS | Status |
-  |-------|--------------|----------|----|--------|
-  | XGBoost | X_tree_raw.parquet (144 cols) | 0.5666 | 0.4089 | ✅ Phase 04.2.3.2 |
-  | LGB | X_tree_raw.parquet (144 cols) | 0.5746 | 0.4302 | ✅ Phase 04.2.4.1 |
-  | CatBoost | X_tree_raw.parquet (144 cols) | 0.5699 | 0.4259 | ✅ Phase 04.2.5.1 |
-  | Ensemble (Logistic meta) | X_tree_raw.parquet (144 cols) | 0.5416 | NaN | 🔲 Below threshold |
-
-- **Decision:** Ensemble not persisted (gate result: investigate); focus remains on best single model (LGB Gini 0.5746) for Phase 04.3 SHAP explainability
+  | Model | OOT Gini | KS | Status |
+  |-------|----------|----|--------|
+  | XGBoost | 0.5666 | 0.4089 | ✅ |
+  | LGB | 0.5746 | 0.4302 | ✅ |
+  | CatBoost | 0.5699 | 0.4259 | ✅ |
+  | Ensemble (Logistic meta) | 0.5416 | NaN | 🔲 investigate |
+- **Commits:** 841f63f (Plan 01 TDD), f1b9e31 (Plan 02 orchestration), ba4f0a9 (Plan 03 calibration)
+- **Artifacts:**
+  - `scripts/run_ensemble.py` — full orchestration, Basel-compliant temporal split, calibration
+  - `reports/model_benchmark.csv` — 5-model comparison table
+  - `reports/ensemble_weights.json` — meta-learner coefs (XGB=3.045, CatBoost=1.605, LGB=−1.816), gate thresholds
+  - `models/ensemble_calibrated.pkl` — pending full run (~45 min)
+  - `reports/figures/ensemble_calibration_curve.png` — pending full run
+- **Verification:** HUMAN_NEEDED — all code verified; 2 artifacts require full script execution
+- **Summaries:** `.planning/phases/04.2.6-ensemble-gini-gate/04.2.6-0[1-3]-SUMMARY.md`
 
 ## Recently Completed Phases
 
