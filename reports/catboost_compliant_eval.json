@@ -1,0 +1,23 @@
+{
+  "phase": "04.2.5.1",
+  "model": "catboost",
+  "feature_store": "data/processed/X_tree_raw.parquet",
+  "n_trials": 50,
+  "oot_gini": 0.5698669754150749,
+  "oof_gini": 0.0,
+  "oof_oot_gap": -0.5698669754150749,
+  "ks": 0.4258992564763724,
+  "brier": 0.21472298646598414,
+  "brier_skill": -1.268422412035798,
+  "lgb_oot_gini": 0.5746090399063704,
+  "best_params": {
+    "depth": 5,
+    "learning_rate": 0.035984643000743916,
+    "l2_leaf_reg": 6.985141299959221,
+    "min_data_in_leaf": 40,
+    "bagging_temperature": 0.24606828135220815,
+    "random_strength": 0.9220252717000361
+  },
+  "elapsed_minutes": 80.0,
+  "timestamp": "2026-04-11 15:05:15"
+}
