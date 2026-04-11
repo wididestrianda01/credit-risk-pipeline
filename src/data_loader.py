@@ -353,7 +353,7 @@ def _load_application(data_dir: Path, mode: str) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 
-def _aggregate_bureau_balance(data_dir: Path) -> pd.DataFrame:
+def _aggregate_bureau_balance(bbal: pd.DataFrame) -> pd.DataFrame:
     """Aggregate bureau_balance to SK_ID_BUREAU level with time-windowed features.
 
     STATUS codes: C = closed, X = unknown, 0 = no DPD, 1-5 = DPD buckets.
@@ -366,7 +366,8 @@ def _aggregate_bureau_balance(data_dir: Path) -> pd.DataFrame:
 
     Parameters
     ----------
-    data_dir : Path
+    bbal : pd.DataFrame
+        Pre-loaded bureau_balance DataFrame. Caller is responsible for loading.
 
     Returns
     -------
@@ -375,7 +376,7 @@ def _aggregate_bureau_balance(data_dir: Path) -> pd.DataFrame:
         bbal_dpd_rate_12m, bbal_dpd_trend, bbal_max_severity,
         bbal_recent_max_severity, bbal_active_months.
     """
-    bbal = pd.read_csv(data_dir / _FILE_BUREAU_BAL)
+    # bbal pre-loaded by caller — do NOT read CSV here
 
     # DPD indicator: STATUS in {'1', '2', '3', '4', '5'}
     bbal = bbal.assign(
@@ -494,7 +495,11 @@ def _join_bureau(app: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
         ``app`` with bureau aggregate columns appended.
     """
     bureau = pd.read_csv(data_dir / _FILE_BUREAU)
-    bbal_agg = _aggregate_bureau_balance(data_dir)
+
+    # Load bureau_balance once for both aggregation helpers (D-07 memory protocol)
+    import gc
+    bbal = pd.read_csv(data_dir / _FILE_BUREAU_BAL)
+    bbal_agg = _aggregate_bureau_balance(bbal)
 
     # Enrich bureau with balance aggregates (left join on SK_ID_BUREAU)
     bureau = bureau.merge(bbal_agg, on="SK_ID_BUREAU", how="left")
@@ -560,9 +565,10 @@ def _join_bureau(app: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
     result["bureau_amt_credit_mean"] = result["bureau_amt_credit_mean"].fillna(0)
     result["bureau_days_since_last_credit"] = result["bureau_days_since_last_credit"].fillna(0)
 
-    # Phase A2: Add DPD recency features from bureau_balance
-    bbal = pd.read_csv(data_dir / _FILE_BUREAU_BAL)
+    # Reuse same bbal for DPD recency — no second CSV load (D-07 memory protocol)
     dpd_recency = _compute_bureau_dpd_recency(bbal, bureau)
+    del bbal  # Release 359 MB before returning
+    gc.collect()
     result = result.merge(dpd_recency, on="SK_ID_CURR", how="left")
 
     _assert_no_row_multiplication(app, result, "bureau join")
