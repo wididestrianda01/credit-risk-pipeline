@@ -284,7 +284,7 @@ def extract_and_log_ensemble_weights(context: dict) -> dict:
             "cat": context["ensemble_result"].get("cat_gini")
         },
         "ensemble_gini": context["ensemble_result"].get("ensemble_gini"),
-        "ensemble_ks": context["ensemble_result"].get("ensemble_ks", 0.0),
+        "ensemble_ks": context.get("ensemble_ks", float("nan")),
         "improvement": context["ensemble_result"].get("improvement"),
         "method": "logistic",
         "meta_learner_weights": {
@@ -497,6 +497,12 @@ def main():
 
     # 4. Evaluate benchmark models
     benchmark_df = evaluate_benchmark_models(context)
+
+    # Inject ensemble OOT KS into context so weights JSON can report it correctly.
+    # evaluate_benchmark_models computes KS from OOT predictions; the result dict
+    # returned by run_ensemble_workflow does not carry an ensemble_ks key.
+    ensemble_ks_row = benchmark_df.loc[benchmark_df["Model"] == "Ensemble (Raw + Logistic)", "KS"]
+    context["ensemble_ks"] = float(ensemble_ks_row.iloc[0]) if not ensemble_ks_row.empty else float("nan")
 
     # 5. Extract and log ensemble weights
     ensemble_weights = extract_and_log_ensemble_weights(context)
