@@ -78,6 +78,39 @@ _IV_WEAK: float = 0.02
 # thin_file_young: EU AI Act Art. 6 (age-gating is prohibited age discrimination).
 _REGULATORY_DROP_COLS: list[str] = ["CODE_GENDER", "thin_file_young"]
 
+# Features exempted from VarianceThreshold and Pearson |r|>0.95 deduplication.
+# Wave 1: delinquency trajectory features added in Phase 04.2.7.
+_WAVE1_PROTECTED: list[str] = [
+    "inst_late_rate_12m",
+    "inst_late_rate_recent_vs_historical",
+    "inst_rolling_30dpd_ratio_3m",
+    "inst_delinquency_escalation_flag",
+    "inst_days_since_last_30dpd",
+    "bureau_dpd_trend_3m_vs_12m",
+    "bureau_debt_to_new_credit",
+]
+
+# Phase 9: domain-expert features that would otherwise be filtered out by
+# variance or correlation filters despite being independent credit signals.
+_PHASE9_PROTECTED: list[str] = [
+    "ANNUITY_INCOME_RATIO",
+    "EMPLOYED_TO_AGE_RATIO",
+    "EXT_SOURCE_NUM_AVAILABLE",
+    "bbal_ever_30dpd",
+    "bbal_ever_60dpd",
+    "bbal_ever_90dpd",
+    "bbal_pct_current",
+    "bbal_dpd_escalation",
+    "bbal_improving_flag",
+    "inst_late_payment_acceleration",
+    "inst_payment_consistency_score",
+    "inst_recency_weighted_dpd",
+    "cc_balance_velocity_3m",
+    "cc_utilization_trend",
+    "prev_reject_fraud_flag",
+    "current_to_bureau_debt_ratio",
+]
+
 
 # ---------------------------------------------------------------------------
 # Private helpers — one concern per function
@@ -2700,39 +2733,8 @@ def build_tree_feature_store(
     # Wave 1 domain-expert features — exempt from variance filter and correlation dedup.
     # These are Basel CRE36.54-compliant delinquency trajectory signals selected by
     # domain expertise. Automatic filters must not override expert feature selection.
-    _WAVE1_PROTECTED = [
-        "inst_late_rate_12m",
-        "inst_late_rate_recent_vs_historical",
-        "inst_rolling_30dpd_ratio_3m",
-        "inst_delinquency_escalation_flag",
-        "inst_days_since_last_30dpd",
-        "bureau_dpd_trend_3m_vs_12m",
-        "bureau_debt_to_new_credit",
-    ]
-
-    # Phase 9 domain-expert features — exempt from variance filter and correlation dedup.
-    # These are high-value features for Wave 2 feature engineering that would otherwise be
-    # filtered out by correlation with existing features, despite being independent signals.
-    _PHASE9_PROTECTED = [
-        "ANNUITY_INCOME_RATIO",
-        "EMPLOYED_TO_AGE_RATIO",
-        "EXT_SOURCE_NUM_AVAILABLE",
-        "bbal_ever_30dpd",
-        "bbal_ever_60dpd",
-        "bbal_ever_90dpd",
-        "bbal_pct_current",
-        "bbal_dpd_escalation",
-        "bbal_improving_flag",
-        "inst_late_payment_acceleration",
-        "inst_payment_consistency_score",
-        "inst_recency_weighted_dpd",
-        "cc_balance_velocity_3m",
-        "cc_utilization_trend",
-        "prev_reject_fraud_flag",
-        "current_to_bureau_debt_ratio",
-    ]
-
     # Stash protected columns that are present, so they survive the filters below.
+    # _WAVE1_PROTECTED and _PHASE9_PROTECTED are module-level constants.
     protected_cols = set(_WAVE1_PROTECTED + _PHASE9_PROTECTED)
     _protected_present = [c for c in protected_cols if c in X_iv.columns]
     _protected_data = X_iv[_protected_present].copy() if _protected_present else None
