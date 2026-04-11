@@ -259,12 +259,16 @@ def extract_and_log_ensemble_weights(context: dict) -> dict:
         cat_params = context["cat_params"]
 
         # Re-train ensemble to get the model object
-        ensemble_model, metrics_dict, X_test, y_test, base_gini = train_ensemble_3model(
+        X_oot = context.get("X_oot")
+        y_oot = context.get("y_oot")
+        ensemble_model, metrics_dict, base_gini = train_ensemble_3model(
             X_train, y_train,
             lgb_params=lgb_params,
             xgb_params=xgb_params,
             cat_params=cat_params,
-            method="logistic"
+            method="logistic",
+            X_oot=X_oot,
+            y_oot=y_oot,
         )
 
     # Extract meta_lr (LogisticRegression) from ensemble
@@ -468,7 +472,9 @@ def main():
         xgb_params=xgb_params,
         cat_model=True,  # Non-None value triggers 3-model path
         cat_params=cat_params,
-        method="logistic"
+        method="logistic",
+        X_oot=X_oot,
+        y_oot=y_oot,
     )
 
     # Extract ensemble results

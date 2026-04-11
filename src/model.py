@@ -2541,6 +2541,8 @@ def train_ensemble_3model(
     n_splits: int = 5,
     method: Literal["average", "logistic"] = "logistic",
     groups: np.ndarray | None = None,
+    X_oot: pd.DataFrame | None = None,
+    y_oot: pd.Series | None = None,
 ) -> tuple:
     """
     Train 3-model OOF ensemble (LGB + XGB + CatBoost) with logistic meta-learner.
@@ -2548,9 +2550,10 @@ def train_ensemble_3model(
     Parameters
     ----------
     X : pd.DataFrame
-        Feature matrix (63 raw continuous columns).
+        Full training feature matrix (typically the 80% training set after
+        the caller has carved out OOT). OOF CV runs across all rows.
     y : pd.Series
-        Binary target labels.
+        Binary target labels aligned with X.
     lgb_params : dict, optional
         LightGBM hyperparameters. Defaults to _ENSEMBLE_LGB_DEFAULTS.
     xgb_params : dict, optional
@@ -2566,12 +2569,18 @@ def train_ensemble_3model(
     groups : np.ndarray, optional
         Sample group labels for grouped CV. If None and
         _TEMPORAL_SORT_COL is in X.columns, auto-detected.
+    X_oot : pd.DataFrame, optional
+        Frozen OOT feature matrix (carved before HPO by the caller).
+        When provided, base models and the ensemble are evaluated here.
+    y_oot : pd.Series, optional
+        Frozen OOT labels aligned with X_oot.
 
     Returns
     -------
     tuple
-        (ensemble_model, metrics_dict, X_test, y_test, base_gini_dict)
-        Where base_gini_dict = {"lgb": lgb_gini, "xgb": xgb_gini, "cat": cat_gini}
+        (ensemble_model, metrics_dict, base_gini_dict)
+        metrics_dict contains Gini/KS evaluated on X_oot if provided, else NaN.
+        base_gini_dict = {"lgb": lgb_gini, "xgb": xgb_gini, "cat": cat_gini}
     """
     import lightgbm as lgb
     import xgboost as xgb
@@ -2583,30 +2592,22 @@ def train_ensemble_3model(
     if cat_params is None:
         cat_params = _ENSEMBLE_CAT_DEFAULTS.copy()
 
-    # --- Train / holdout split (80 / 20) ---
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y,
-        test_size=_TEST_SIZE,
-        stratify=y,
-        random_state=_RANDOM_STATE,
-    )
-
-    n_train = len(X_train)
+    n_train = len(X)
     oof_lgb = np.zeros(n_train)
     oof_xgb = np.zeros(n_train)
     oof_cat = np.zeros(n_train)
 
     # --- Auto-detect temporal groups ---
-    if groups is None and _TEMPORAL_SORT_COL in X_train.columns:
-        groups_train = X_train[_TEMPORAL_SORT_COL].to_numpy()
+    if groups is None and _TEMPORAL_SORT_COL in X.columns:
+        groups_train = X[_TEMPORAL_SORT_COL].to_numpy()
     else:
         groups_train = groups
     cv = _make_cv(groups_train, n_splits=n_splits)
 
-    for _fold_idx, (train_idx, val_idx) in enumerate(cv.split(X_train, y_train)):
-        X_fold_train = X_train.iloc[train_idx]
-        y_fold_train = y_train.iloc[train_idx]
-        X_fold_val = X_train.iloc[val_idx]
+    for _fold_idx, (train_idx, val_idx) in enumerate(cv.split(X, y)):
+        X_fold_train = X.iloc[train_idx]
+        y_fold_train = y.iloc[train_idx]
+        X_fold_val = X.iloc[val_idx]
 
         n_neg = (y_fold_train == 0).sum()
         n_pos = (y_fold_train == 1).sum()
@@ -2635,33 +2636,36 @@ def train_ensemble_3model(
         oof_cat[val_idx] = cat_fold.predict_proba(X_fold_val.to_numpy())[:, 1]
 
     # --- Train final base models on full training set ---
-    n_neg_train = (y_train == 0).sum()
-    n_pos_train = (y_train == 1).sum()
-    scale_pos_weight_train = float(n_neg_train) / float(n_pos_train) if n_pos_train > 0 else 1.0
+    n_neg_full = (y == 0).sum()
+    n_pos_full = (y == 1).sum()
+    scale_pos_weight_full = float(n_neg_full) / float(n_pos_full) if n_pos_full > 0 else 1.0
 
     lgb_params_final = {k: v for k, v in lgb_params.items() if k != "scale_pos_weight"}
     lgb_params_final["is_unbalance"] = True
     lgb_params_final["verbosity"] = -1
     lgb_final = lgb.LGBMClassifier(**lgb_params_final)
-    lgb_final.fit(X_train, y_train)
+    lgb_final.fit(X, y)
 
-    xgb_params_final = {**xgb_params, "scale_pos_weight": scale_pos_weight_train}
+    xgb_params_final = {**xgb_params, "scale_pos_weight": scale_pos_weight_full}
     xgb_final = xgb.XGBClassifier(**xgb_params_final)
-    xgb_final.fit(X_train, y_train)
+    xgb_final.fit(X, y)
 
-    cat_params_final = {**cat_params, "scale_pos_weight": scale_pos_weight_train}
+    cat_params_final = {**cat_params, "scale_pos_weight": scale_pos_weight_full}
     cat_final = CatBoostClassifier(**cat_params_final)
-    cat_final.fit(X_train.to_numpy(), y_train.to_numpy(), verbose=False)
+    cat_final.fit(X.to_numpy(), y.to_numpy(), verbose=False)
 
-    # --- Evaluate individual base models ---
-    lgb_metrics = evaluate_model(lgb_final, X_test, y_test, "LightGBM")
-    xgb_metrics = evaluate_model(xgb_final, X_test, y_test, "XGBoost")
-    cat_metrics = evaluate_model(cat_final, X_test, y_test, "CatBoost")
-    base_gini_dict = {
-        "lgb": float(lgb_metrics["Gini"]),
-        "xgb": float(xgb_metrics["Gini"]),
-        "cat": float(cat_metrics["Gini"]),
-    }
+    # --- Evaluate individual base models on OOT (if provided) ---
+    if X_oot is not None and y_oot is not None:
+        lgb_metrics = evaluate_model(lgb_final, X_oot, y_oot, "LightGBM")
+        xgb_metrics = evaluate_model(xgb_final, X_oot, y_oot, "XGBoost")
+        cat_metrics = evaluate_model(cat_final, X_oot, y_oot, "CatBoost")
+        base_gini_dict = {
+            "lgb": float(lgb_metrics["Gini"]),
+            "xgb": float(xgb_metrics["Gini"]),
+            "cat": float(cat_metrics["Gini"]),
+        }
+    else:
+        base_gini_dict = {"lgb": float("nan"), "xgb": float("nan"), "cat": float("nan")}
 
     # --- Create ensemble model ---
     if method == "average":
@@ -2669,7 +2673,7 @@ def train_ensemble_3model(
     elif method == "logistic":
         X_meta = np.column_stack([oof_lgb, oof_xgb, oof_cat])
         meta_lr = LogisticRegression(C=1.0, max_iter=1000, random_state=_RANDOM_STATE)
-        meta_lr.fit(X_meta, y_train)
+        meta_lr.fit(X_meta, y)
         ensemble_model = _LogisticEnsemble3(
             lgb_final, xgb_final, cat_final, meta_lr,
             oof_lgb=oof_lgb, oof_xgb=oof_xgb, oof_cat=oof_cat,
@@ -2677,10 +2681,13 @@ def train_ensemble_3model(
     else:
         raise ValueError(f"method must be 'average' or 'logistic', got '{method}'")
 
-    # --- Evaluate ensemble on holdout ---
-    metrics_dict = evaluate_model(ensemble_model, X_test, y_test, f"Ensemble3 ({method})")
+    # --- Evaluate ensemble on OOT (if provided) ---
+    if X_oot is not None and y_oot is not None:
+        metrics_dict = evaluate_model(ensemble_model, X_oot, y_oot, f"Ensemble3 ({method})")
+    else:
+        metrics_dict = {"Gini": float("nan"), "KS": float("nan"), "Brier": float("nan")}
 
-    return ensemble_model, metrics_dict, X_test, y_test, base_gini_dict
+    return ensemble_model, metrics_dict, base_gini_dict
 
 
 def _evaluate_ensemble_gate(oot_gini: float, best_single_gini: float) -> str:
@@ -2724,6 +2731,8 @@ def run_ensemble_workflow(
     cat_model: "CatBoostClassifier | None" = None,
     cat_params: dict | None = None,
     method: Literal["average", "logistic"] = "logistic",
+    X_oot: pd.DataFrame | None = None,
+    y_oot: pd.Series | None = None,
 ) -> dict:
     """
     Train LGB + XGB base models and a stacked ensemble; persist if Gini improves.
@@ -2775,12 +2784,17 @@ def run_ensemble_workflow(
 
     if cat_model is not None:
         # 3-model path: LGB + XGB + CatBoost OOF stacking
-        ensemble, metrics_dict, X_test, y_test, base_gini = train_ensemble_3model(
+        # X_oot/y_oot are passed through so base models and the ensemble are
+        # evaluated on the regulatory OOT set (Basel CRE36.54), not an
+        # internal random holdout carved from the 80% training set.
+        ensemble, metrics_dict, base_gini = train_ensemble_3model(
             X, y,
             lgb_params=lgb_params,
             xgb_params=xgb_params,
             cat_params=cat_params,
             method=method,
+            X_oot=X_oot,
+            y_oot=y_oot,
         )
         ensemble_gini = float(metrics_dict["Gini"])
         lgb_gini = base_gini["lgb"]
@@ -2956,6 +2970,10 @@ class _LogisticEnsemble3:
     regularisation (C=1.0).
     """
 
+    # Required by sklearn's is_classifier() so CalibratedClassifierCV / FrozenEstimator
+    # treats this as a classifier (enables predict_proba routing).
+    _estimator_type = "classifier"
+
     def __init__(
         self,
         lgb_model: object,
@@ -2994,6 +3012,9 @@ class _LogisticEnsemble3:
         self.oof_lgb = oof_lgb if oof_lgb is not None else np.array([])
         self.oof_xgb = oof_xgb if oof_xgb is not None else np.array([])
         self.oof_cat = oof_cat if oof_cat is not None else np.array([])
+        # Required by sklearn's cross_val_predict/_fit_and_predict pipeline
+        # when CalibratedClassifierCV uses cross-validation on a FrozenEstimator.
+        self.classes_ = np.array([0, 1])
 
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
         """
@@ -3015,6 +3036,76 @@ class _LogisticEnsemble3:
         p_cat = self.cat_model.predict_proba(X_np)[:, 1]
         X_meta = np.column_stack([p_lgb, p_xgb, p_cat])
         return self.meta_lr.predict_proba(X_meta)
+
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
+        """
+        Predict binary class labels (threshold at 0.5).
+
+        Required to satisfy sklearn's estimator protocol so that
+        FrozenEstimator wrapping this class passes cross_val_predict's
+        parameter validation in CalibratedClassifierCV.
+
+        Parameters
+        ----------
+        X : pd.DataFrame
+            Feature matrix.
+
+        Returns
+        -------
+        labels : np.ndarray
+            Shape (n_samples,) with integer class labels {0, 1}.
+        """
+        return (self.predict_proba(X)[:, 1] >= 0.5).astype(int)
+
+    def fit(self, X: pd.DataFrame, y: pd.Series | None = None) -> "_LogisticEnsemble3":
+        """
+        No-op fit — base models and meta-learner are already trained.
+
+        Required so that FrozenEstimator.fit() can call check_is_fitted()
+        without raising TypeError, and so that cross_val_predict's estimator
+        validator (which checks for 'fit' on the wrapped estimator) passes.
+
+        Parameters
+        ----------
+        X : pd.DataFrame
+            Ignored.
+        y : pd.Series or None
+            Ignored.
+
+        Returns
+        -------
+        self : _LogisticEnsemble3
+        """
+        return self
+
+    def __getattr__(self, name: str) -> object:
+        """
+        Fallback for attributes missing from pickled instances.
+
+        Pickled objects predate any attributes added to __init__ after pickling
+        — the instance __dict__ is restored verbatim from the pickle, so new
+        __init__ assignments are never re-executed. __getattr__ is only called
+        when normal attribute lookup fails, making it safe as a fallback.
+
+        Currently handles:
+        - classes_: required by sklearn's cross_val_predict/_fit_and_predict
+          after CalibratedClassifierCV calls predict_proba on each fold.
+        """
+        if name == "classes_":
+            return np.array([0, 1])
+        raise AttributeError(f"'_LogisticEnsemble3' object has no attribute '{name}'")
+
+    def __sklearn_is_fitted__(self) -> bool:
+        """
+        Signal to sklearn's check_is_fitted that this estimator is always ready.
+
+        CalibratedClassifierCV (FrozenEstimator path) calls
+        check_is_fitted(inner_estimator) during fit. Without this hook,
+        check_is_fitted would look for attributes ending with '_' and raise
+        NotFittedError because _LogisticEnsemble3 stores models under plain
+        names (lgb_model, xgb_model, etc.).
+        """
+        return True
 
 
 # ---------------------------------------------------------------------------
