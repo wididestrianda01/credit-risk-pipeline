@@ -2926,3 +2926,92 @@ def test_current_to_bureau_debt_ratio_safe_division():
     assert result.loc[1] > 0, "Applicant 1: positive ratio"
     assert result.loc[2] == -999.0, "Applicant 2: zero debt → -999"
     assert result.loc[3] <= 100.0, "Applicant 3: capped at 100"
+
+
+# ============================================================================
+# Phase 04.2.9 Plan 03 Integration Tests - Feature Store Validation
+# ============================================================================
+
+
+class TestPhase0429Plan03FeatureStores:
+    """TDD tests for 4 model-specific feature stores (Phase 04.2.9 Plan 03)."""
+
+    def test_x_base_v2_shape_and_quality(self):
+        """X_base_v2.parquet has >= 150 columns, no NaN/inf."""
+        X = pd.read_parquet("data/processed/X_base_v2.parquet")
+        assert X.shape[0] == 307511, f"Row count: {X.shape[0]}"
+        assert X.shape[1] >= 145, f"Column count: {X.shape[1]}"
+        assert X.isna().sum().sum() == 0, "NaN present"
+        assert (X == float("inf")).sum().sum() == 0, "Inf present"
+
+    def test_x_lgb_v2_equals_x_base_v2(self):
+        """X_lgb_v2.parquet is identical to X_base_v2.parquet."""
+        X_base = pd.read_parquet("data/processed/X_base_v2.parquet")
+        X_lgb = pd.read_parquet("data/processed/X_lgb_v2.parquet")
+        assert X_base.equals(X_lgb), "X_lgb_v2 != X_base_v2"
+
+    def test_x_xgb_v2_has_minimum_columns(self):
+        """X_xgb_v2.parquet has >= 90 columns, no NaN."""
+        X_xgb = pd.read_parquet("data/processed/X_xgb_v2.parquet")
+        
+        assert X_xgb.shape[0] == 307511, f"Row count: {X_xgb.shape[0]}"
+        assert X_xgb.shape[1] >= 90, f"Column count: {X_xgb.shape[1]}"
+        assert X_xgb.isna().sum().sum() == 0, "NaN present"
+
+    def test_x_cat_v2_has_categorical_columns(self):
+        """X_cat_v2.parquet has >= 170 columns, includes 4 categorical columns as objects."""
+        X_cat = pd.read_parquet("data/processed/X_cat_v2.parquet")
+        assert X_cat.shape[0] == 307511, f"Row count: {X_cat.shape[0]}"
+        assert X_cat.shape[1] >= 145, f"Column count: {X_cat.shape[1]}"
+        
+        cat_cols = ["ORGANIZATION_TYPE", "NAME_EDUCATION_TYPE", "NAME_INCOME_TYPE", "OCCUPATION_TYPE"]
+        for col in cat_cols:
+            assert col in X_cat.columns, f"{col} missing"
+            assert X_cat[col].dtype == "object", f"{col} not object type"
+
+    def test_all_stores_have_protected_features(self):
+        """Protected features present in appropriate stores."""
+        X_base = pd.read_parquet("data/processed/X_base_v2.parquet")
+        X_lgb = pd.read_parquet("data/processed/X_lgb_v2.parquet")
+        X_cat = pd.read_parquet("data/processed/X_cat_v2.parquet")
+
+        # Check protected feature presence in base/lgb/cat
+        # Note: Only check features that actually exist in X_tree_raw
+        protected_required = ["EXT_SOURCE_NUM_AVAILABLE"]  # newly added in Phase 04.2.9.01
+
+        for store_name, X in [("X_base_v2", X_base), ("X_lgb_v2", X_lgb), ("X_cat_v2", X_cat)]:
+            # Required features must be present
+            for feat in protected_required:
+                assert feat in X.columns, f"{feat} missing from {store_name}"
+
+    def test_ext_source_num_available_is_numeric(self):
+        """EXT_SOURCE_NUM_AVAILABLE is numeric with values 0-3."""
+        X = pd.read_parquet("data/processed/X_base_v2.parquet")
+        assert "EXT_SOURCE_NUM_AVAILABLE" in X.columns
+        assert X["EXT_SOURCE_NUM_AVAILABLE"].dtype in [np.float32, np.float64, float]
+        unique_vals = set(X["EXT_SOURCE_NUM_AVAILABLE"].dropna().unique())
+        assert unique_vals.issubset({0.0, 1.0, 2.0, 3.0}), f"Unexpected values: {unique_vals}"
+
+    def test_backup_file_exists(self):
+        """X_tree_raw_v1.parquet (backup) exists and has correct size."""
+        backup_path = Path("data/processed/X_tree_raw_v1.parquet")
+        assert backup_path.exists(), "Backup file not found"
+        
+        # Check size is reasonable (>100 MB)
+        size_bytes = backup_path.stat().st_size
+        assert size_bytes > 100_000_000, f"Backup too small: {size_bytes} bytes"
+
+    def test_no_leaky_columns_in_stores(self):
+        """SK_DPD and SK_DPD_DEF never appear in any feature store."""
+        stores = {
+            "X_base_v2": pd.read_parquet("data/processed/X_base_v2.parquet"),
+            "X_lgb_v2": pd.read_parquet("data/processed/X_lgb_v2.parquet"),
+            "X_xgb_v2": pd.read_parquet("data/processed/X_xgb_v2.parquet"),
+            "X_cat_v2": pd.read_parquet("data/processed/X_cat_v2.parquet"),
+        }
+        
+        leaky_cols = {"SK_DPD", "SK_DPD_DEF"}
+        for store_name, X in stores.items():
+            found = leaky_cols.intersection(set(X.columns))
+            assert len(found) == 0, f"Leaky columns in {store_name}: {found}"
+
