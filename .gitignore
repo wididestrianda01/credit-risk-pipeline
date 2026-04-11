@@ -48,6 +48,27 @@ models/
 # Hyperparameter optimisation storage
 optuna.db
 optuna_study.db
+*.db
+
+# Temporary run logs and outputs
+*.log
+rebuild_output.log
+reports/*.log
+reports/*.csv
+reports/feature_store_comparison.json
+reports/lgb_feature_store_selection.json
+reports/lgb_raw_*.json
+reports/imbalance_benchmark.csv
+reports/ensemble_*.log
+
+# Model training artifacts
+catboost_info/
+
+# Documentation stubs (not committed)
+docs/
+feature.md
+lgb.md
+REVIEW.md
 
 # Environment
 .env
