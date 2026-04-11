@@ -2565,8 +2565,8 @@ class TestWave1Features:
         _NAN_SENTINEL = -999.0
         # Create minimal test df with required columns
         mock_df = pd.DataFrame({
-            'bureau_credit_debt_sum': [100000.0, 0.0, np.nan, 500000.0, 200000.0],
-            'AMT_CREDIT': [200000.0, 150000.0, 100000.0, 0.0, 100000.0],
+            'bureau_credit_debt_sum': [100000.0, 0.0, np.nan, 500000.0, 200000.0, 300000.0],
+            'AMT_CREDIT': [200000.0, 150000.0, 100000.0, 0.0, 100000.0, np.nan],
         })
         result = engineer_bureau_debt_to_new_credit(mock_df)
         assert isinstance(result, pd.Series), "Should return pd.Series"
@@ -2576,6 +2576,7 @@ class TestWave1Features:
         assert (valid >= 0).all(), "Valid ratio must be ≥ 0"
         # NaN debt row should be sentinel
         assert result.iloc[2] == _NAN_SENTINEL, "NaN debt should yield sentinel"
-        # Zero AMT_CREDIT should yield sentinel (clipped to 1.0 before division)
-        # Row 3 has 0 AMT_CREDIT, which gets clipped to 1.0; ratio = 500000/1 = 500000
-        assert result.iloc[3] >= 0, "Zero AMT_CREDIT should be clipped to 1.0 for safe division"
+        # Zero AMT_CREDIT (row 3): clipped to 1.0 for safe division; ratio is a valid large number
+        assert result.iloc[3] >= 0, "Zero AMT_CREDIT clipped to 1.0 produces a valid (large) ratio"
+        # NaN AMT_CREDIT (row 5): missing credit amount must be sentinel, not a fictitious ratio
+        assert result.iloc[5] == _NAN_SENTINEL, "NaN AMT_CREDIT must yield sentinel (CR-01 fix)"

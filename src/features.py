@@ -776,10 +776,12 @@ def engineer_bureau_debt_to_new_credit(df: pd.DataFrame) -> pd.Series:
     debt = df["bureau_credit_debt_sum"]
     credit = df["AMT_CREDIT"]
 
-    # Track which rows had NaN debt (to mark as sentinel later)
+    # Track which rows had NaN in EITHER input — both missing sources require sentinel
     debt_missing = debt.isna()
+    credit_missing = credit.isna()
+    either_missing = debt_missing | credit_missing
 
-    # Fill NaN with 0 for division, but we'll restore sentinel for originally-missing rows
+    # Fill NaN with safe defaults for division only — originals restored via either_missing mask
     debt_filled = debt.fillna(0.0).clip(lower=0.0)
     credit_filled = credit.fillna(0.0).clip(lower=1.0)  # Ensure no division by zero
 
@@ -791,8 +793,8 @@ def engineer_bureau_debt_to_new_credit(df: pd.DataFrame) -> pd.Series:
     ratio = ratio.replace([np.inf, -np.inf], _NAN_SENTINEL)
     ratio = ratio.fillna(_NAN_SENTINEL)
 
-    # Restore sentinel for originally-missing debt values
-    ratio[debt_missing] = _NAN_SENTINEL
+    # Restore sentinel for any row where debt OR credit was originally missing
+    ratio[either_missing] = _NAN_SENTINEL
 
     return ratio
 
