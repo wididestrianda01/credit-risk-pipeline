@@ -729,12 +729,31 @@ def engineer_bureau_dpd_trend_3m_vs_12m(df: pd.DataFrame) -> pd.Series:
         Index = df.index. Values ∈ [-1, 1] or -999.0 sentinel.
         Expected coverage: ~97.2%.
     """
-    if "bureau_bbal_dpd_rate_3m_mean" not in df.columns or "bureau_bbal_dpd_rate_3m_to_12m_mean" not in df.columns:
-        # Return sentinel if columns missing
+    # Column name aliases: X_train.parquet may use either naming convention depending
+    # on which version of data_loader.py generated it.
+    _COL_3M = next(
+        (c for c in ("bureau_bbal_dpd_rate_3m_mean", "bbal_dpd_last_3m_rate") if c in df.columns),
+        None,
+    )
+    _COL_HIST = next(
+        (
+            c
+            for c in (
+                "bureau_bbal_dpd_rate_3m_to_12m_mean",
+                "bureau_bbal_dpd_rate_12m_mean",
+                "bureau_bbal_dpd_rate_6m_mean",
+            )
+            if c in df.columns
+        ),
+        None,
+    )
+
+    if _COL_3M is None or _COL_HIST is None:
+        # Return sentinel if no usable columns found
         return pd.Series(_NAN_SENTINEL, index=df.index, dtype=float)
 
-    rate_3m = df["bureau_bbal_dpd_rate_3m_mean"]
-    rate_3m_to_12m = df["bureau_bbal_dpd_rate_3m_to_12m_mean"]
+    rate_3m = df[_COL_3M]
+    rate_3m_to_12m = df[_COL_HIST]
 
     # Compute trend only where both inputs are valid (not NaN)
     # When either input is NaN, the result will be NaN and get filled with sentinel below
@@ -2008,6 +2027,22 @@ def build_tree_feature_store(
     # Skip IV filter for tree models — preserve all numeric columns with variance
     X_iv = X_filled.copy()
 
+    # Wave 1 domain-expert features — exempt from variance filter and correlation dedup.
+    # These are Basel CRE36.54-compliant delinquency trajectory signals selected by
+    # domain expertise. Automatic filters must not override expert feature selection.
+    _WAVE1_PROTECTED = [
+        "inst_late_rate_12m",
+        "inst_late_rate_recent_vs_historical",
+        "inst_rolling_30dpd_ratio_3m",
+        "inst_delinquency_escalation_flag",
+        "inst_days_since_last_30dpd",
+        "bureau_dpd_trend_3m_vs_12m",
+        "bureau_debt_to_new_credit",
+    ]
+    # Stash protected columns that are present, so they survive the filters below.
+    _protected_present = [c for c in _WAVE1_PROTECTED if c in X_iv.columns]
+    _protected_data = X_iv[_protected_present].copy() if _protected_present else None
+
     # Layer 6a: Remove low-variance features (variance < 1%)
     # Use sklearn.feature_selection.VarianceThreshold for reproducible semantics
     # (avoids data-dependent quantile heuristics).
@@ -2022,10 +2057,17 @@ def build_tree_feature_store(
     else:
         X_var = X_iv.copy()
 
+    # Restore any protected Wave 1 features that were dropped by variance filter.
+    if _protected_data is not None:
+        for col in _protected_present:
+            if col not in X_var.columns:
+                X_var[col] = _protected_data[col]
+
     print(f"After variance filter: {X_var.shape[1]}")
 
     # Layer 6b: Remove correlated features (|r| > 0.95)
     # Compute Pearson correlation matrix and drop one of each highly-correlated pair.
+    # Protected Wave 1 features are never dropped, even if they correlate > 0.95.
     if X_var.shape[1] > 1:
         corr_matrix = X_var.corr().abs()
 
@@ -2034,7 +2076,9 @@ def build_tree_feature_store(
         for i in range(len(corr_matrix.columns)):
             for j in range(i + 1, len(corr_matrix.columns)):
                 if corr_matrix.iloc[i, j] > 0.95:
-                    pairs_to_drop.append(corr_matrix.columns[j])
+                    # Never drop a protected Wave 1 feature
+                    if corr_matrix.columns[j] not in _WAVE1_PROTECTED:
+                        pairs_to_drop.append(corr_matrix.columns[j])
 
         # Keep first of each pair, drop second
         cols_to_drop = list(set(pairs_to_drop))
