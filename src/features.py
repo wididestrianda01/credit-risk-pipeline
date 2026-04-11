@@ -555,6 +555,159 @@ def engineer_inst_late_rate_recent_vs_historical(df_inst: pd.DataFrame) -> pd.Se
     return trajectory
 
 
+def engineer_inst_rolling_30dpd_ratio_3m(df_inst: pd.DataFrame) -> pd.Series:
+    """
+    Compute fraction of instalments with >30 DPD in the last 90 days.
+
+    Recent delinquency is more predictive of near-term default than historical DPD.
+
+    Parameters
+    ----------
+    df_inst : pd.DataFrame
+        installments_payments table.
+
+    Returns
+    -------
+    pd.Series
+        Index = SK_ID_CURR. Values ∈ [0, 1] or -999.0 sentinel.
+        Expected coverage: ~92%.
+    """
+    df = df_inst.copy()
+    df["dpd"] = np.maximum(0, df["DAYS_ENTRY_PAYMENT"] - df["DAYS_INSTALMENT"])
+    df["is_late"] = (df["dpd"] > 30).astype(int)
+
+    # Filter to 3-month window
+    df_3m = df[df["DAYS_INSTALMENT"] >= -90].copy()
+
+    # Use vectorized groupby aggregation
+    group_3m = df_3m.groupby("SK_ID_CURR")["is_late"]
+    result_dict = {}
+    for sk_id, group in df_3m.groupby("SK_ID_CURR"):
+        if len(group) == 0:
+            result_dict[sk_id] = _NAN_SENTINEL
+        else:
+            late_cnt = group["is_late"].sum()
+            total_cnt = len(group)
+            result_dict[sk_id] = float(late_cnt) / float(total_cnt)
+
+    # Ensure all applicants present (fill missing with sentinel)
+    all_ids = df_inst["SK_ID_CURR"].unique()
+    result = pd.Series(result_dict, dtype=float)
+    result = result.reindex(all_ids, fill_value=_NAN_SENTINEL)
+    result.index.name = "SK_ID_CURR"
+    return result
+
+
+def engineer_inst_delinquency_escalation_flag(df_inst: pd.DataFrame) -> pd.Series:
+    """
+    Binary flag: 1 if recent (3m) delinquency rate > historical (6m) rate, else 0.
+
+    Worsening trajectory (escalation) predicts default better than static delinquency.
+
+    Parameters
+    ----------
+    df_inst : pd.DataFrame
+        installments_payments table.
+
+    Returns
+    -------
+    pd.Series
+        Index = SK_ID_CURR. Values ∈ {0, 1, -999}.
+        Expected coverage: ~78%.
+    """
+    df = df_inst.copy()
+    df["dpd"] = np.maximum(0, df["DAYS_ENTRY_PAYMENT"] - df["DAYS_INSTALMENT"])
+    df["is_late"] = (df["dpd"] > 30).astype(int)
+
+    # 3-month window: last 90 days
+    df_3m = df[df["DAYS_INSTALMENT"] >= -90].copy()
+
+    # 6-month window: days 90–180 (prior 3 months, non-overlapping)
+    df_6m = df[(df["DAYS_INSTALMENT"] >= -180) & (df["DAYS_INSTALMENT"] < -90)].copy()
+
+    result_dict = {}
+    for sk_id in df_inst["SK_ID_CURR"].unique():
+        group_3m = df_3m[df_3m["SK_ID_CURR"] == sk_id]
+        group_6m = df_6m[df_6m["SK_ID_CURR"] == sk_id]
+
+        # 3m rate
+        if len(group_3m) > 0:
+            rate_3m = float(group_3m["is_late"].sum()) / float(len(group_3m))
+        else:
+            rate_3m = None
+
+        # 6m rate
+        if len(group_6m) > 0:
+            rate_6m = float(group_6m["is_late"].sum()) / float(len(group_6m))
+        else:
+            rate_6m = None
+
+        # Flag: 1 if 3m > 6m, else 0; -999 if both missing
+        if rate_3m is None and rate_6m is None:
+            result_dict[sk_id] = _NAN_SENTINEL
+        elif rate_3m is None or rate_6m is None:
+            # One window present; flag based on whether recent exists
+            result_dict[sk_id] = 1.0 if rate_3m is not None else 0.0
+        else:
+            result_dict[sk_id] = 1.0 if rate_3m > rate_6m else 0.0
+
+    # Ensure all applicants present
+    all_ids = df_inst["SK_ID_CURR"].unique()
+    result = pd.Series(result_dict, dtype=float)
+    result = result.reindex(all_ids, fill_value=_NAN_SENTINEL)
+    result.index.name = "SK_ID_CURR"
+    return result
+
+
+def engineer_inst_days_since_last_30dpd(df_inst: pd.DataFrame) -> pd.Series:
+    """
+    Days since the most recent instalment with DPD > 30.
+
+    Recency of delinquency is critical: a default 1 month ago signals higher risk than 12 months ago.
+
+    Parameters
+    ----------
+    df_inst : pd.DataFrame
+        installments_payments table.
+
+    Returns
+    -------
+    pd.Series
+        Index = SK_ID_CURR. Values: days ≥ 0, or -1 (never late), or -999 (no data).
+        Expected coverage: ~87%.
+    """
+    df = df_inst.copy()
+    df["dpd"] = np.maximum(0, df["DAYS_ENTRY_PAYMENT"] - df["DAYS_INSTALMENT"])
+
+    result_dict = {}
+    for sk_id in df_inst["SK_ID_CURR"].unique():
+        group = df[df["SK_ID_CURR"] == sk_id]
+
+        if len(group) == 0:
+            result_dict[sk_id] = _NAN_SENTINEL
+        else:
+            # Find most recent DPD > 30
+            late_mask = group["dpd"] > 30
+            if late_mask.any():
+                # Days since that event
+                # DAYS_INSTALMENT is negative; most recent is max(DAYS_INSTALMENT)
+                most_recent_day = group["DAYS_INSTALMENT"].max()
+                last_late_day = group[late_mask]["DAYS_INSTALMENT"].max()
+
+                days_ago = most_recent_day - last_late_day
+                result_dict[sk_id] = float(days_ago)
+            else:
+                # Never late
+                result_dict[sk_id] = -1.0
+
+    # Ensure all applicants present
+    all_ids = df_inst["SK_ID_CURR"].unique()
+    result = pd.Series(result_dict, dtype=float)
+    result = result.reindex(all_ids, fill_value=_NAN_SENTINEL)
+    result.index.name = "SK_ID_CURR"
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
