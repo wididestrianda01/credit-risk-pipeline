@@ -3,4 +3,4 @@ LR (WoE),X_features.parquet,,,
 XGBoost (Raw),X_tree_raw.parquet,0.5666,0.4089,0.0635
 LightGBM (Raw),X_tree_raw.parquet,0.5746090399063704,0.43017319183260827,0.0
 CatBoost (Raw),X_tree_raw.parquet,0.5698669754150749,0.4258992564763724,0.1216
-Ensemble (Raw + Logistic),X_tree_raw.parquet,0.5416295262141679,,
+Ensemble (Raw + Logistic),X_tree_raw.parquet,0.5749035382792809,0.43021717695176853,0.10738173248645555

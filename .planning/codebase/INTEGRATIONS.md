@@ -1,135 +1,138 @@
 # External Integrations
 
-**Analysis Date:** 2026-04-06
+**Analysis Date:** 2026-04-11
 
 ## APIs & External Services
 
-**Kaggle:**
-- Kaggle API (kaggle >= 1.6)
-- Used for: Dataset download (Home Credit Default Risk Kaggle competition dataset)
-- SDK/Client: `kaggle` package
-- Authentication: Kaggle API token stored in `~/.kaggle/kaggle.json` (not committed, `*.json` in .gitignore)
-- Usage: `src/data_loader.py` references dataset downloaded via Kaggle; raw CSV files live in `data/`
+**Kaggle Dataset API:**
+- Home Credit Default Risk dataset (7 CSV tables)
+  - SDK/Client: `kaggle` 1.6+
+  - Auth: `~/.kaggle/kaggle.json` (username/key pair)
+  - Usage: `from src.data_loader import load_data` → internally fetches tables from `data/` directory (must pre-download via Kaggle CLI)
+  - Tables: `application_train.csv`, `application_test.csv`, `bureau.csv`, `bureau_balance.csv`, `previous_application.csv`, `POS_CASH_balance.csv`, `installments_payments.csv`, `credit_card_balance.csv`
 
-**No active external APIs in production code:**
-- FastAPI `/predict` endpoint (in `app/api.py`) is not yet implemented (stub raises `NotImplementedError`)
-- Streamlit dashboard (in `app/streamlit_app.py`) is not yet implemented (placeholder)
+**No external model serving APIs currently integrated** - Models are serialized locally and served via FastAPI (see Deployment section)
 
 ## Data Storage
 
 **Databases:**
-- None — no persistent database integration (SQL, MongoDB, etc.)
+- None configured (project uses flat CSV + parquet files, no SQL database)
 
 **File Storage:**
 - Local filesystem only
-- Raw data: `data/*.csv` (7 Home Credit tables: application_train/test, bureau, bureau_balance, previous_application, POS_CASH_balance, installments_payments, credit_card_balance)
-- Processed data: `data/processed/*.parquet`
-  - `X_train.parquet` — 307,511 × ~160 feature matrix (raw joined tables)
-  - `y_train.parquet` — 307,511 × 1 binary target (DEFAULT)
-  - `X_features.parquet` — WoE-encoded features post-IV filter (~68 columns)
-  - `X_raw_features.parquet` — Raw engineered features pre-WoE transform
-  - `X_featuretools.parquet` — Features from Deep Feature Synthesis (featuretools auto_features)
-- Models: `models/*.pkl` (joblib serialization)
-  - `logistic_baseline.pkl`
-  - `xgboost_best.pkl`, `xgboost_calibrated.pkl`
-  - `lightgbm_best.pkl`
-  - `catboost_best.pkl` (future)
-  - `woe_mappings.pkl` — WoE bin edge storage for inference
-- Reports: `reports/*.json`, `reports/*.csv`, `reports/figures/*.png` (matplotlib output)
-- Optuna: `optuna.db` (SQLite, .gitignore'd) — stores HPO trial history
+  - Input data: `data/*.csv` (7 source tables, gitignored)
+  - Feature stores: `data/processed/*.parquet` (X_tree_raw.parquet, X_tree_dfs.parquet, X_features.parquet, y_train.parquet)
+    - Path safety: All write operations use `_PROJECT_ROOT` anchoring in `src/features.py`, `src/data_loader.py`, `src/auto_features.py`
+  - Models: `models/*.pkl` (joblib serialization, gitignored)
+    - Example files: `xgboost_raw_calibrated.pkl`, `lightgbm_raw_calibrated.pkl`, `catboost_raw_calibrated.pkl`, `logistic_baseline.pkl`
 
 **Caching:**
-- None — no Redis, Memcached, or distributed cache
-- Optuna uses local SQLite database (`optuna.db`) for HPO trial storage and resumption
+- Hyperparameter optimization study databases (local SQLite):
+  - `hpo.db` - Optuna study cache (gitignored)
+  - `lgb_hpo.db`, `lgb_raw_hpo.db` - LightGBM trial history
+  - Purpose: Resume interrupted HPO trials, track best parameters across runs
 
 ## Authentication & Identity
 
 **Auth Provider:**
-- None in production code
-- Kaggle API uses personal token (`~/.kaggle/kaggle.json`) for dataset download only
+- Custom / None at API level
+  - Kaggle: API key in `~/.kaggle/kaggle.json` (required for dataset download)
+  - FastAPI endpoint (`app/api.py`): No auth implemented yet (placeholder stage)
+
+**Current Implementation:**
+- Kaggle credentials passed via environment or `~/.kaggle/` config
+- API auth: Deferred to Phase 5.1 (implementation pending)
 
 ## Monitoring & Observability
 
 **Error Tracking:**
-- None — no Sentry, DataDog, or error monitoring service
-- All errors logged via `warnings.warn()` in source code (e.g., `src/model.py`, `src/features.py`)
+- None configured (project-internal only)
 
 **Logs:**
-- Stdout/stderr only
-- pytest captures test output in `.coverage` (coverage artifact)
-- Model training scripts write to:
-  - `reports/lgb_hyperparameter_heatmap.csv` — LGB Optuna trial metrics
-  - `reports/lgb_*.log` — LGB training logs (from scripts)
-  - `reports/train_raw_eval.log` — raw feature evaluation logs
+- Python standard logging (`logging` module imported in `src/model.py`, `app/api.py`)
+- Console output: LightGBM requires `verbosity=-1` + `lgb.log_evaluation(period=0)` to suppress C++ chatter
+- LGB early stopping verbosity silencer: applied in `_LGB_OBJ_EARLY_STOPPING_ROUNDS=20` (objective) and `_LGB_EARLY_STOPPING_ROUNDS=50` (refit)
+- Stdout capture for test suites: via `contextlib.redirect_stdout()` in `src/auto_features.py` and featuretools calls
 
 ## CI/CD & Deployment
 
 **Hosting:**
-- Local development: `uvicorn app.api:app --reload` (dev server)
-- Local deployment: Streamlit via `streamlit run app/streamlit_app.py`
-- No cloud hosting configured (AWS, GCP, Heroku, etc.)
+- Not yet deployed (development stage)
+  - Target: FastAPI on ASGI server (uvicorn, Gunicorn+uvicorn)
+  - Streamlit dashboard: Streamlit Cloud or Docker container
 
 **CI Pipeline:**
-- None — no GitHub Actions, GitLab CI, CircleCI, or other CI/CD
-- pytest runs locally: `pytest tests/ -v`
+- Not configured (no GitHub Actions, GitLab CI, etc.)
+  - Local testing: `pytest tests/ -v` or `pytest tests/ -v -m "not slow"`
+  - Git workflow: Commits to GSD phase branches, validated locally before pushing to main
+
+**Artifact Management:**
+- Models stored as joblib `.pkl` files in `models/` (gitignored, not committed)
+- Feature stores (parquets) in `data/processed/` (gitignored, not committed)
+- Production deployment requires external artifact storage (S3, GCS, Azure Blob) — not yet configured
 
 ## Environment Configuration
 
 **Required env vars:**
-- None hardcoded
-- Kaggle API token: `~/.kaggle/kaggle.json` (user home directory, not in project)
-- Optional: `KAGGLE_CONFIG_DIR` (environment variable) — defaults to `~/.kaggle/`
+- `KAGGLE_USERNAME` - Kaggle account username (for dataset downloads)
+- `KAGGLE_KEY` - Kaggle API key (secret)
 
 **Secrets location:**
-- `.env` file (if needed) listed in `.gitignore` — use environment variables for sensitive config
-- No `.env` file currently in use
-- Kaggle credentials live outside project tree (`~/.kaggle/kaggle.json`)
+- `~/.kaggle/kaggle.json` (Kaggle credentials, not tracked)
+- `.env` file (if used; currently gitignored, not present in repo)
+
+**Development:**
+- Load environment: Create `.env` locally with Kaggle credentials, load via `python-dotenv` in any script that calls `load_data()`
 
 ## Webhooks & Callbacks
 
 **Incoming:**
-- None
+- FastAPI `/predict` endpoint (stub): Will receive applicant feature JSON; currently returns `NotImplementedError`
+- GET `/health`: Liveness check (implemented in `app/api.py`)
 
 **Outgoing:**
-- None
+- None configured (no external callbacks)
 
-## Optional Integrations (Not Yet Implemented)
+## Third-Party Integrations
 
-**featuretools (auto_features.py):**
-- Status: Integrated but not in production pipeline
-- Package: `featuretools` (not in `requirements.txt`, imported via try/except)
-- Usage: `src/auto_features.py` contains `build_featuretools_feature_store()` — runs Deep Feature Synthesis on entity set
-- Output: `data/processed/X_featuretools.parquet`
-- Note: Requires manual invocation via `scripts/build_featuretools_store.py`; not called in standard training flow
+**Test Fixtures & Mocking:**
+- pytest 8.2+ provides mocking via `unittest.mock` (standard library)
+- No external mocking services (API mocking done in-process via fixtures in `conftest.py`)
 
-**SHAP (explainability.py):**
-- Status: Installed (0.51.0) but implementation incomplete
-- Package: `shap` (in requirements.txt)
-- Usage: `src/explain.py` stub — `compute_shap_values()` and `fairness_report()` raise `NotImplementedError`
-- Planned: TreeExplainer for LightGBM/XGBoost, SHAP waterfall/force plots in Streamlit dashboard
+**Notebook Filtering (Git Hooks):**
+- `nbstripout` registered in `.gitattributes` - Automatically strips notebook outputs on `git add`
+  - Check: `nbstripout --status`
+  - Install: `nbstripout --install`
+  - Purpose: Keep `.ipynb` files diff-friendly and prevent accidental output commits
 
-## Data Exchange Formats
+## Data Flow & Integration Points
 
-**Input:**
-- CSV (7 Home Credit tables, ~2.6 GB raw)
-- Environment variables (Kaggle API token)
+**Ingestion:**
+1. User downloads 7 CSV files from Kaggle (manual download via `kaggle` CLI or web UI)
+2. Place CSVs in `data/` directory
+3. `src/data_loader.load_data()` reads and joins all 7 tables → single modelling DataFrame
 
-**Output:**
-- Parquet (intermediate feature matrices)
-- Pickle (joblib models `*.pkl`)
-- JSON (evaluation results, calibration metrics, Optuna trial logs)
-- CSV (benchmark results, trial metrics)
-- PNG (matplotlib figures: ROC, PR, calibration curves, correlation heatmaps)
+**Feature Engineering (two pipelines):**
+- **WoE pipeline** (`src/features.build_feature_store()`): Raw → engineered → IV-filtered → 68 WoE-encoded features
+- **Tree pipeline** (`src/features.build_tree_feature_store()`): Raw → engineered → 155+ raw features (no WoE)
+- **DFS pipeline** (`src/auto_features.build_featuretools_feature_store()`): 7-table EntitySet → auto-aggregates → ~323 features (raw + DFS)
 
-## Dependency on External Data
+**Model Training:**
+- Input: Parquet feature store (`X_tree_raw.parquet` or `X_tree_dfs.parquet`)
+- Process: `src/model.train_xgboost_optuna()` / `train_lightgbm_optuna()` / `train_catboost_optuna()`
+  - Mandatory Basel CRE36.54 workflow: temporal sort → carve OOT → HPO on 80% → OOF Gini evaluation → retrain on 80% → eval on frozen OOT
+- Output: Serialized model (`models/*.pkl`), metrics (`reports/*.json`)
 
-**Home Credit Default Risk Dataset:**
-- Source: Kaggle competition (https://kaggle.com/c/home-credit-default-risk)
-- Size: ~2.6 GB (7 tables, 307K rows, 100+ raw features)
-- Download: Kaggle API (`kaggle competitions download -c home-credit-default-risk -p data/`)
-- License: Kaggle dataset license (check terms before redistribution)
-- Freshness: Static dataset (2019), not updated
+**Inference (future Phase 5):**
+- Input: Applicant features (JSON via FastAPI POST /predict)
+- Process: Load model (`load_model()`), apply feature pipeline, run inference
+- Output: PredictionResponse (probability_of_default, risk_band, gini_at_training)
+
+**Explainability:**
+- Input: Trained model + test data
+- Process: SHAP TreeExplainer (`src/explain.py` - stub)
+- Output: SHAP values, beeswarm/waterfall plots, fairness metrics by demographic group
 
 ---
 
-*Integration audit: 2026-04-06*
+*Integration audit: 2026-04-11*

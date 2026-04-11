@@ -41,6 +41,7 @@ See: `.planning/PROJECT.md` (updated 2026-04-07)
 **Phase 04.3** — SHAP + Fairness (next)
 
 - Primary model: `models/lightgbm_raw_calibrated.pkl` (OOT Gini=0.5746, KS=0.4302)
+- **Pre-condition:** `lightgbm_raw_calibrated.pkl` was overwritten by a test run (6 KB, n_estimators=2, params mismatch with `lgb_compliant_eval.json`). Must re-generate before SHAP work starts.
 - Scope: SHAP TreeExplainer on LGB, global beeswarm/bar plots, fairness (demographic parity + equalised odds by age/gender)
 - Regulatory scope: GDPR Art. 22 adverse action notices + EU AI Act Art. 6 high-risk AI
 
@@ -50,26 +51,49 @@ See: `.planning/PROJECT.md` (updated 2026-04-07)
 
 ### Phase 04.2.6 — Ensemble + Gini Gate (COMPLETE — 2026-04-11)
 
-- Status: ✅ Complete (3/3 plans; calibrated artifact deferred pending ~45-min full script run)
+- Status: ✅ Complete (3/3 plans + 2 post-run bug fixes)
 - Branch: `gsd/phase-04.2.7-feature-engineering-enhancement-pass`
-- Gate result: **investigate** — ensemble Gini 0.5416 < 0.58 minimum; improvement +0.0023 < 0.005 threshold
-- **Decision:** Best single model (LGB Gini 0.5746) proceeds to Phase 04.3; ensemble not persisted as primary
-- **Ensemble inputs (all valid, Basel CRE36.54 compliant):**
-  | Model | OOT Gini | KS | Status |
-  |-------|----------|----|--------|
-  | XGBoost | 0.5666 | 0.4089 | ✅ |
-  | LGB | 0.5746 | 0.4302 | ✅ |
-  | CatBoost | 0.5699 | 0.4259 | ✅ |
-  | Ensemble (Logistic meta) | 0.5416 | NaN | 🔲 investigate |
+- Gate result: **investigate** — ensemble OOT Gini=0.5749 < 0.58 accept threshold; improvement vs best base model (LGB in-ensemble 0.5734) = +0.0015 < 0.005 minimum
+- **Decision:** Standalone LGB (OOT Gini=0.5746) proceeds to Phase 04.3 as primary; ensemble not primary
+
+**Base model results (final, Basel CRE36.54 compliant):**
+
+| Model | OOT Gini | KS | Status |
+|-------|----------|----|--------|
+| XGBoost | 0.5666 | 0.4089 | ✅ |
+| LightGBM | 0.5746 | 0.4302 | ✅ primary |
+| CatBoost | 0.5699 | 0.4259 | ✅ |
+| Ensemble (LGB+XGB+CAT, logistic meta) | 0.5749 | 0.4302 | 🔲 investigate |
+
+**Post-run bugs discovered and fixed:**
+
+1. **OOF structural bug** — `run_ensemble.py` contained an inner `train_test_split` inside the OOF loop that re-split each fold's training data, leaking OOT signal into OOF predictions. Removed. Re-run after fix: Gini 0.5697.
+
+2. **LGB n_estimators undertraining** — `lgb_compliant_eval.json` stores `best_params` but not `n_estimators` (fixed at 1000 with early stopping during HPO). Ensemble fell back to `_ENSEMBLE_LGB_DEFAULTS = {n_estimators: 100}`, severely undertraining the LGB base model. Fix: `inject_lgb_n_estimators()` added to `run_ensemble.py` — extracts `n_estimators` from `lightgbm_raw_calibrated.pkl`; sanity-checks `n < 50` (detects test-overwritten pkl) and falls back to 500 (conservative estimate based on `learning_rate=0.031` convergence). The pkl was confirmed corrupted (6 KB, n=2, wrong LR), so fallback=500 fired. Re-run after fix: Gini 0.5749 (+0.0052 over the 0.5697 intermediate).
+
+**Ablation study results (`reports/ensemble_ablation.csv`):**
+
+| Rank | Combination | Strategy | OOT Gini | Notes |
+|------|-------------|----------|----------|-------|
+| 1 | LGB+CAT | avg | 0.5754 | Best overall |
+| 2 | LGB+CAT | logistic | 0.5751 | |
+| 3 | LGB+XGB+CAT | logistic | 0.5749 | Gate-submitted ensemble |
+| 5 | LGB (standalone) | — | 0.5734 | In-ensemble, not standalone |
+
+Key finding: XGB has a negative meta-learner coefficient (−1.45) — its OOF residuals are already covered by LGB+CatBoost. LGB+CAT simple average (0.5754) is the best ensemble combination but still below the 0.005 lift threshold relative to standalone LGB (0.5746 → lift = +0.0008 for best combo).
+
+**Meta-learner coefficients (final run):** LGB=3.082, XGB=−1.450, CAT=1.529; intercept=−3.729
+
 - **Commits:** 841f63f (Plan 01 TDD), f1b9e31 (Plan 02 orchestration), ba4f0a9 (Plan 03 calibration)
-- **Artifacts:**
-  - `scripts/run_ensemble.py` — full orchestration, Basel-compliant temporal split, calibration
+- **Artifacts (all written, final state):**
+  - `scripts/run_ensemble.py` — Basel-compliant orchestration + `inject_lgb_n_estimators()` fix
+  - `scripts/ensemble_ablation.py` — 2- and 3-model subset ablation (all combinations × avg and logistic)
   - `reports/model_benchmark.csv` — 5-model comparison table
-  - `reports/ensemble_weights.json` — meta-learner coefs (XGB=3.045, CatBoost=1.605, LGB=−1.816), gate thresholds
-  - `models/ensemble_calibrated.pkl` — pending full run (~45 min)
-  - `reports/figures/ensemble_calibration_curve.png` — pending full run
-- **Verification:** HUMAN_NEEDED — all code verified; 2 artifacts require full script execution
-- **Summaries:** `.planning/phases/04.2.6-ensemble-gini-gate/04.2.6-0[1-3]-SUMMARY.md`
+  - `reports/ensemble_weights.json` — meta-learner coefs, gate result, thresholds, improvement
+  - `reports/ensemble_ablation.csv` — ranked ablation results (11 rows)
+  - `models/ensemble_best.pkl` — uncalibrated ensemble (LGB n_estimators=500)
+  - `models/ensemble_calibrated.pkl` — Platt-calibrated; Brier=0.0878 (uncalibrated: 0.0845)
+  - `reports/figures/ensemble_calibration_curve.png` — reliability diagram
 
 ## Recently Completed Phases
 
@@ -174,13 +198,21 @@ See: `.planning/PROJECT.md` (updated 2026-04-07)
 
 ## Session Notes
 
+### 2026-04-11 — Phase 04.2.6 Ensemble bugs fixed, ablation complete
+
+- **Two post-run bugs found and fixed in `scripts/run_ensemble.py`:**
+  1. **OOF structural bug:** inner `train_test_split` inside the OOF fold loop leaked OOT signal into OOF predictions. Removed. Ensemble re-run 1: Gini=0.5697.
+  2. **LGB n_estimators undertraining:** `lgb_compliant_eval.json` omits `n_estimators` (fixed at 1000+early-stopping during HPO); ensemble fell back to class default=100. `inject_lgb_n_estimators()` added: extracts n from `lightgbm_raw_calibrated.pkl`, detects pkl corruption via sanity check (n<50), applies fallback=500. Discovery: pkl was overwritten by test run (6 KB, n=2, LR=0.015 vs JSON LR=0.031). Fallback=500 fired. Ensemble re-run 2: Gini=0.5749.
+- **Ablation study** (`scripts/ensemble_ablation.py`): all 2- and 3-model subsets tested. Best combo: LGB+CAT avg (0.5754). XGB negative coefficient (−1.45) confirms XGB adds no marginal signal to LGB+CatBoost stack. All combos below gate threshold.
+- **Final gate result:** investigate — Gini=0.5749 < 0.58; improvement=+0.0015 < 0.005. LGB standalone (0.5746) is primary.
+- **`lightgbm_raw_calibrated.pkl` corrupted** — needs re-generation (re-run `train_lightgbm_optuna` with best_params from `lgb_compliant_eval.json`) before Phase 04.3 SHAP work.
+
 ### 2026-04-11 — Phase 04.2.6-02 Ensemble Orchestration Complete
 
 - **Execution:** Ensemble orchestration script written and executed successfully (47min 22sec runtime)
 - **All 3 tasks completed:** (1) Load best_params + X_tree_raw temporal split, (2) Benchmark table evaluation (5 models), (3) Extract meta-learner weights + gate decision
-- **Gate result:** investigate — ensemble Gini 0.5416 < 0.58 accept threshold; improvement 0.0023 < 0.005 min threshold
-- **Key finding:** Ensemble provides minimal gain; best single model (LGB OOT Gini 0.5746) recommended for Phase 04.3 SHAP explainability
-- **HPO best_params sourcing:** LGB and CatBoost from compliant eval JSONs; XGBoost fallback via xgb_hpo_results.json (xgboost_raw_eval.json missing best_params key — points to XGBoost HPO uncertainty)
+- **Gate result:** investigate — ensemble Gini 0.5416 < 0.58 accept threshold; improvement 0.0023 < 0.005 min threshold (note: this was the initial run with OOF bug; final corrected result is 0.5749)
+- **HPO best_params sourcing:** LGB and CatBoost from compliant eval JSONs; XGBoost fallback via xgb_hpo_results.json (xgboost_raw_eval.json missing best_params key)
 - **Regulatory outputs:** Meta-learner coefficients logged to JSON; gate thresholds and decision documented for audit trail
 - **Commits:** f1b9e31 (ensemble orchestration, benchmark, weights JSON)
 
@@ -292,11 +324,16 @@ See: `.planning/PROJECT.md` (updated 2026-04-07)
 | `models/optuna_studies.db` | ✅ Exists | Continue existing studies, never restart |
 | `models/logistic_baseline.pkl` | ✅ Exists | Gini=0.489, KS=0.361 |
 | `models/xgboost_raw_best.pkl` | ✅ Exists | XGBoost on clean raw+DFS features (uncalibrated) |
-| `models/xgboost_raw_calibrated.pkl` | ✅ Exists | **Primary model** — Platt-calibrated; OOT Gini=0.5666, KS=0.4089 |
-| `models/lightgbm_raw_calibrated.pkl` | ✅ VALID | Basel CRE36.54 compliant — Phase 04.2.4.1; OOT Gini=0.5746, KS=0.4302 |
-| `models/catboost_raw_calibrated.pkl` | ✅ VALID | Basel CRE36.54 compliant — Phase 04.2.5.1; OOT Gini=0.5699, KS=0.4259, Brier=0.0831 (corrected) |
+| `models/xgboost_raw_calibrated.pkl` | ✅ Exists | Platt-calibrated XGBoost; OOT Gini=0.5666, KS=0.4089 |
+| `models/lightgbm_raw_calibrated.pkl` | ⚠️ CORRUPTED | Overwritten by test run — 6 KB, n_estimators=2, LR=0.015 (JSON has LR=0.031). Must re-generate before Phase 04.3 SHAP. OOT Gini=0.5746 result remains valid (from `lgb_compliant_eval.json`). |
+| `models/catboost_raw_calibrated.pkl` | ✅ VALID | Basel CRE36.54 compliant; OOT Gini=0.5699, KS=0.4259, Brier=0.0831 |
+| `models/ensemble_best.pkl` | ✅ Exists | Uncalibrated 3-model stack; LGB n_estimators=500 (fallback); OOT Gini=0.5749 |
+| `models/ensemble_calibrated.pkl` | ✅ Exists | Platt-calibrated ensemble; Brier=0.0878 (gate=investigate; not primary) |
 | `models/lightgbm_best.pkl` | ⚠️ Superseded | Trained on WoE store — superseded by lightgbm_raw_calibrated.pkl |
-| `reports/lgb_feature_store_selection.json` | ✅ Exists | LGB 2-store ablation results; raw+eng wins over raw+eng+DFS |
+| `reports/lgb_feature_store_selection.json` | ✅ Exists | LGB 2-store ablation; raw+eng wins over raw+eng+DFS |
+| `reports/ensemble_weights.json` | ✅ Exists | Meta-learner coefs (LGB=3.082, XGB=−1.450, CAT=1.529); gate=investigate |
+| `reports/ensemble_ablation.csv` | ✅ Exists | 11-row ranked ablation; best: LGB+CAT avg Gini=0.5754 |
+| `reports/model_benchmark.csv` | ✅ Exists | 5-model comparison (LR, XGB, LGB, CatBoost, Ensemble) |
 | `src/data_loader.py` | ✅ Valid | Docstrings corrected (data/ not dataset/) — Phase 02-02 |
 | `src/features.py` | ✅ Valid | All paths use `_PROJECT_ROOT`; docstrings corrected — Phase 02 complete |
 | `src/auto_features.py` | ✅ Valid | DFS fixed; 15 SK_DPD leaky columns guarded via `_LEAKY_COLUMNS` |
@@ -318,7 +355,8 @@ See: `.planning/PROJECT.md` (updated 2026-04-07)
 - Phase 04.2.7 complete: 7 Wave 1 delinquency features implemented + X_tree_raw.parquet rebuilt (307511×144); LGB gate FAIL (OOT 0.5746 < 0.5845 threshold) — Wave 2+3 not developed — 2026-04-11
 - Phase 04.2.4.1 complete: LGB compliant re-run (Basel CRE36.54); OOT Gini=0.5746, KS=0.4302; models/lightgbm_raw_calibrated.pkl is now valid — 2026-04-11
 - Phase 04.2.5.1 complete: CatBoost compliant re-run (Basel CRE36.54); OOT Gini=0.5699, KS=0.4259, Brier=0.0831 (corrected from 0.2147 — call-order bug fixed); models/catboost_raw_calibrated.pkl is now valid — 2026-04-11
-- **Next:** Phase 04.2.6 — Ensemble + Gini gate; all three model artifacts valid and ready
+- Phase 04.2.6 complete: 3-model ensemble (LGB+XGB+CAT logistic meta); OOT Gini=0.5749, gate=investigate (lift=+0.0015 < 0.005 threshold); two bugs fixed (OOF structural leak, LGB n_estimators undertraining via inject_lgb_n_estimators fallback=500); ablation confirms LGB+CAT avg (0.5754) best combo; LGB standalone (0.5746) proceeds as primary — 2026-04-11
+- **Pre-condition for Phase 04.3:** `lightgbm_raw_calibrated.pkl` corrupted (test-overwritten); must re-run `train_lightgbm_optuna` with params from `lgb_compliant_eval.json` to restore before SHAP
 - **Queued:** Phase 04.2.8 — Split model.py (4,075 lines) by model family into model_base / model_xgboost / model_lightgbm / model_catboost / model_ensemble + thin facade; unblocked after 04.2.6
 
 ---

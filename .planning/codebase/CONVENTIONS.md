@@ -1,305 +1,278 @@
 # Coding Conventions
 
-**Analysis Date:** 2025-02-20
+**Analysis Date:** 2026-04-11
 
 ## Naming Patterns
 
 **Files:**
-- Module names: lowercase with underscores (`data_loader.py`, `features.py`, `utils.py`)
-- Test files: `test_<module_name>.py` (e.g., `test_features.py`)
+- All source files use lowercase with underscores: `data_loader.py`, `features.py`, `model.py`, `utils.py`, `explain.py`, `auto_features.py`
+- Test files follow pattern `test_<module>.py`: `test_data_loader.py`, `test_features.py`, `test_model.py`, `test_utils.py`, `test_auto_features.py`, `test_streak_evaluation.py`
 
 **Functions:**
-- Public functions: `snake_case` (e.g., `build_features`, `gini_coefficient`, `train_logistic_baseline`)
-- Private functions: `_leading_underscore` (e.g., `_engineer_financial_ratios`, `_make_cv`)
-- Private module constants: `_UPPER_SNAKE_CASE` (e.g., `_NAN_SENTINEL`, `_DAYS_EMPLOYED_SENTINEL`)
+- All public functions use `snake_case`: `gini_coefficient()`, `ks_statistic()`, `evaluate_model()`, `plot_roc_and_pr()`
+- Private helper functions use leading underscore and `snake_case`: `_engineer_financial_ratios()`, `_engineer_demographics()`, `_get_project_root()`, `_write_synthetic_csvs()`
+- Public domain functions are verbs or verb phrases: `load_data()`, `build_features()`, `build_training_frame()`, `engineer_application_features()`, `train_xgboost_optuna()`
 
 **Variables:**
-- Local variables: `snake_case`
-- Boolean variables: prefix with `is_`, `has_`, `should_`, `can_` (e.g., `is_unbalance=True`, `has_data=False`)
-- Sentinel values: explicitly named as constants (e.g., `_NAN_SENTINEL: float = -999.0`)
+- Local variables use `snake_case`: `out`, `income`, `annuity`, `credit`, `ratio_cols`, `rng`, `n_rows`, `n_pos`
+- Boolean variables use `is`, `has`, `should`, `can` prefixes: `is_unbalance`, `has_missing`, `should_drop`
+- Loop indices: single letters only when context is clear (`i`, `j`), otherwise descriptive (`col`, `row`, `sk_id`)
+- Accumulator variables for aggregation: `out` (transformed copy), `result`, `features`
 
-**Types:**
-- Type hints on all public and private function signatures (enforced via `from __future__ import annotations`)
-- Classes: `PascalCase` (e.g., `CalibratedClassifierCV`, `FrozenEstimator`)
-- Dataframe column names: ALL_CAPS with underscores (e.g., `CREDIT_INCOME_RATIO`, `EXT_SOURCE_MEAN`)
+**Types & Classes:**
+- Classes use `PascalCase`: `Pipeline`, `StratifiedKFold`, `LogisticRegression`, `_AverageEnsemble`, `_TemporalCV`, `FrozenEstimator`
+- Type hints required on all public function signatures (fully typed in `src/model.py`, `src/utils.py`, `src/data_loader.py`, `src/features.py`)
+- Type aliases use standard notation: `tuple[float, float]`, `dict[str, Any]`, `list[str]`, `pd.DataFrame`, `pd.Series`
+
+**Constants:**
+- All module-level constants use `UPPER_SNAKE_CASE` with leading underscore: `_DAYS_EMPLOYED_SENTINEL`, `_NAN_SENTINEL`, `_WOE_CLIP`, `_IV_VERY_STRONG`, `_PROJECT_ROOT`
+- Numeric bounds for search spaces: `_XGB_MAX_DEPTH_MIN`, `_XGB_MAX_DEPTH_MAX`, `_LGB_NUM_LEAVES_MIN`, `_LGB_NUM_LEAVES_MAX`
+- File path constants: `_FILE_APP_TRAIN`, `_FILE_BUREAU`, `_FILE_PREV_APP`, `_BENCHMARK_REPORT_PATH`, `_XGB_OPTUNA_MODEL_PATH`
+- All module-level constants prefixed with underscore even if technically public (encapsulation pattern)
+
+**Domain-Specific Feature Naming:**
+- Aggregated features use source table prefix: `bureau_`, `prev_`, `pos_`, `inst_`, `cc_` (e.g., `bureau_avg_balance`, `inst_days_past_due_mean`)
+- Boolean indicators use suffix: `_flag`, `_count`, `_cnt` (e.g., `bureau_overdue_flag`, `EXT_SOURCE_3_MISSING_FLAG`, `HIGH_RISK_DOC_MISSING`)
+- Composite features use descriptive names: `CREDIT_INCOME_RATIO`, `EXT_SOURCE_MEAN`, `EMPLOYED_TO_AGE_RATIO`
+- WoE-encoded features preserve original names after transformation
 
 ## Code Style
 
 **Formatting:**
-- PEP 8 compliant (implied by codebase structure)
-- Line continuations: implicit line joining inside parentheses
-- Operator spacing: follows PEP 8 (space around binary operators)
+- No explicit formatter (black/ruff) configured; code follows PEP 8 conventions implicitly
+- Line length: ~100 characters (observed in docstrings and code layout)
+- Indentation: 4 spaces, no tabs
+- Blank lines: 2 lines between top-level definitions, 1 line between methods in a class
 
 **Linting:**
-- No explicit configuration files found (no .flake8, .pylintrc, setup.cfg, pyproject.toml in root)
-- Import sorting observed: stdlib → numpy/pandas → sklearn/lightgbm → credit_engine
-
-**Type Annotations:**
-- All function parameters and return types annotated
-- Use `from __future__ import annotations` for forward references and clean syntax
-- Common type patterns:
-  - `pd.DataFrame`, `pd.Series` for data structures
-  - `np.ndarray` for numerical arrays
-  - `tuple[float, float]` for return tuples (Python 3.9+ syntax)
-  - `dict[str, Any]` for dictionaries
-  - `Path | str` for file paths (union type)
-  - `Literal["train", "test"]` for constrained string values
+- No explicit linter configuration found
+- Code follows PEP 8: `from __future__ import annotations` for forward compatibility, type hints throughout
+- Implicit style conventions: avoid `print()` in library code, use explicit return values instead
 
 ## Import Organization
 
-**Order:**
-1. Standard library imports (`sys`, `warnings`, `json`, `pickle`, `contextlib`)
-2. `from __future__ import annotations` (always first after docstring if present)
-3. NumPy, Pandas, SciPy imports
-4. Scikit-learn imports (grouped by submodule)
-5. Specialized libraries (LightGBM, XGBoost, CatBoost, Optuna, SHAP, Featuretools)
-6. Matplotlib (with backend initialization in tests: `matplotlib.use("Agg")`)
-7. Local credit_engine imports
+**Order (observed in `src/model.py`):**
+1. Future imports: `from __future__ import annotations`
+2. Environment setup: `os.environ["OMP_NUM_THREADS"] = "1"` (before imports that use it)
+3. Backend setup: `matplotlib.use("Agg")` (before pyplot import)
+4. Standard library: `import sys`, `import math`, `import json`, `from pathlib import Path`, `import logging`
+5. Third-party scientific: `import numpy as np`, `import pandas as pd`, `from sklearn.*`, `import lightgbm as lgb`, `import xgboost as xgb`, `import catboost`, `import optuna`
+6. Visualization: `import matplotlib.pyplot as plt`, `import shap`
+7. Utility: `import joblib`
+8. Local imports: `from src.features import X`, `from src.utils import Y`
 
-**Path Aliases:**
-- `src/` aliased as `credit_engine` via `conftest.py` → all imports: `from credit_engine.X import ...`
-- Absolute imports preferred over relative imports
+**No wildcard imports:** All imports are explicit, e.g., `from src.features import build_features, engineer_application_features`
 
-Example from `src/model.py`:
+## Docstrings
+
+**Style:** NumPy-style docstrings (following scikit-learn convention)
+
+**Structure for functions:**
 ```python
-from __future__ import annotations
-
-import warnings
-from pathlib import Path
-from typing import Literal
-
-import numpy as np
-import pandas as pd
-from sklearn.model_selection import StratifiedKFold, train_test_split
-from sklearn.pipeline import Pipeline
-
-from credit_engine.utils import evaluate_model, gini_coefficient
-```
-
-## Error Handling
-
-**Patterns:**
-- Explicit `raise ValueError`, `KeyError`, `TypeError` with descriptive messages at system boundaries
-- Guard conditions before expensive operations (e.g., check `n_trials >= 1` before Optuna loop)
-- Input validation in public functions: check array shapes, missing values, value ranges
-- No silent failures: always raise or warn
-
-**Examples from `src/model.py`:**
-```python
-def train_xgboost_optuna(X: pd.DataFrame, y: pd.Series, n_trials: int = 50):
-    if not isinstance(X, pd.DataFrame):
-        raise TypeError("X must be a pd.DataFrame")
-    if n_trials < 1:
-        raise ValueError(f"n_trials must be >= 1, got {n_trials}.")
-    if len(np.unique(y)) != 2:
-        raise ValueError("y must contain exactly 2 classes (binary classification).")
-    if y.sum() == 0:
-        raise ValueError("y has no positive samples — cannot compute scale_pos_weight.")
-```
-
-**Examples from `src/data_loader.py`:**
-```python
-if not app_path.exists():
-    raise FileNotFoundError(f"Missing {_FILE_APP_TRAIN} in {data_dir}")
-if not sk_id_curr.is_unique:
-    raise ValueError("SK_ID_CURR is not unique in application table")
-```
-
-**Assertion patterns (data integrity checks):**
-- `_assert_no_row_multiplication(left_df, result_df, join_name)` — checks that multi-table joins don't inflate row counts
-- Used to catch accidental Cartesian product joins
-
-## Logging
-
-**Framework:** No centralized logging module detected. Output to stdout discouraged in library code.
-
-**Patterns Observed:**
-- Warnings via `warnings.warn()` for deprecated behavior or data quality issues
-- Pandas `SettingWithCopyWarning` suppressed explicitly: `pd.options.mode.copy_on_write = True`
-- Silent progress via controlled verbosity in model training (e.g., `verbose=0` in LightGBM, `show_progress=False` in Optuna)
-
-**In tests:**
-- `print()` used only for debug output; tests rely on pytest assertions
-
-## Comments
-
-**When to Comment:**
-- Mathematical rationale: explain why a specific formula or constant is chosen (e.g., WoE clipping at ±5)
-- Domain context: reference regulatory standards (Basel III, GDPR) and sources (Siddiqi, López de Prado)
-- Non-obvious decisions: explain tree-friendly sentinel values, handling of structural missingness, temporal embargo rationale
-- Example from `src/features.py`:
-```python
-# WoE clipping bound. ln(dist_non_events / dist_events) is clipped to
-# [-_WOE_CLIP, +_WOE_CLIP] to avoid ±inf when a bin contains only events
-# or only non-events. ±5 corresponds to an odds ratio of ~150x, already
-# extreme for any real feature.
-_WOE_CLIP: float = 5.0
-```
-
-**Module docstrings:**
-- Every module starts with a triple-quoted docstring:
-  - First line: module name and brief purpose
-  - Blank line
-  - Detailed description of responsibility and architecture
-  - Usage examples
-  - Constants/concepts defined
-
-Example from `src/utils.py`:
-```python
-"""
-utils.py
---------
-Shared evaluation metrics and plotting helpers for credit risk models.
-
-Metrics
--------
-- gini_coefficient   (= 2 * AUC - 1)
-- ks_statistic       (max CDF separation between default / non-default)
-
-Industry benchmarks (Basel III IRB credit scoring)
----------------------------------------------------
-KS > 0.30: good separation
-Gini > 0.60: good discriminatory power
-"""
-```
-
-**Function docstrings:**
-- Numpy-style docstrings (Parameters, Returns, Raises, Examples sections)
-- Examples section shows typical usage
-- Example from `src/utils.py`:
-```python
-def gini_coefficient(y_true: np.ndarray, y_prob: np.ndarray) -> float:
+def function_name(param1: int, param2: str) -> float:
     """
-    Gini coefficient for binary classification.
+    One-line summary ending with period.
 
-    Defined as Gini = 2 × AUC − 1. Ranges from −1 (perfectly inverted
-    predictions) through 0 (no discrimination) to 1 (perfect separation).
-    The primary regulatory metric in Basel III IRB credit models.
+    Extended description if needed. May span multiple lines.
+    Explains the "why", not the "what" (code speaks for itself).
 
     Parameters
     ----------
-    y_true : np.ndarray
-        Binary ground-truth labels (0 = non-default, 1 = default).
-    y_prob : np.ndarray
-        Predicted default probabilities in [0, 1].
+    param1 : int
+        Description of param1. Include units if applicable.
+    param2 : str
+        Description of param2. Mention valid values.
 
     Returns
     -------
     float
-        Gini coefficient in [−1, 1].
+        Description of return value. Include range if bounded.
 
     Raises
     ------
     ValueError
-        If ``y_true`` contains only one class.
+        When param1 < 0 or param2 is empty.
+
+    Notes
+    -----
+    Additional context, e.g. algorithmic notes, numerical stability,
+    or references to papers.
 
     Examples
     --------
-    >>> y_true = np.array([0, 0, 1, 1])
-    >>> y_prob = np.array([0.1, 0.2, 0.7, 0.8])
-    >>> gini_coefficient(y_true, y_prob)
-    1.0
+    >>> function_name(5, "test")
+    3.14
     """
+```
+
+**Module docstrings (three-part structure, observed in `src/features.py`, `src/data_loader.py`, `src/utils.py`, `src/model.py`):**
+```python
+"""
+module_name.py
+--------------
+Short summary.
+
+Section Heading (e.g., "Tables", "Architecture", "Usage")
+---------
+Description of that section.
+
+Usage
+-----
+    from src.module import function_name
+    result = function_name(arg)
+"""
+```
+
+**Docstring coverage:**
+- All public functions have docstrings with Parameters, Returns, Raises sections
+- Module-level constants have inline comments: `_DAYS_EMPLOYED_SENTINEL: int = 365_243  # unemployment sentinel`
+- Private helper functions have docstrings explaining their single responsibility
+- Docstrings reference domain concepts (e.g., "WoE clipping", "IRB scorecard", "Basel III")
+
+## Error Handling
+
+**Patterns:**
+- Explicit raise with informative messages: `raise ValueError(f"mode must be 'train' or 'test', got {mode!r}")`
+- File operations: `raise FileNotFoundError(f"Could not locate project root (expected to find src/ and tests/)")`
+- Data validation: raise at function entry with clear context
+- Division by zero: guarded with `np.where(denominator > 0, numerator / denominator, 0.0)`
+- Residual inf/NaN: `.replace([np.inf, -np.inf], 0.0).fillna(_NAN_SENTINEL)`
+
+**Edge case handling:**
+- All-NaN inputs: explicitly handled with `np.nanmean()`, `np.nanmin()`, result filled with sentinel
+- Zero denominators: guarded before division with `np.where()`
+- Missing files: validated at function entry; raise before attempting to read
+- Empty DataFrames: checked with `len(df) == 0`, result passed upstream
+
+**No try-except swallowing:** Errors propagate unless expected and handled at a higher layer.
+
+## Logging
+
+**Framework:** `logging` module (imported in `src/model.py` line 18)
+
+```python
+import logging
+logger = logging.getLogger(__name__)
+logger.info("HPO trial %d: Gini=%.4f", trial_num, gini_score)
+```
+
+**Pattern:** Logging used for HPO progress tracking (written to `reports/hpo_progress.jsonl`), model training milestones, not debug output in feature engineering.
+
+**No print() in library code:** Library functions return values; caller decides logging level.
+
+## Comments
+
+**When to comment:**
+- Explain the "why" not the "what" — code should be self-documenting
+- Mark regulatory requirements, especially Basel III IRB compliance notes (e.g., temporal OOT split enforcement)
+- Explain domain concepts (e.g., "WoE clipping to avoid ±inf when a bin is pure")
+- Justify non-obvious constant values with domain reference
+
+**Examples from codebase:**
+```python
+# Tree-friendly fill value for missing/undefined features.  Using -999 instead
+# of 0 or mean avoids shifting the distribution and lets gradient boosting
+# models learn a dedicated "missing" split.
+_NAN_SENTINEL: float = -999.0
+
+# Regulatory exclusions — columns that must be dropped from tree models per legal compliance.
+# CODE_GENDER: GDPR Art. 21 (protection from discrimination), EU Consumer Credit Directive.
+_REGULATORY_DROP_COLS: list[str] = ["CODE_GENDER", "thin_file_young"]
+
+# Temporal CV embargo: strip the last _CV_EMBARGO_FRAC fraction of each
+# training fold to prevent serial-correlation leakage across the train/val
+# boundary (López de Prado, Advances in Financial Machine Learning, Ch. 7).
+_CV_EMBARGO_FRAC: float = 0.02
 ```
 
 ## Function Design
 
-**Size Guidelines:**
-- Target: 30-50 lines per function
-- Private helpers split by concern (e.g., `_engineer_financial_ratios`, `_engineer_demographics`, `_engineer_ext_source` in `features.py`)
-- Long functions broken into private `_helpers` to isolate logic
+**Size:** Keep functions under 50 lines (observed in `src/features.py` — each helper is 20–50 lines); orchestrator functions may exceed 100 lines when delegating to helpers
 
 **Parameters:**
-- Maximum 5-6 positional parameters (use dataclasses or dicts for larger argument sets)
-- Named keyword arguments with `=` for optional parameters
-- Use `*args` and `**kwargs` rarely; prefer explicit signature
-- Type hints on all parameters
+- Use type hints: `def function(df: pd.DataFrame, n_rows: int) -> pd.DataFrame:`
+- Required positional first, optional keyword-only after `*`: `def function(df, required, *, optional=None)`
+- Avoid excessive defaults; prefer required positional args
 
-**Return Values:**
-- Single return value preferred
-- Multiple return values via tuple with type hint: `tuple[Model, dict, pd.DataFrame, ...]`
-- Return new DataFrames, never mutate input (immutability pattern)
+**Return values:**
+- Single value: return directly, e.g., `return float(2 * auc - 1)`
+- Multiple related values: return tuple with clear types: `return (ks_value, threshold_at_ks)` or `(model, metrics, X_train, X_test, y_train, y_test)`
+- Data transformation: always return new DataFrame/Series (never mutate input)
 
-Example from `src/model.py`:
+**Immutability:** Strictly enforced — all DataFrame transformations create copies:
 ```python
-def train_logistic_baseline(
-    X: pd.DataFrame,
-    y: pd.Series,
-    test_size: float = _TEST_SIZE,
-    random_state: int = _RANDOM_STATE,
-) -> tuple[Pipeline, dict, pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
-    """
-    Train logistic regression on WoE-transformed features.
-    
-    Returns 6-tuple: (pipeline, metrics, X_train, X_test, y_train, y_test)
-    """
+def _engineer_financial_ratios(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()  # Create copy immediately
+    # ... transformations on out ...
+    return out
 ```
 
 ## Module Design
 
-**Exports (Public API):**
-- Public functions listed at module level
-- Private functions prefixed with `_`
-- No `__all__` lists observed; convention followed implicitly
+**Exports (public API):**
+- `src/data_loader.py`: `load_data()`, `build_training_frame()`, `save_training_frame()`
+- `src/features.py`: `build_features()`, `engineer_application_features()`, `engineer_secondary_features()`, `compute_woe_iv()`, `select_features_by_iv()`, `build_feature_store()`, `apply_feature_store()`, `build_tree_feature_store()`, `engineer_instalment_streaks()`, `engineer_bureau_dpd_trend_3m_vs_12m()`, `compute_knn_target_encoding()`
+- `src/auto_features.py`: `build_featuretools_feature_store()`, `apply_featuretools_feature_store()`, `evaluate_dfs_features()`, `filter_dfs_by_iv()`
+- `src/model.py`: `train_logistic_baseline()`, `train_xgboost_optuna()`, `train_lightgbm_optuna()`, `train_catboost_optuna()`, `calibrate_model()`, `save_model()`, `load_model()`, `benchmark_imbalance_strategies()`, `train_ensemble()`, `run_ensemble_workflow()`
+- `src/utils.py`: `gini_coefficient()`, `ks_statistic()`, `evaluate_model()`, `plot_roc_and_pr()`
+- `src/explain.py`: stubs for `compute_shap_values()`, `fairness_report()`
 
-**Barrel Files:**
-- `src/__init__.py` is minimal (13 lines) — no re-exports
-- Callers import directly from submodules: `from credit_engine.features import build_features`
+**Barrel files:** No barrel files (no `__init__.py` re-exports) — all imports are direct module-to-module
 
-**Dependencies:**
-- Unidirectional dependency graph: `data_loader` → `features` → `model` → `utils` + `explain`
-- `utils` has no internal dependencies (shared evaluation layer)
-- `explain.py` is a stub (31 lines)
-- `auto_features.py` wraps featuretools; optional dependency handled via try/except
+**Private helpers:**
+- Prefixed with `_`: `_engineer_financial_ratios()`, `_load_application()`, `_get_project_root()`, `_write_synthetic_csvs()`
+- Grouped at module level in sections marked with comments: `# Private helpers — one concern per function`
+- Never imported by external code
 
-## Immutability & Side Effects
+**Constants at module level:**
+- Sentinel values: `_DAYS_EMPLOYED_SENTINEL`, `_NAN_SENTINEL`, `_WOE_CLIP`
+- Hyperparameter bounds: `_XGB_MAX_DEPTH_MIN`, `_LGB_NUM_LEAVES_MAX`, `_CAT_DEPTH_MIN`
+- File path references: `_PROJECT_ROOT`, `_HPO_PROGRESS_LOG_PATH`, `_XGB_OPTUNA_MODEL_PATH`
+- Magic numbers converted to named constants: `_MISSING_DROP_THRESHOLD`, `_LEAKY_COLUMNS`
 
-**Pattern:**
-- All feature engineering functions: `def func(df: pd.DataFrame) -> pd.DataFrame:`
-- Signature indicates transformation, never in-place mutation
-- Implementations use `df.copy()` at the start to ensure input DataFrame is never modified
-- Example from `src/features.py`:
+## Type Hints
+
+**Requirement:** Type hints on all public function signatures; optional on private helpers.
+
+**Patterns:**
 ```python
-def _engineer_financial_ratios(df: pd.DataFrame) -> pd.DataFrame:
-    """..."""
-    out = df.copy()  # Never mutate input
-    
-    income = out["AMT_INCOME_TOTAL"].to_numpy()
-    # ... transformations on out ...
-    
-    return out
+def load_data(data_dir: str | Path, mode: str = "train") -> pd.DataFrame:
+    """Load training or test data."""
+
+def gini_coefficient(y_true: np.ndarray, y_prob: np.ndarray) -> float:
+    """Gini = 2 * AUC - 1."""
+
+def train_xgboost_optuna(
+    feature_store_path: str, 
+    n_trials: int = 50, 
+    groups: np.ndarray | None = None
+) -> tuple[Any, dict, pd.DataFrame, pd.DataFrame, pd.Series, pd.Series, dict]:
+    """Return 7-tuple: (model, metrics, X_train, X_test, y_train, y_test, best_params)."""
 ```
 
-**Numerical operations:**
-- Use `np.errstate(divide="ignore", invalid="ignore")` to suppress temporary inf/NaN warnings during guarded division
-- Replace inf/NaN explicitly: `.replace([np.inf, -np.inf], 0.0).fillna(_NAN_SENTINEL)`
+**Union types:** Use `|` syntax (PEP 604): `str | Path`, `int | float`, `T | None`
 
-## Constant Management
+**Avoid `Any` in public signatures:** Force specificity, e.g., `dict[str, float]` not `dict[str, Any]`
 
-**Module-level constants (uppercase with leading underscore):**
-- File paths: `_FILE_APP_TRAIN = "application_train.csv"`
-- Thresholds: `_MISSING_DROP_THRESHOLD = 0.60`
-- Sentinel values: `_NAN_SENTINEL = -999.0`
-- Model parameters: `_TEST_SIZE: float = 0.2`, `_RANDOM_STATE: int = 42`
-- Hyperparameter bounds: `_XGB_N_ESTIMATORS_MIN: int = 100`, `_XGB_N_ESTIMATORS_MAX: int = 1000`
+## Git Commit Conventions
 
-**Rationale documented inline:**
-```python
-# Temporal CV embargo: strip the last _CV_EMBARGO_FRAC fraction of each
-# training fold to prevent serial-correlation leakage across the train/val
-# boundary (López de Prado, Advances in Financial Machine Learning, Ch. 7).
-# 2% suffices for cross-sectional credit data with long lookback windows.
-_CV_EMBARGO_FRAC: float = 0.02
-```
+**Format:** `<type>(<scope>): <description>`
 
-## Temporal CV and Grouping
+**Types:** `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, `ci`
 
-**Pattern Used for Time-Aware Cross-Validation:**
-- When `groups` parameter is `None` and a temporal sort column exists (e.g., `prev_days_decision_mean`), auto-detect groups from DataFrame
-- `_make_cv()` function returns either `StratifiedKFold` or `_TemporalCV` depending on `groups` argument
-- `_TemporalCV` applies embargo fraction to prevent temporal leakage
-- Applied consistently in: `train_logistic_baseline`, `train_xgboost_optuna`, `train_lightgbm_optuna`, `train_ensemble`
+**Scope:** Domain area or component name: `(features)`, `(model)`, `(data-loader)`, `(04.2.7)` (phase number)
+
+**Description:** Imperative tense, lowercase, max 72 chars. Include metric result if applicable.
+
+**Examples from codebase:**
+- `feat(catboost): Basel CRE36.54 compliant CatBoost HPO, OOT Gini=0.5699, KS=0.4259`
+- `fix(model): enforce Basel CRE36.54 temporal OOT split in LGB and CatBoost HPO`
+- `feat(04.2.7): implement engineer_inst_late_rate_12m and engineer_inst_late_rate_recent_vs_historical`
+- `test(04.2.7): add Wave 1 TDD stubs and conftest fixtures for 7 delinquency features`
+- `fix(features): protect Wave 1 features from variance/correlation filters`
+
+**Attribution:** Disabled globally via `~/.claude/settings.json` — no Co-Authored-By trailers.
 
 ---
 
-*Convention analysis: 2025-02-20*
+*Convention analysis: 2026-04-11*

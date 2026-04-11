@@ -57,6 +57,55 @@ def load_best_params_from_json(json_path: str, fallback_path: str | None = None)
     return params
 
 
+def inject_lgb_n_estimators(lgb_params: dict) -> dict:
+    """
+    Inject the correct n_estimators into lgb_params when the eval JSON omits it.
+
+    LGB's extended HPO fixes n_estimators=1000 and uses early stopping to find
+    the best iteration; that iteration count is stored in the model but not in
+    best_params. Without this injection the ensemble falls back to the class
+    default of 100 trees, severely undertraining the LGB base model.
+
+    Strategy: load lightgbm_raw_calibrated.pkl and extract n_estimators from
+    the underlying LGBMClassifier (nested inside CalibratedClassifierCV →
+    FrozenEstimator → LGBMClassifier).
+    """
+    import joblib
+
+    if "n_estimators" in lgb_params:
+        print(f"  LGB n_estimators already set: {lgb_params['n_estimators']}")
+        return lgb_params
+
+    lgb_cal_path = _MODELS_DIR / "lightgbm_raw_calibrated.pkl"
+    try:
+        cal = joblib.load(str(lgb_cal_path))
+        # CalibratedClassifierCV → _CalibratedClassifier → FrozenEstimator → LGBMClassifier
+        frozen = cal.calibrated_classifiers_[0].estimator
+        lgb_base = frozen.estimator
+        n = int(lgb_base.n_estimators)
+        _SUSPICIOUS_THRESHOLD = 50
+        _FALLBACK_N_ESTIMATORS = 500
+        if n < _SUSPICIOUS_THRESHOLD:
+            warnings.warn(
+                f"Extracted n_estimators={n} from {lgb_cal_path.name} is suspiciously low "
+                f"(pkl was likely overwritten by a test run). "
+                f"Using fallback n_estimators={_FALLBACK_N_ESTIMATORS} based on "
+                f"learning_rate={lgb_params.get('learning_rate', '?')} convergence estimate."
+            )
+            return {**lgb_params, "n_estimators": _FALLBACK_N_ESTIMATORS}
+        params = {**lgb_params, "n_estimators": n}
+        print(f"  Injected n_estimators={n} from {lgb_cal_path.name}")
+        return params
+    except Exception as e:
+        _FALLBACK_N_ESTIMATORS = 500
+        warnings.warn(
+            f"Could not extract n_estimators from {lgb_cal_path}: {e}. "
+            f"Using fallback n_estimators={_FALLBACK_N_ESTIMATORS} based on "
+            f"learning_rate={lgb_params.get('learning_rate', '?')} convergence estimate."
+        )
+        return {**lgb_params, "n_estimators": _FALLBACK_N_ESTIMATORS}
+
+
 def load_and_split_ensemble_data(feature_store_path: str) -> tuple:
     """
     Load X_tree_raw parquet, extract X and y, perform temporal train/OOT split.
@@ -450,6 +499,11 @@ def main():
     assert xgb_params, "XGBoost best_params empty or missing"
     assert lgb_params, "LightGBM best_params empty or missing"
     assert cat_params, "CatBoost best_params empty or missing"
+
+    # LGB extended HPO stores n_estimators in the model, not in best_params JSON.
+    # Inject the correct value so the ensemble base model is not undertrained.
+    lgb_params = inject_lgb_n_estimators(lgb_params)
+
     print(f"  ✓ XGB params keys: {list(xgb_params.keys())}")
     print(f"  ✓ LGB params keys: {list(lgb_params.keys())}")
     print(f"  ✓ CatBoost params keys: {list(cat_params.keys())}")
