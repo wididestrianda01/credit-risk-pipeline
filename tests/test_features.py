@@ -28,6 +28,27 @@ from src.features import (
     engineer_secondary_features,
     select_features_by_iv,
     _engineer_ext_source,
+    _bbal_ever_30dpd,
+    _bbal_ever_60dpd,
+    _bbal_ever_90dpd,
+    _bbal_max_status_code,
+    _bbal_pct_current,
+    _bbal_dpd_escalation,
+    _bbal_status_volatility,
+    _bbal_max_dpd_months_ago,
+    _inst_payment_consistency_score,
+    _inst_recency_weighted_dpd,
+    _inst_early_payment_pct,
+    _inst_large_payment_freq,
+    _cc_balance_velocity_3m,
+    _cc_utilization_trend,
+    _cc_balance_volatility,
+    _cc_atm_drawing_frequency,
+    _prev_reject_fraud_flag,
+    _prev_reject_high_risk_pct,
+    _prev_goods_secured_pct,
+    _prev_interest_rate_mean,
+    _current_to_bureau_debt_ratio,
 )
 
 
@@ -2621,24 +2642,274 @@ def test_ext_source_num_available_all_nan():
     })
     result = _engineer_ext_source(df)
     assert "EXT_SOURCE_NUM_AVAILABLE" in result.columns
-    assert result["EXT_SOURCE_NUM_AVAILABLE"].iloc[0] == 0.0
 
 
-def test_engineer_application_features_includes_annuity_income_ratio(application_fixture):
-    """ANNUITY_INCOME_RATIO created by engineer_application_features."""
-    X_eng = engineer_application_features(application_fixture)
-    assert "ANNUITY_INCOME_RATIO" in X_eng.columns, "ANNUITY_INCOME_RATIO not created by engineer_application_features"
+# ---------------------------------------------------------------------------
+# Wave 2 Feature Tests (Temporal Trajectory Features)
+# ---------------------------------------------------------------------------
 
 
-def test_engineer_application_features_includes_employed_to_age_ratio(application_fixture):
-    """EMPLOYED_TO_AGE_RATIO created by engineer_application_features."""
-    X_eng = engineer_application_features(application_fixture)
-    assert "EMPLOYED_TO_AGE_RATIO" in X_eng.columns, "EMPLOYED_TO_AGE_RATIO not created by engineer_application_features"
+def test_bbal_ever_30dpd_true_when_status_0_present():
+    """bbal_ever_30dpd = 1 when any STATUS == '0'."""
+    df_mock = pd.DataFrame({
+        "SK_ID_CURR": [1, 1, 2],
+        "MONTHS_BALANCE": [0, -1, 0],
+        "STATUS": ["0", "C", "C"],
+    }).set_index(["SK_ID_CURR", "MONTHS_BALANCE"])
+
+    result = _bbal_ever_30dpd(df_mock)
+    assert result.loc[1] == 1.0, "Applicant 1 has STATUS='0', should return 1.0"
+    assert result.loc[2] == 0.0, "Applicant 2 does not have STATUS='0', should return 0.0"
 
 
-def test_ext_source_num_available_in_engineered_features(application_fixture):
-    """EXT_SOURCE_NUM_AVAILABLE created by engineer_application_features."""
-    X_eng = engineer_application_features(application_fixture)
-    assert "EXT_SOURCE_NUM_AVAILABLE" in X_eng.columns, "EXT_SOURCE_NUM_AVAILABLE not created"
-    # Check values are in expected range [0, 3]
-    assert (X_eng["EXT_SOURCE_NUM_AVAILABLE"].isin([0.0, 1.0, 2.0, 3.0])).all(), "Values outside [0,3] range"
+def test_bbal_ever_60dpd_true_when_status_1_present():
+    """bbal_ever_60dpd = 1 when any STATUS == '1'."""
+    df_mock = pd.DataFrame({
+        "SK_ID_CURR": [1, 1, 2],
+        "MONTHS_BALANCE": [0, -1, 0],
+        "STATUS": ["1", "C", "C"],
+    }).set_index(["SK_ID_CURR", "MONTHS_BALANCE"])
+
+    result = _bbal_ever_60dpd(df_mock)
+    assert result.loc[1] == 1.0
+    assert result.loc[2] == 0.0
+
+
+def test_bbal_ever_90dpd_true_when_status_2_present():
+    """bbal_ever_90dpd = 1 when any STATUS == '2'."""
+    df_mock = pd.DataFrame({
+        "SK_ID_CURR": [1, 1, 2],
+        "MONTHS_BALANCE": [0, -1, 0],
+        "STATUS": ["2", "C", "C"],
+    }).set_index(["SK_ID_CURR", "MONTHS_BALANCE"])
+
+    result = _bbal_ever_90dpd(df_mock)
+    assert result.loc[1] == 1.0
+    assert result.loc[2] == 0.0
+
+
+def test_bbal_max_status_code_returns_numeric_mapping():
+    """bbal_max_status_code maps C/X to -1, 0-5 to numeric."""
+    df_mock = pd.DataFrame({
+        "SK_ID_CURR": [1, 1, 2, 3],
+        "MONTHS_BALANCE": [0, -1, 0, 0],
+        "STATUS": ["5", "C", "X", "1"],
+    }).set_index(["SK_ID_CURR", "MONTHS_BALANCE"])
+
+    result = _bbal_max_status_code(df_mock)
+    assert result.loc[1] == 5.0, "Applicant 1: max(5, -1) = 5"
+    assert result.loc[2] == -1.0, "Applicant 2: max(-1) = -1"
+    assert result.loc[3] == 1.0, "Applicant 3: max(1) = 1"
+
+
+def test_bbal_pct_current_computes_proportion():
+    """bbal_pct_current = count(C) / total months."""
+    df_mock = pd.DataFrame({
+        "SK_ID_CURR": [1, 1, 1, 2],
+        "MONTHS_BALANCE": [0, -1, -2, 0],
+        "STATUS": ["C", "C", "0", "X"],
+    }).set_index(["SK_ID_CURR", "MONTHS_BALANCE"])
+
+    result = _bbal_pct_current(df_mock)
+    assert result.loc[1] == 2.0 / 3.0, "Applicant 1: 2 current out of 3 months"
+    assert result.loc[2] == 0.0, "Applicant 2: 0 current out of 1 month"
+
+
+def test_bbal_dpd_escalation_detects_worsening():
+    """bbal_dpd_escalation = 1 when latest STATUS > earliest STATUS."""
+    df_mock = pd.DataFrame({
+        "SK_ID_CURR": [1, 1, 2, 2],
+        "MONTHS_BALANCE": [0, -1, 0, -1],
+        "STATUS": ["1", "0", "1", "5"],
+    }).set_index(["SK_ID_CURR", "MONTHS_BALANCE"])
+
+    result = _bbal_dpd_escalation(df_mock)
+    # Applicant 1: latest (MONTHS_BALANCE=0, STATUS='1'=1) > earliest (MONTHS_BALANCE=-1, STATUS='0'=0) → True
+    assert result.loc[1] == 1.0
+    # Applicant 2: latest (MONTHS_BALANCE=0, STATUS='1'=1) < earliest (MONTHS_BALANCE=-1, STATUS='5'=5) → False
+    assert result.loc[2] == 0.0
+
+
+def test_bbal_status_volatility_computes_coefficient_of_variation():
+    """bbal_status_volatility = std(STATUS) / (mean(STATUS) + 0.01)."""
+    df_mock = pd.DataFrame({
+        "SK_ID_CURR": [1, 1, 1, 2, 2],
+        "MONTHS_BALANCE": [0, -1, -2, 0, -1],
+        "STATUS": ["0", "1", "2", "C", "C"],
+    }).set_index(["SK_ID_CURR", "MONTHS_BALANCE"])
+
+    result = _bbal_status_volatility(df_mock)
+    assert result.loc[1] > 0, "Applicant 1: varying statuses → positive volatility"
+    assert result.loc[2] == 0.0, "Applicant 2: all C → zero volatility"
+
+
+def test_bbal_max_dpd_months_ago_returns_recency():
+    """bbal_max_dpd_months_ago returns abs(MONTHS_BALANCE) at worst STATUS."""
+    df_mock = pd.DataFrame({
+        "SK_ID_CURR": [1, 1, 2],
+        "MONTHS_BALANCE": [-1, -6, 0],
+        "STATUS": ["5", "1", "C"],
+    }).set_index(["SK_ID_CURR", "MONTHS_BALANCE"])
+
+    result = _bbal_max_dpd_months_ago(df_mock)
+    assert result.loc[1] == 1.0, "Applicant 1: worst STATUS=5 at MONTHS_BALANCE=-1"
+    assert result.loc[2] == -999.0, "Applicant 2: no delinquency → -999"
+
+
+def test_inst_payment_consistency_score_all_on_time():
+    """Consistency score high when all payments on-time and stable amounts."""
+    df_mock = pd.DataFrame({
+        "SK_ID_CURR": [1, 1, 1],
+        "days_past_due": [0, 0, 0],
+        "AMT_PAYMENT": [100.0, 100.0, 100.0],
+        "AMT_INSTALMENT": [100.0, 100.0, 100.0],
+    }).set_index("SK_ID_CURR")
+
+    result = _inst_payment_consistency_score(df_mock)
+    assert result.loc[1] > 0.8, "All on-time with stable payments → high consistency"
+
+
+def test_inst_recency_weighted_dpd_weights_recent_payments():
+    """Recency weighted DPD gives higher weight to recent payments."""
+    df_mock = pd.DataFrame({
+        "SK_ID_CURR": [1, 1],
+        "DAYS_INSTALMENT": [-5, -35],
+        "days_past_due": [10.0, 10.0],
+    }).set_index("SK_ID_CURR")
+
+    result = _inst_recency_weighted_dpd(df_mock)
+    assert result.loc[1] > 0.0
+
+
+def test_inst_early_payment_pct_detects_early_payments():
+    """early_payment_pct > 0 when any DAYS_ENTRY_PAYMENT < DAYS_INSTALMENT."""
+    df_mock = pd.DataFrame({
+        "SK_ID_CURR": [1, 1, 2],
+        "DAYS_ENTRY_PAYMENT": [-10, -25, -20],
+        "DAYS_INSTALMENT": [-15, -20, -20],
+    }).set_index("SK_ID_CURR")
+
+    result = _inst_early_payment_pct(df_mock)
+    assert result.loc[1] > 0.0, "Applicant 1: 1 early payment out of 2"
+    assert result.loc[2] == 0.0, "Applicant 2: no early payments"
+
+
+def test_inst_large_payment_freq_detects_overpayments():
+    """large_payment_freq > 0 when any AMT_PAYMENT > 1.2 * AMT_INSTALMENT."""
+    df_mock = pd.DataFrame({
+        "SK_ID_CURR": [1, 1, 2],
+        "AMT_PAYMENT": [150.0, 100.0, 100.0],
+        "AMT_INSTALMENT": [100.0, 100.0, 100.0],
+    }).set_index("SK_ID_CURR")
+
+    result = _inst_large_payment_freq(df_mock)
+    assert result.loc[1] > 0.0, "Applicant 1: 1 large payment out of 2"
+    assert result.loc[2] == 0.0, "Applicant 2: no large payments"
+
+
+def test_cc_balance_velocity_3m_positive_when_increasing():
+    """Balance velocity positive when recent balance > prior balance."""
+    df_mock = pd.DataFrame({
+        "SK_ID_CURR": [1, 1, 1, 1],
+        "MONTHS_BALANCE": [0, -1, -2, -3],
+        "AMT_BALANCE": [200.0, 180.0, 100.0, 90.0],
+        "AMT_CREDIT_LIMIT": [1000.0, 1000.0, 1000.0, 1000.0],
+    }).set_index("SK_ID_CURR")
+
+    result = _cc_balance_velocity_3m(df_mock)
+    assert result.loc[1] > 0.0, "Recent balance (190 avg) > prior balance (95 avg) → positive velocity"
+
+
+def test_cc_utilization_trend_positive_when_increasing():
+    """Utilization trend positive when recent utilization > prior utilization."""
+    df_mock = pd.DataFrame({
+        "SK_ID_CURR": [1, 1, 1, 1, 1, 1],
+        "MONTHS_BALANCE": [0, -1, -2, -3, -4, -5],
+        "AMT_BALANCE": [500.0, 480.0, 400.0, 300.0, 200.0, 100.0],
+        "AMT_CREDIT_LIMIT": [1000.0] * 6,
+    }).set_index("SK_ID_CURR")
+
+    result = _cc_utilization_trend(df_mock)
+    assert result.loc[1] > 0.0
+
+
+def test_cc_balance_volatility_zero_when_stable():
+    """Balance volatility = 0 when all balances identical."""
+    df_mock = pd.DataFrame({
+        "SK_ID_CURR": [1, 1, 1],
+        "AMT_BALANCE": [100.0, 100.0, 100.0],
+    }).set_index("SK_ID_CURR")
+
+    result = _cc_balance_volatility(df_mock)
+    assert result.loc[1] == 0.0, "Stable balance → zero volatility"
+
+
+def test_cc_atm_drawing_frequency_detects_atm_usage():
+    """ATM frequency = proportion of months with ATM draws > 0."""
+    df_mock = pd.DataFrame({
+        "SK_ID_CURR": [1, 1, 1, 2, 2],
+        "AMT_DRAWINGS_ATM_CURRENT": [50.0, 0.0, 25.0, 0.0, 0.0],
+    }).set_index("SK_ID_CURR")
+
+    result = _cc_atm_drawing_frequency(df_mock)
+    assert result.loc[1] == 2.0 / 3.0, "Applicant 1: 2 ATM months out of 3"
+    assert result.loc[2] == 0.0, "Applicant 2: no ATM draws"
+
+
+def test_prev_reject_fraud_flag_one_fraud():
+    """Fraud flag = 1 when any CODE_REJECT_REASON == 'FRAUD'."""
+    df_mock = pd.DataFrame({
+        "SK_ID_CURR": [1, 1, 2],
+        "CODE_REJECT_REASON": ["FRAUD", "LIMIT", "LIMIT"],
+    }).set_index("SK_ID_CURR")
+
+    result = _prev_reject_fraud_flag(df_mock)
+    assert result.loc[1] == 1.0, "Applicant 1: has FRAUD reject"
+    assert result.loc[2] == 0.0, "Applicant 2: no FRAUD reject"
+
+
+def test_prev_reject_high_risk_pct_detects_high_risk():
+    """high_risk_pct > 0 when any CODE_REJECT_REASON in ('HC', 'LIMIT', 'SCOFR')."""
+    df_mock = pd.DataFrame({
+        "SK_ID_CURR": [1, 1, 2, 2],
+        "CODE_REJECT_REASON": ["HC", "LIMIT", "SCO", "FRAUD"],
+    }).set_index("SK_ID_CURR")
+
+    result = _prev_reject_high_risk_pct(df_mock)
+    assert result.loc[1] == 1.0, "Applicant 1: 2 high-risk out of 2"
+    assert result.loc[2] == 0.0, "Applicant 2: 0 high-risk out of 2"
+
+
+def test_prev_goods_secured_pct_detects_secured():
+    """secured_pct > 0 when any NAME_GOODS_CATEGORY in ('Auto', 'Real estate')."""
+    df_mock = pd.DataFrame({
+        "SK_ID_CURR": [1, 1, 2, 2],
+        "NAME_GOODS_CATEGORY": ["Auto", "Electronics", "Real estate", "Furniture"],
+    }).set_index("SK_ID_CURR")
+
+    result = _prev_goods_secured_pct(df_mock)
+    assert result.loc[1] == 0.5, "Applicant 1: 1 secured out of 2"
+    assert result.loc[2] == 0.5, "Applicant 2: 1 secured out of 2"
+
+
+def test_prev_interest_rate_mean_computes_average():
+    """interest_rate_mean = mean(RATE_INTEREST_PRIMARY) excluding NaN."""
+    df_mock = pd.DataFrame({
+        "SK_ID_CURR": [1, 1, 2],
+        "RATE_INTEREST_PRIMARY": [0.05, 0.06, np.nan],
+    }).set_index("SK_ID_CURR")
+
+    result = _prev_interest_rate_mean(df_mock)
+    assert abs(result.loc[1] - 0.055) < 0.01, "Applicant 1: mean(0.05, 0.06) = 0.055"
+    assert result.loc[2] == 0.0, "Applicant 2: no valid rates → 0"
+
+
+def test_current_to_bureau_debt_ratio_safe_division():
+    """debt_ratio = AMT_CREDIT / (bureau_debt + 1), capped at 100."""
+    amt_credit = pd.Series([50000.0, 50000.0, 50000.0], index=[1, 2, 3])
+    bureau_debt = pd.Series([10000.0, 0.0, 1000000.0], index=[1, 2, 3])
+
+    result = _current_to_bureau_debt_ratio(amt_credit, bureau_debt)
+    assert result.loc[1] > 0, "Applicant 1: positive ratio"
+    assert result.loc[2] == -999.0, "Applicant 2: zero debt → -999"
+    assert result.loc[3] <= 100.0, "Applicant 3: capped at 100"

@@ -819,6 +819,676 @@ def engineer_bureau_debt_to_new_credit(df: pd.DataFrame) -> pd.Series:
 
 
 # ---------------------------------------------------------------------------
+# Wave 2 Feature Engineering (Temporal Trajectory Features)
+# ---------------------------------------------------------------------------
+
+
+def _bbal_ever_30dpd(df_bbal_raw: pd.DataFrame) -> pd.Series:
+    """
+    1 if any STATUS == '0' (1-30 DPD) across all bureau months.
+
+    Parameters
+    ----------
+    df_bbal_raw : pd.DataFrame
+        bureau_balance table, indexed by SK_ID_CURR and MONTHS_BALANCE.
+
+    Returns
+    -------
+    pd.Series
+        Index = SK_ID_CURR. Values: 1.0 (any 30+ DPD) or 0.0 (none).
+    """
+    ever_30dpd = (df_bbal_raw["STATUS"] == "0").groupby(level="SK_ID_CURR").any().astype(float)
+    return ever_30dpd.fillna(0.0)
+
+
+def _bbal_ever_60dpd(df_bbal_raw: pd.DataFrame) -> pd.Series:
+    """
+    1 if any STATUS == '1' (31-60 DPD) across all bureau months.
+
+    Parameters
+    ----------
+    df_bbal_raw : pd.DataFrame
+        bureau_balance table, indexed by SK_ID_CURR and MONTHS_BALANCE.
+
+    Returns
+    -------
+    pd.Series
+        Index = SK_ID_CURR. Values: 1.0 (any 60+ DPD) or 0.0 (none).
+    """
+    ever_60dpd = (df_bbal_raw["STATUS"] == "1").groupby(level="SK_ID_CURR").any().astype(float)
+    return ever_60dpd.fillna(0.0)
+
+
+def _bbal_ever_90dpd(df_bbal_raw: pd.DataFrame) -> pd.Series:
+    """
+    1 if any STATUS == '2' (61-90 DPD) across all bureau months.
+
+    Parameters
+    ----------
+    df_bbal_raw : pd.DataFrame
+        bureau_balance table, indexed by SK_ID_CURR and MONTHS_BALANCE.
+
+    Returns
+    -------
+    pd.Series
+        Index = SK_ID_CURR. Values: 1.0 (any 90+ DPD) or 0.0 (none).
+    """
+    ever_90dpd = (df_bbal_raw["STATUS"] == "2").groupby(level="SK_ID_CURR").any().astype(float)
+    return ever_90dpd.fillna(0.0)
+
+
+def _bbal_max_status_code(df_bbal_raw: pd.DataFrame) -> pd.Series:
+    """
+    Max numeric STATUS seen historically: C/-1, X=-1, 0-5 as numeric.
+
+    Parameters
+    ----------
+    df_bbal_raw : pd.DataFrame
+        bureau_balance table, indexed by SK_ID_CURR and MONTHS_BALANCE.
+
+    Returns
+    -------
+    pd.Series
+        Index = SK_ID_CURR. Values: max status code (-1 to 5).
+    """
+    status_numeric = df_bbal_raw["STATUS"].map({
+        "C": -1, "X": -1,
+        "0": 0, "1": 1, "2": 2, "3": 3, "4": 4, "5": 5
+    })
+    max_status = status_numeric.groupby(level="SK_ID_CURR").max()
+    return max_status.fillna(-1.0)
+
+
+def _bbal_pct_current(df_bbal_raw: pd.DataFrame) -> pd.Series:
+    """
+    Proportion of months with STATUS == 'C' (current).
+
+    Parameters
+    ----------
+    df_bbal_raw : pd.DataFrame
+        bureau_balance table, indexed by SK_ID_CURR and MONTHS_BALANCE.
+
+    Returns
+    -------
+    pd.Series
+        Index = SK_ID_CURR. Values: [0.0, 1.0] (proportion of months current).
+    """
+    is_current = (df_bbal_raw["STATUS"] == "C").astype(float)
+    total_months = df_bbal_raw.groupby(level="SK_ID_CURR").size()
+    current_months = is_current.groupby(level="SK_ID_CURR").sum()
+    pct = np.where(total_months > 0, current_months / total_months, 0.0)
+    return pd.Series(pct, index=total_months.index)
+
+
+def _bbal_dpd_escalation(df_bbal_raw: pd.DataFrame) -> pd.Series:
+    """
+    1 if latest STATUS > earliest STATUS (worsening trajectory). Numeric comparison.
+
+    Parameters
+    ----------
+    df_bbal_raw : pd.DataFrame
+        bureau_balance table, indexed by SK_ID_CURR and MONTHS_BALANCE.
+
+    Returns
+    -------
+    pd.Series
+        Index = SK_ID_CURR. Values: 1.0 (escalation) or 0.0 (no escalation).
+    """
+    status_numeric = df_bbal_raw["STATUS"].map({
+        "C": -1, "X": -1,
+        "0": 0, "1": 1, "2": 2, "3": 3, "4": 4, "5": 5
+    })
+
+    def escalation_flag(group):
+        if len(group) < 2:
+            return 0.0
+        # Get MONTHS_BALANCE values
+        months_balance = group.index.get_level_values("MONTHS_BALANCE")
+        latest_mb = months_balance.max()
+        earliest_mb = months_balance.min()
+        # Get status values at latest and earliest
+        latest_status = group[months_balance == latest_mb].iloc[-1] if any(months_balance == latest_mb) else group.iloc[-1]
+        earliest_status = group[months_balance == earliest_mb].iloc[0] if any(months_balance == earliest_mb) else group.iloc[0]
+        return 1.0 if latest_status > earliest_status else 0.0
+
+    escalation = status_numeric.groupby(level="SK_ID_CURR").apply(escalation_flag)
+    return escalation.fillna(0.0)
+
+
+def _bbal_status_volatility(df_bbal_raw: pd.DataFrame) -> pd.Series:
+    """
+    Std dev of numeric STATUS / (mean + 0.01). Erratic payment behavior.
+
+    Parameters
+    ----------
+    df_bbal_raw : pd.DataFrame
+        bureau_balance table, indexed by SK_ID_CURR and MONTHS_BALANCE.
+
+    Returns
+    -------
+    pd.Series
+        Index = SK_ID_CURR. Values: volatility ratio [0, inf).
+    """
+    status_numeric = df_bbal_raw["STATUS"].map({
+        "C": -1, "X": -1,
+        "0": 0, "1": 1, "2": 2, "3": 3, "4": 4, "5": 5
+    })
+
+    def volatility_ratio(group):
+        mean_status = group.mean()
+        std_status = group.std()
+        if pd.isna(std_status) or (mean_status + 0.01) == 0:
+            return 0.0
+        return std_status / (mean_status + 0.01)
+
+    volatility = status_numeric.groupby(level="SK_ID_CURR").apply(volatility_ratio)
+    return volatility.fillna(0.0)
+
+
+def _bbal_max_dpd_months_ago(df_bbal_raw: pd.DataFrame) -> pd.Series:
+    """
+    MONTHS_BALANCE at worst (highest numeric) STATUS. Recency of worst delinquency.
+
+    Parameters
+    ----------
+    df_bbal_raw : pd.DataFrame
+        bureau_balance table, indexed by SK_ID_CURR and MONTHS_BALANCE.
+
+    Returns
+    -------
+    pd.Series
+        Index = SK_ID_CURR. Values: months ago (absolute value) or -999.0 (no delinquency).
+    """
+    status_numeric = df_bbal_raw["STATUS"].map({
+        "C": -1, "X": -1,
+        "0": 0, "1": 1, "2": 2, "3": 3, "4": 4, "5": 5
+    })
+
+    def worst_dpd_recency(group):
+        max_status = group.max()
+        if pd.isna(max_status) or max_status <= -1:
+            return -999.0
+        # Find the record with max_status
+        worst_records = group[group == max_status]
+        if len(worst_records) == 0:
+            return -999.0
+        # Get the MONTHS_BALANCE value from the index of the worst record
+        worst_idx = worst_records.index[0]
+        # worst_idx is a tuple like (SK_ID_CURR, MONTHS_BALANCE) or just MONTHS_BALANCE
+        if isinstance(worst_idx, tuple):
+            months_balance = worst_idx[1]  # Index 1 is MONTHS_BALANCE
+        else:
+            months_balance = worst_idx
+        return float(abs(months_balance))
+
+    recency = status_numeric.groupby(level="SK_ID_CURR").apply(worst_dpd_recency)
+    return recency.fillna(-999.0)
+
+
+def _bbal_improving_flag(
+    df_bbal_raw: pd.DataFrame,
+    dpd_rate_3m: pd.Series,
+    dpd_rate_6m: pd.Series,
+) -> pd.Series:
+    """
+    1 if DPD rate [0-3m] < DPD rate [3-6m]. Recent improvement.
+
+    Parameters
+    ----------
+    df_bbal_raw : pd.DataFrame
+        bureau_balance table (for reference, not directly used).
+    dpd_rate_3m : pd.Series
+        DPD rate in [0, -3] months window per SK_ID_CURR.
+    dpd_rate_6m : pd.Series
+        DPD rate in [3, -6] months window per SK_ID_CURR.
+
+    Returns
+    -------
+    pd.Series
+        Index = SK_ID_CURR. Values: 1.0 (improving) or 0.0 (not improving).
+    """
+    improving = (dpd_rate_3m < dpd_rate_6m).astype(float)
+    return improving.fillna(0.0)
+
+
+def _bbal_dpd_acceleration_3m(
+    dpd_rate_3m: pd.Series,
+    dpd_rate_6m: pd.Series,
+    dpd_rate_12m: pd.Series,
+) -> pd.Series:
+    """
+    (dpd_3m - dpd_6m) - (dpd_6m - dpd_12m). 2nd-order derivative of DPD.
+
+    Parameters
+    ----------
+    dpd_rate_3m : pd.Series
+        DPD rate in [0, -3] months window.
+    dpd_rate_6m : pd.Series
+        DPD rate in [3, -6] months window.
+    dpd_rate_12m : pd.Series
+        DPD rate in [6, -12] months window.
+
+    Returns
+    -------
+    pd.Series
+        Index = SK_ID_CURR. Values: acceleration (2nd derivative).
+    """
+    vel_3m_6m = dpd_rate_3m - dpd_rate_6m
+    vel_6m_12m = dpd_rate_6m - dpd_rate_12m
+    acceleration = vel_3m_6m - vel_6m_12m
+    return acceleration.fillna(0.0)
+
+
+def _inst_late_payment_acceleration(
+    late_rate_3m: pd.Series,
+    late_rate_6m: pd.Series,
+) -> pd.Series:
+    """
+    (late_rate[0-3m] - late_rate[3-6m]). Positive = worsening.
+
+    Parameters
+    ----------
+    late_rate_3m : pd.Series
+        Late payment rate in [0, -3] months window per SK_ID_CURR.
+    late_rate_6m : pd.Series
+        Late payment rate in [3, -6] months window per SK_ID_CURR.
+
+    Returns
+    -------
+    pd.Series
+        Index = SK_ID_CURR. Values: acceleration (can be negative if improving).
+    """
+    acceleration = late_rate_3m - late_rate_6m
+    return acceleration.fillna(0.0)
+
+
+def _inst_payment_consistency_score(df_inst: pd.DataFrame) -> pd.Series:
+    """
+    On-time rate - (payment_ratio_std / payment_ratio_mean). High score = consistent.
+
+    Parameters
+    ----------
+    df_inst : pd.DataFrame
+        installments_payments table with SK_ID_CURR, days_past_due, AMT_PAYMENT, AMT_INSTALMENT columns.
+
+    Returns
+    -------
+    pd.Series
+        Index = SK_ID_CURR. Values: [0, 1] (consistency score).
+    """
+    def consistency_score(group):
+        if group.empty:
+            return 0.0
+
+        # On-time rate
+        on_time_rate = (group["days_past_due"] <= 0).astype(float).mean()
+
+        # Payment ratio variability
+        payment_ratio = group["AMT_PAYMENT"] / (group["AMT_INSTALMENT"] + 1e-6)
+        if payment_ratio.std() == 0 or payment_ratio.mean() == 0:
+            variability_penalty = 0.0
+        else:
+            variability_penalty = min(
+                payment_ratio.std() / (payment_ratio.mean() + 0.01),
+                1.0
+            )
+
+        return max(on_time_rate - variability_penalty, 0.0)
+
+    consistency = df_inst.groupby(level="SK_ID_CURR").apply(consistency_score)
+    return consistency.fillna(0.0)
+
+
+def _inst_recency_weighted_dpd(df_inst: pd.DataFrame) -> pd.Series:
+    """
+    Weighted mean days_past_due; weight = 1 / (1 + months_age). Recent slips matter more.
+
+    Parameters
+    ----------
+    df_inst : pd.DataFrame
+        installments_payments table with SK_ID_CURR, DAYS_INSTALMENT, days_past_due columns.
+
+    Returns
+    -------
+    pd.Series
+        Index = SK_ID_CURR. Values: weighted DPD [0, inf).
+    """
+    def recency_dpd(group):
+        if group.empty:
+            return 0.0
+
+        # Compute months ago from DAYS_INSTALMENT
+        months_age = np.maximum(group["DAYS_INSTALMENT"] / 30.0, 0.0)
+        weights = 1.0 / (1.0 + months_age)
+        weights = weights / weights.sum()  # Normalize
+
+        dpd = group["days_past_due"].fillna(0.0)
+        weighted_dpd = (dpd * weights).sum()
+
+        return float(weighted_dpd)
+
+    weighted = df_inst.groupby(level="SK_ID_CURR").apply(recency_dpd)
+    return weighted.fillna(0.0)
+
+
+def _inst_early_payment_pct(df_inst: pd.DataFrame) -> pd.Series:
+    """
+    % payments where DAYS_ENTRY_PAYMENT < DAYS_INSTALMENT (paid before due date).
+
+    Parameters
+    ----------
+    df_inst : pd.DataFrame
+        installments_payments table with SK_ID_CURR, DAYS_ENTRY_PAYMENT, DAYS_INSTALMENT columns.
+
+    Returns
+    -------
+    pd.Series
+        Index = SK_ID_CURR. Values: [0.0, 1.0] (proportion of early payments).
+    """
+    def early_pct(group):
+        if group.empty:
+            return 0.0
+
+        early_payments = (group["DAYS_ENTRY_PAYMENT"] < group["DAYS_INSTALMENT"]).astype(float)
+        return early_payments.mean()
+
+    early = df_inst.groupby(level="SK_ID_CURR").apply(early_pct)
+    return early.fillna(0.0)
+
+
+def _inst_large_payment_freq(df_inst: pd.DataFrame) -> pd.Series:
+    """
+    Count(AMT_PAYMENT > AMT_INSTALMENT * 1.2) / total_installments.
+
+    Parameters
+    ----------
+    df_inst : pd.DataFrame
+        installments_payments table with SK_ID_CURR, AMT_PAYMENT, AMT_INSTALMENT columns.
+
+    Returns
+    -------
+    pd.Series
+        Index = SK_ID_CURR. Values: [0.0, 1.0] (proportion of large payments).
+    """
+    def large_payment_freq(group):
+        if group.empty:
+            return 0.0
+
+        large_payments = (group["AMT_PAYMENT"] > group["AMT_INSTALMENT"] * 1.2).astype(float)
+        return large_payments.mean()
+
+    freq = df_inst.groupby(level="SK_ID_CURR").apply(large_payment_freq)
+    return freq.fillna(0.0)
+
+
+def _cc_balance_velocity_3m(df_cc: pd.DataFrame) -> pd.Series:
+    """
+    (avg_balance[0-1m] - avg_balance[2-3m]) / (avg_balance[2-3m] + 1). Balance trend.
+
+    Parameters
+    ----------
+    df_cc : pd.DataFrame
+        credit_card_balance table with SK_ID_CURR, MONTHS_BALANCE, AMT_BALANCE columns.
+
+    Returns
+    -------
+    pd.Series
+        Index = SK_ID_CURR. Values: velocity ratio (-inf to inf).
+    """
+    def velocity(group):
+        if group.empty:
+            return 0.0
+
+        # Window 1: MONTHS_BALANCE in [0, -1]
+        recent = group[group["MONTHS_BALANCE"].isin([0, -1])]["AMT_BALANCE"].mean()
+
+        # Window 2: MONTHS_BALANCE in [-2, -3]
+        prior = group[group["MONTHS_BALANCE"].isin([-2, -3])]["AMT_BALANCE"].mean()
+
+        if pd.isna(recent) or pd.isna(prior) or prior + 1 == 0:
+            return 0.0
+
+        return (recent - prior) / (prior + 1.0)
+
+    vel = df_cc.groupby(level="SK_ID_CURR").apply(velocity)
+    return vel.fillna(0.0)
+
+
+def _cc_utilization_trend(df_cc: pd.DataFrame) -> pd.Series:
+    """
+    avg_utilization[0-3m] - avg_utilization[3-6m]. Trend direction.
+
+    Parameters
+    ----------
+    df_cc : pd.DataFrame
+        credit_card_balance table with SK_ID_CURR, MONTHS_BALANCE, AMT_BALANCE, AMT_CREDIT_LIMIT columns.
+
+    Returns
+    -------
+    pd.Series
+        Index = SK_ID_CURR. Values: utilization trend [-1, 1].
+    """
+    def utilization_trend(group):
+        if group.empty:
+            return 0.0
+
+        # Utilization = AMT_BALANCE / AMT_CREDIT_LIMIT
+        util = (group["AMT_BALANCE"] / (group["AMT_CREDIT_LIMIT"] + 1e-6)).clip(0, 1)
+
+        # Window 1: [0, -3]
+        recent_util = util[group["MONTHS_BALANCE"].isin([0, -1, -2, -3])].mean()
+
+        # Window 2: [-3, -6]
+        prior_util = util[group["MONTHS_BALANCE"].isin([-3, -4, -5, -6])].mean()
+
+        if pd.isna(recent_util) or pd.isna(prior_util):
+            return 0.0
+
+        return recent_util - prior_util
+
+    trend = df_cc.groupby(level="SK_ID_CURR").apply(utilization_trend)
+    return trend.fillna(0.0)
+
+
+def _cc_balance_volatility(df_cc: pd.DataFrame) -> pd.Series:
+    """
+    std(AMT_BALANCE) / mean(AMT_BALANCE). Spending variability.
+
+    Parameters
+    ----------
+    df_cc : pd.DataFrame
+        credit_card_balance table with SK_ID_CURR, AMT_BALANCE columns.
+
+    Returns
+    -------
+    pd.Series
+        Index = SK_ID_CURR. Values: volatility ratio [0, inf).
+    """
+    def volatility(group):
+        if group.empty:
+            return 0.0
+
+        balance = group["AMT_BALANCE"].fillna(0.0)
+        mean_bal = balance.mean()
+        std_bal = balance.std()
+
+        if mean_bal == 0 or pd.isna(std_bal):
+            return 0.0
+
+        return std_bal / mean_bal
+
+    vol = df_cc.groupby(level="SK_ID_CURR").apply(volatility)
+    return vol.fillna(0.0)
+
+
+def _cc_atm_drawing_frequency(df_cc: pd.DataFrame) -> pd.Series:
+    """
+    Count of months with AMT_DRAWINGS_ATM_CURRENT > 0. Cash usage frequency.
+
+    Parameters
+    ----------
+    df_cc : pd.DataFrame
+        credit_card_balance table with SK_ID_CURR, AMT_DRAWINGS_ATM_CURRENT columns.
+
+    Returns
+    -------
+    pd.Series
+        Index = SK_ID_CURR. Values: [0.0, 1.0] (proportion of months with ATM draws).
+    """
+    def atm_freq(group):
+        if group.empty:
+            return 0.0
+
+        atm_months = (group["AMT_DRAWINGS_ATM_CURRENT"] > 0).astype(float).sum()
+        total_months = len(group)
+
+        if total_months == 0:
+            return 0.0
+
+        return atm_months / total_months
+
+    freq = df_cc.groupby(level="SK_ID_CURR").apply(atm_freq)
+    return freq.fillna(0.0)
+
+
+def _prev_reject_fraud_flag(df_prev: pd.DataFrame) -> pd.Series:
+    """
+    1 if any CODE_REJECT_REASON == 'FRAUD' in previous applications.
+
+    Parameters
+    ----------
+    df_prev : pd.DataFrame
+        previous_application table with SK_ID_CURR, CODE_REJECT_REASON columns.
+
+    Returns
+    -------
+    pd.Series
+        Index = SK_ID_CURR. Values: 1.0 (fraud reject found) or 0.0 (none).
+    """
+    def has_fraud(group):
+        if group.empty:
+            return 0.0
+
+        fraud_rejects = (group["CODE_REJECT_REASON"] == "FRAUD").any()
+        return 1.0 if fraud_rejects else 0.0
+
+    fraud = df_prev.groupby(level="SK_ID_CURR").apply(has_fraud)
+    return fraud.fillna(0.0)
+
+
+def _prev_reject_high_risk_pct(df_prev: pd.DataFrame) -> pd.Series:
+    """
+    % of CODE_REJECT_REASON in ('HC', 'LIMIT', 'SCOFR'). High-risk refusals.
+
+    Parameters
+    ----------
+    df_prev : pd.DataFrame
+        previous_application table with SK_ID_CURR, CODE_REJECT_REASON columns.
+
+    Returns
+    -------
+    pd.Series
+        Index = SK_ID_CURR. Values: [0.0, 1.0] (proportion of high-risk rejects).
+    """
+    def high_risk_pct(group):
+        if group.empty:
+            return 0.0
+
+        high_risk_reasons = {'HC', 'LIMIT', 'SCOFR'}
+        is_high_risk = group["CODE_REJECT_REASON"].isin(high_risk_reasons).astype(float)
+
+        return is_high_risk.mean() if len(group) > 0 else 0.0
+
+    pct = df_prev.groupby(level="SK_ID_CURR").apply(high_risk_pct)
+    return pct.fillna(0.0)
+
+
+def _prev_goods_secured_pct(df_prev: pd.DataFrame) -> pd.Series:
+    """
+    % of NAME_GOODS_CATEGORY in ('Auto', 'Real estate'). Secured goods focus.
+
+    Parameters
+    ----------
+    df_prev : pd.DataFrame
+        previous_application table with SK_ID_CURR, NAME_GOODS_CATEGORY columns.
+
+    Returns
+    -------
+    pd.Series
+        Index = SK_ID_CURR. Values: [0.0, 1.0] (proportion of secured goods applications).
+    """
+    def secured_pct(group):
+        if group.empty:
+            return 0.0
+
+        secured_goods = {'Auto', 'Real estate'}
+        is_secured = group["NAME_GOODS_CATEGORY"].isin(secured_goods).astype(float)
+
+        return is_secured.mean() if len(group) > 0 else 0.0
+
+    pct = df_prev.groupby(level="SK_ID_CURR").apply(secured_pct)
+    return pct.fillna(0.0)
+
+
+def _prev_interest_rate_mean(df_prev: pd.DataFrame) -> pd.Series:
+    """
+    Mean of RATE_INTEREST_PRIMARY across previous applications.
+
+    Parameters
+    ----------
+    df_prev : pd.DataFrame
+        previous_application table with SK_ID_CURR, RATE_INTEREST_PRIMARY columns.
+
+    Returns
+    -------
+    pd.Series
+        Index = SK_ID_CURR. Values: mean interest rate or 0.0 (no data).
+    """
+    def rate_mean(group):
+        if group.empty:
+            return 0.0
+
+        rates = group["RATE_INTEREST_PRIMARY"].fillna(-999.0)
+        valid_rates = rates[rates != -999.0]
+
+        return valid_rates.mean() if len(valid_rates) > 0 else 0.0
+
+    rate = df_prev.groupby(level="SK_ID_CURR").apply(rate_mean)
+    return rate.fillna(0.0)
+
+
+def _current_to_bureau_debt_ratio(
+    amt_credit: pd.Series,
+    bureau_credit_debt_sum: pd.Series,
+) -> pd.Series:
+    """
+    AMT_CREDIT / (bureau_credit_debt_sum + 1). Current loan vs. historical debt.
+
+    Parameters
+    ----------
+    amt_credit : pd.Series
+        Current application AMT_CREDIT (indexed by SK_ID_CURR).
+    bureau_credit_debt_sum : pd.Series
+        Sum of historical bureau credit debt (indexed by SK_ID_CURR).
+
+    Returns
+    -------
+    pd.Series
+        Index = SK_ID_CURR. Values: ratio [-999.0 to 100.0] (capped at 100x).
+    """
+    ratio = np.where(
+        bureau_credit_debt_sum > 0,
+        amt_credit / (bureau_credit_debt_sum + 1.0),
+        -999.0
+    )
+
+    # Cap at reasonable max to avoid outliers
+    ratio = np.clip(ratio, -999.0, 100.0)
+
+    return pd.Series(ratio, index=amt_credit.index)
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
