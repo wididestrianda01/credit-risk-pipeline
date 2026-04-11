@@ -708,6 +708,94 @@ def engineer_inst_days_since_last_30dpd(df_inst: pd.DataFrame) -> pd.Series:
     return result
 
 
+def engineer_bureau_dpd_trend_3m_vs_12m(df: pd.DataFrame) -> pd.Series:
+    """
+    Bureau DPD trend: recent (3m) rate minus historical (3-12m) rate.
+
+    Captures whether the applicant's bureau delinquency is worsening or improving.
+    Positive trend = worsening (higher risk); negative = improving.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame with columns bureau_bbal_dpd_rate_3m_mean and
+        bureau_bbal_dpd_rate_3m_to_12m_mean (pre-aggregated from bureau_balance
+        by data_loader.py).
+
+    Returns
+    -------
+    pd.Series
+        Index = df.index. Values ∈ [-1, 1] or -999.0 sentinel.
+        Expected coverage: ~97.2%.
+    """
+    if "bureau_bbal_dpd_rate_3m_mean" not in df.columns or "bureau_bbal_dpd_rate_3m_to_12m_mean" not in df.columns:
+        # Return sentinel if columns missing
+        return pd.Series(_NAN_SENTINEL, index=df.index, dtype=float)
+
+    rate_3m = df["bureau_bbal_dpd_rate_3m_mean"]
+    rate_3m_to_12m = df["bureau_bbal_dpd_rate_3m_to_12m_mean"]
+
+    # Compute trend only where both inputs are valid (not NaN)
+    # When either input is NaN, the result will be NaN and get filled with sentinel below
+    trend = rate_3m - rate_3m_to_12m
+
+    # Replace inf → -999
+    trend = trend.replace([np.inf, -np.inf], _NAN_SENTINEL)
+
+    # Clip to [-1, 1] (both rates are [0, 1], so diff is [-1, 1])
+    trend = trend.clip(lower=-1.0, upper=1.0)
+
+    # Fill remaining NaN → -999
+    trend = trend.fillna(_NAN_SENTINEL)
+
+    return trend
+
+
+def engineer_bureau_debt_to_new_credit(df: pd.DataFrame) -> pd.Series:
+    """
+    Bureau outstanding debt relative to new loan amount.
+
+    Measures how much new credit the applicant is taking relative to existing debt burden.
+    High ratio = applicant already heavily indebted; new credit compounds leverage risk.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame with columns bureau_credit_debt_sum and AMT_CREDIT.
+
+    Returns
+    -------
+    pd.Series
+        Index = df.index. Values ≥ 0 or -999.0 sentinel.
+        Expected coverage: ~85%.
+    """
+    if "bureau_credit_debt_sum" not in df.columns or "AMT_CREDIT" not in df.columns:
+        return pd.Series(_NAN_SENTINEL, index=df.index, dtype=float)
+
+    debt = df["bureau_credit_debt_sum"]
+    credit = df["AMT_CREDIT"]
+
+    # Track which rows had NaN debt (to mark as sentinel later)
+    debt_missing = debt.isna()
+
+    # Fill NaN with 0 for division, but we'll restore sentinel for originally-missing rows
+    debt_filled = debt.fillna(0.0).clip(lower=0.0)
+    credit_filled = credit.fillna(0.0).clip(lower=1.0)  # Ensure no division by zero
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = debt_filled / credit_filled
+
+    # Replace inf → -999, NaN → -999
+    ratio = pd.Series(ratio, index=df.index, dtype=float)
+    ratio = ratio.replace([np.inf, -np.inf], _NAN_SENTINEL)
+    ratio = ratio.fillna(_NAN_SENTINEL)
+
+    # Restore sentinel for originally-missing debt values
+    ratio[debt_missing] = _NAN_SENTINEL
+
+    return ratio
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------

@@ -396,8 +396,10 @@ def _aggregate_bureau_balance(data_dir: Path) -> pd.DataFrame:
 
     # Time window flags
     bbal = bbal.assign(
+        in_recent_3m=(bbal["MONTHS_BALANCE"] >= -3).astype(bool),
         in_recent_6m=(bbal["MONTHS_BALANCE"] >= -6).astype(bool),
         in_historical_12m=(bbal["MONTHS_BALANCE"].between(-12, -7)).astype(bool),
+        in_3m_to_12m=(bbal["MONTHS_BALANCE"].between(-12, -3)).astype(bool),
     )
 
     # Helper: compute windowed mean for a series
@@ -430,14 +432,18 @@ def _aggregate_bureau_balance(data_dir: Path) -> pd.DataFrame:
     # Compute windowed metrics separately for each group
     windowed_data = []
     for bureau_id, group in groups:
+        dpd_3m = group.loc[group["in_recent_3m"], "is_dpd"].mean()
         dpd_6m = group.loc[group["in_recent_6m"], "is_dpd"].mean()
         dpd_12m = group.loc[group["in_historical_12m"], "is_dpd"].mean()
+        dpd_3m_to_12m = group.loc[group["in_3m_to_12m"], "is_dpd"].mean()
         severity_recent = group.loc[group["in_recent_6m"], "status_severity"].max()
 
         windowed_data.append({
             "SK_ID_BUREAU": bureau_id,
+            "bbal_dpd_rate_3m": dpd_3m,
             "bbal_dpd_rate_6m": dpd_6m,
             "bbal_dpd_rate_12m": dpd_12m,
+            "bbal_dpd_rate_3m_to_12m": dpd_3m_to_12m,
             "bbal_recent_max_severity": severity_recent,
         })
 
@@ -467,8 +473,10 @@ def _join_bureau(app: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
     - ``bureau_prolong_sum``           : total number of credit prolongations
     - ``bureau_bbal_cnt_mean``         : mean monthly balance record count
     - ``bureau_bbal_dpd_rate_mean``    : mean DPD rate across bureau entries
+    - ``bureau_bbal_dpd_rate_3m_mean`` : mean DPD rate (last 3 months, -3m to 0)
     - ``bureau_bbal_dpd_rate_6m_mean`` : mean DPD rate (last 6 months)
-    - ``bureau_bbal_dpd_rate_12m_mean``: mean DPD rate (months 7-12 ago)
+    - ``bureau_bbal_dpd_rate_12m_mean``: mean DPD rate (months 7-12 ago, -12m to -6m)
+    - ``bureau_bbal_dpd_rate_3m_to_12m_mean``: mean DPD rate (3m to 12m, -12m to -3m)
     - ``bureau_bbal_dpd_trend_mean``   : mean trend (6m - 12m)
     - ``bureau_bbal_max_severity_mean``: mean max severity across bureau entries
     - ``bureau_bbal_recent_max_severity_mean``: mean recent max severity
@@ -525,8 +533,10 @@ def _join_bureau(app: pd.DataFrame, data_dir: Path) -> pd.DataFrame:
             bureau_bbal_cnt_mean=("bbal_cnt", "mean"),
             bureau_bbal_dpd_rate_mean=("bbal_dpd_rate", "mean"),
             bureau_bbal_dpd_rate_std_mean=("bbal_dpd_rate_std", "mean"),
+            bureau_bbal_dpd_rate_3m_mean=("bbal_dpd_rate_3m", "mean"),
             bureau_bbal_dpd_rate_6m_mean=("bbal_dpd_rate_6m", "mean"),
             bureau_bbal_dpd_rate_12m_mean=("bbal_dpd_rate_12m", "mean"),
+            bureau_bbal_dpd_rate_3m_to_12m_mean=("bbal_dpd_rate_3m_to_12m", "mean"),
             bureau_bbal_dpd_trend_mean=("bbal_dpd_trend", "mean"),
             bureau_bbal_max_severity_mean=("bbal_max_severity", "mean"),
             bureau_bbal_recent_max_severity_mean=("bbal_recent_max_severity", "mean"),
