@@ -3103,6 +3103,10 @@ def train_catboost_optuna(
         storage=f"sqlite:///{_PROJECT_ROOT / 'models' / 'optuna_studies.db'}",
         load_if_exists=True,
     )
+    # Capture count of pre-existing (possibly contaminated) trials before this run
+    _n_trials_before = len(
+        [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+    )
 
     # HPO objective — 7 hyperparameters (D-11)
     def _objective(trial: optuna.Trial) -> float:
@@ -3152,7 +3156,20 @@ def train_catboost_optuna(
 
     # Run study
     study.optimize(_objective, n_trials=n_trials, show_progress_bar=False)
-    best_params = study.best_params
+
+    # Select best params from compliant (current-run) trials only.
+    # Pre-existing contaminated trials (e.g. run on mock data) have number < _n_trials_before
+    # and must not influence the final model.
+    _compliant_trials = [
+        t for t in study.trials
+        if t.state == optuna.trial.TrialState.COMPLETE and t.number >= _n_trials_before
+    ]
+    if not _compliant_trials:
+        raise RuntimeError(
+            "No compliant trials completed — cannot select best_params safely."
+        )
+    _best_trial = max(_compliant_trials, key=lambda t: t.value)
+    best_params = _best_trial.params
 
     # 2-stage refit (D-09, D-10)
     # Stage 1: 80/20 holdout on X_train with early stopping
