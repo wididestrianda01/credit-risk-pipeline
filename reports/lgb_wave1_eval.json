@@ -1,0 +1,28 @@
+{
+  "phase": "04.2.7",
+  "wave": 1,
+  "feature_store": "data/processed/X_tree_raw.parquet",
+  "model": "lightgbm",
+  "n_trials": 50,
+  "baseline_oot_gini": 0.5795,
+  "oot_gini": 0.5746090399063704,
+  "oof_gini": 0.7437473437512954,
+  "ks": 0.43017319183260827,
+  "brier": 0.09131606518485622,
+  "improvement": -0.004890960093629659,
+  "gate_threshold": 0.5845,
+  "gate_pass": false,
+  "best_params": {
+    "learning_rate": 0.031413790098123104,
+    "num_leaves": 283,
+    "max_depth": 7,
+    "min_child_samples": 466,
+    "min_child_weight": 0.0006082107485536328,
+    "subsample": 0.7899837075861299,
+    "colsample_bytree": 0.5543155420850822,
+    "reg_alpha": 4.199166852093132,
+    "reg_lambda": 0.0040234495991423175,
+    "path_smooth": 7.324757645467599
+  },
+  "elapsed_minutes": 94.2
+}
