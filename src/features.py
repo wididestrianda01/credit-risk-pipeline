@@ -625,38 +625,41 @@ def engineer_inst_delinquency_escalation_flag(df_inst: pd.DataFrame) -> pd.Serie
     # 6-month window: days 90–180 (prior 3 months, non-overlapping)
     df_6m = df[(df["DAYS_INSTALMENT"] >= -180) & (df["DAYS_INSTALMENT"] < -90)].copy()
 
-    result_dict = {}
-    for sk_id in df_inst["SK_ID_CURR"].unique():
-        group_3m = df_3m[df_3m["SK_ID_CURR"] == sk_id]
-        group_6m = df_6m[df_6m["SK_ID_CURR"] == sk_id]
+    # Vectorized: compute rates per applicant using groupby
+    # 3m rates
+    late_3m = df_3m.groupby("SK_ID_CURR")["is_late"].sum()
+    total_3m = df_3m.groupby("SK_ID_CURR").size()
+    rate_3m = late_3m / total_3m
 
-        # 3m rate
-        if len(group_3m) > 0:
-            rate_3m = float(group_3m["is_late"].sum()) / float(len(group_3m))
-        else:
-            rate_3m = None
+    # 6m rates
+    late_6m = df_6m.groupby("SK_ID_CURR")["is_late"].sum()
+    total_6m = df_6m.groupby("SK_ID_CURR").size()
+    rate_6m = late_6m / total_6m
 
-        # 6m rate
-        if len(group_6m) > 0:
-            rate_6m = float(group_6m["is_late"].sum()) / float(len(group_6m))
-        else:
-            rate_6m = None
-
-        # Flag: 1 if 3m > 6m, else 0; -999 if both missing
-        if rate_3m is None and rate_6m is None:
-            result_dict[sk_id] = _NAN_SENTINEL
-        elif rate_3m is None or rate_6m is None:
-            # One window present; flag based on whether recent exists
-            result_dict[sk_id] = 1.0 if rate_3m is not None else 0.0
-        else:
-            result_dict[sk_id] = 1.0 if rate_3m > rate_6m else 0.0
-
-    # Ensure all applicants present
+    # Get all applicant IDs
     all_ids = df_inst["SK_ID_CURR"].unique()
-    result = pd.Series(result_dict, dtype=float)
-    result = result.reindex(all_ids, fill_value=_NAN_SENTINEL)
-    result.index.name = "SK_ID_CURR"
-    return result
+    result_series = pd.Series(index=all_ids, dtype=float)
+
+    # Case 1: Both windows present → compare rates
+    both_present = result_series.index.isin(rate_3m.index) & result_series.index.isin(rate_6m.index)
+    result_series[both_present] = (
+        (rate_3m[result_series[both_present].index] > rate_6m[result_series[both_present].index]).astype(float).values
+    )
+
+    # Case 2: Only 3m present → flag = 1.0
+    only_3m = result_series.index.isin(rate_3m.index) & ~result_series.index.isin(rate_6m.index)
+    result_series[only_3m] = 1.0
+
+    # Case 3: Only 6m present → flag = 0.0
+    only_6m = ~result_series.index.isin(rate_3m.index) & result_series.index.isin(rate_6m.index)
+    result_series[only_6m] = 0.0
+
+    # Case 4: Neither present → _NAN_SENTINEL
+    neither = ~result_series.index.isin(rate_3m.index) & ~result_series.index.isin(rate_6m.index)
+    result_series[neither] = _NAN_SENTINEL
+
+    result_series.index.name = "SK_ID_CURR"
+    return result_series
 
 
 def engineer_inst_days_since_last_30dpd(df_inst: pd.DataFrame) -> pd.Series:
@@ -679,33 +682,31 @@ def engineer_inst_days_since_last_30dpd(df_inst: pd.DataFrame) -> pd.Series:
     df = df_inst.copy()
     df["dpd"] = np.maximum(0, df["DAYS_ENTRY_PAYMENT"] - df["DAYS_INSTALMENT"])
 
-    result_dict = {}
-    for sk_id in df_inst["SK_ID_CURR"].unique():
-        group = df[df["SK_ID_CURR"] == sk_id]
+    # Vectorized approach: compute for each applicant in one pass
+    # Step 1: Find most recent day (max DAYS_INSTALMENT) for each SK_ID
+    most_recent_by_id = df.groupby("SK_ID_CURR")["DAYS_INSTALMENT"].max()
 
-        if len(group) == 0:
-            result_dict[sk_id] = _NAN_SENTINEL
-        else:
-            # Find most recent DPD > 30
-            late_mask = group["dpd"] > 30
-            if late_mask.any():
-                # Days since that event
-                # DAYS_INSTALMENT is negative; most recent is max(DAYS_INSTALMENT)
-                most_recent_day = group["DAYS_INSTALMENT"].max()
-                last_late_day = group[late_mask]["DAYS_INSTALMENT"].max()
+    # Step 2: For DPD > 30 records, find most recent day (max DAYS_INSTALMENT)
+    df_late = df[df["dpd"] > 30].copy()
+    last_late_by_id = df_late.groupby("SK_ID_CURR")["DAYS_INSTALMENT"].max()
 
-                days_ago = most_recent_day - last_late_day
-                result_dict[sk_id] = float(days_ago)
-            else:
-                # Never late
-                result_dict[sk_id] = -1.0
+    # Step 3: Check which applicants ever had DPD > 30
+    has_late = df.groupby("SK_ID_CURR")["dpd"].apply(lambda x: (x > 30).any())
 
-    # Ensure all applicants present
-    all_ids = df_inst["SK_ID_CURR"].unique()
-    result = pd.Series(result_dict, dtype=float)
-    result = result.reindex(all_ids, fill_value=_NAN_SENTINEL)
-    result.index.name = "SK_ID_CURR"
-    return result
+    # Step 4: Compute result using vectorized logic
+    result_series = pd.Series(index=most_recent_by_id.index, dtype=float)
+
+    # Case 1: Never had DPD > 30 → -1.0
+    result_series[~has_late] = -1.0
+
+    # Case 2: Had DPD > 30 → days since
+    late_ids = has_late[has_late].index
+    result_series[late_ids] = (
+        most_recent_by_id[late_ids] - last_late_by_id[late_ids]
+    ).astype(float)
+
+    result_series.index.name = "SK_ID_CURR"
+    return result_series
 
 
 def engineer_bureau_dpd_trend_3m_vs_12m(df: pd.DataFrame) -> pd.Series:
@@ -1907,6 +1908,7 @@ def build_tree_feature_store(
     X: pd.DataFrame,
     y: pd.Series,
     output_dir: str | Path | None = None,
+    df_inst: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, list[str]]:
     """
     Build raw (non-WoE) feature store for tree-based models (XGBoost, LightGBM, CatBoost).
@@ -1929,6 +1931,9 @@ def build_tree_feature_store(
     output_dir : str | Path, optional
         Directory to save the raw feature matrix and feature columns list.
         If None, defaults to {_PROJECT_ROOT}/data/processed/.
+    df_inst : pd.DataFrame, optional
+        Raw installments_payments table. If provided, Wave 1 instalment-based
+        features are computed and added to the store.
 
     Returns
     -------
@@ -1950,6 +1955,9 @@ def build_tree_feature_store(
     This preserves the maximum continuous gradient signal.
 
     **No WoE binning:** All values remain as raw floats (or -999 for missing).
+
+    **Wave 1 Features:** If df_inst is provided, Wave 1 delinquency trajectory features
+    (inst_late_rate_12m, inst_rolling_30dpd_ratio_3m, etc.) are computed and added to the store.
     """
     if output_dir is None:
         output_dir = _PROJECT_ROOT / "data" / "processed"
@@ -1962,6 +1970,19 @@ def build_tree_feature_store(
 
     X_eng = engineer_application_features(X) if "AMT_CREDIT" in X.columns else X.copy()
     X_eng = engineer_secondary_features(X_eng)
+
+    # Wave 1 features (Phase 04.2.7 — delinquency trajectory signals)
+    if df_inst is not None:
+        # Instalment-level features (require raw table)
+        X_eng["inst_late_rate_12m"] = engineer_inst_late_rate_12m(df_inst).reindex(X_eng.index, fill_value=_NAN_SENTINEL).values
+        X_eng["inst_late_rate_recent_vs_historical"] = engineer_inst_late_rate_recent_vs_historical(df_inst).reindex(X_eng.index, fill_value=_NAN_SENTINEL).values
+        X_eng["inst_rolling_30dpd_ratio_3m"] = engineer_inst_rolling_30dpd_ratio_3m(df_inst).reindex(X_eng.index, fill_value=_NAN_SENTINEL).values
+        X_eng["inst_delinquency_escalation_flag"] = engineer_inst_delinquency_escalation_flag(df_inst).reindex(X_eng.index, fill_value=_NAN_SENTINEL).values
+        X_eng["inst_days_since_last_30dpd"] = engineer_inst_days_since_last_30dpd(df_inst).reindex(X_eng.index, fill_value=_NAN_SENTINEL).values
+
+    # Bureau-level features (operate on aggregated columns already in X_eng)
+    X_eng["bureau_dpd_trend_3m_vs_12m"] = engineer_bureau_dpd_trend_3m_vs_12m(X_eng).values
+    X_eng["bureau_debt_to_new_credit"] = engineer_bureau_debt_to_new_credit(X_eng).values
 
     # D-20, D-21: Enforce regulatory compliance
     # Drop CODE_GENDER (GDPR Art. 21) and thin_file_young (EU AI Act Art. 6 age discrimination)
