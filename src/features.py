@@ -2089,8 +2089,12 @@ def build_tree_feature_store(
     print(f"After correlation dedup (|r| > 0.95): {X_final.shape[1]}")
 
     # Persist artifacts
-    X_final.to_parquet(output_dir / "X_tree_raw.parquet", index=False)
-    feature_columns = list(X_final.columns)
+    # Embed TARGET as the last column so train_*_optuna functions can load a single
+    # parquet and pop TARGET without requiring a separate y_train.parquet read.
+    X_with_target = X_final.copy()
+    X_with_target["TARGET"] = y.reindex(X_final.index).values
+    X_with_target.to_parquet(output_dir / "X_tree_raw.parquet", index=False)
+    feature_columns = list(X_final.columns)  # feature list excludes TARGET
     with open(models_dir / "raw_feature_columns.pkl", "wb") as fh:
         pickle.dump(feature_columns, fh)
 
