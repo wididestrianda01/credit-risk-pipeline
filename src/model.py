@@ -1704,6 +1704,12 @@ def train_lightgbm_optuna(
     - "is_unbalance": LGB internal rebalancing (gradient + leaf value adjustment)
     - "smote": data-level rebalancing via imblearn.pipeline.Pipeline (inside CV folds only)
 
+    **Basel CRE36.54 compliance:** An out-of-time (OOT) holdout of the most-recent
+    ``_TEST_SIZE`` (20%) of rows — sorted by ``_TEMPORAL_SORT_COL`` — is carved out
+    *before* HPO begins and is never seen during Optuna trials or CV folds. Final OOT
+    Gini is reported after full refit on the remaining 80%, satisfying the regulatory
+    requirement for temporal model validation in internal ratings-based (IRB) models.
+
     Parameters
     ----------
     feature_store_path : str
@@ -1728,8 +1734,8 @@ def train_lightgbm_optuna(
         (calibrated_model, metrics_dict, X_test, y_test, best_params)
         - calibrated_model: LGBMClassifier with Platt calibration applied
         - metrics_dict: {Gini, AUC-ROC, KS, Brier, BrierSkill, oof_gini, oot_gini}
-        - X_test: held-out test set features
-        - y_test: held-out test set labels
+        - X_test: OOT held-out test set features (most-recent 20% by temporal order)
+        - y_test: OOT held-out test set labels
         - best_params: best hyperparameters from Optuna study
     """
     import json as _json
@@ -1782,6 +1788,37 @@ def train_lightgbm_optuna(
         raise ValueError("y has no positive samples.")
     if n_neg == 0:
         raise ValueError("y has no negative samples.")
+
+    # --- OOT temporal split — Basel CRE36.54 ---
+    # Hold out most-recent 20% BEFORE HPO; X and y are reassigned to training 80%
+    # so every downstream reference (CV objective, refit, calibration) is clean.
+    if _TEMPORAL_SORT_COL not in X.columns:
+        raise ValueError(
+            f"Temporal sort column '{_TEMPORAL_SORT_COL}' not in X. "
+            "OOT split is required for Basel CRE36 compliance. "
+            "Rebuild feature store with build_tree_feature_store()."
+        )
+    _lgb_temporal_vals = X[_TEMPORAL_SORT_COL].values
+    _lgb_nan_mask = np.isnan(_lgb_temporal_vals)
+    _lgb_known_pos = np.where(~_lgb_nan_mask)[0]
+    _lgb_unknown_pos = np.where(_lgb_nan_mask)[0]
+    _lgb_known_sorted = _lgb_known_pos[np.argsort(_lgb_temporal_vals[_lgb_known_pos])]
+    _lgb_oot_known_cut = int(len(_lgb_known_sorted) * (1 - _TEST_SIZE))
+    _lgb_oot_known = _lgb_known_sorted[_lgb_oot_known_cut:]
+    _lgb_train_known = _lgb_known_sorted[:_lgb_oot_known_cut]
+    _lgb_rng = np.random.default_rng(_RANDOM_STATE)
+    _lgb_unknown_perm = _lgb_rng.permutation(len(_lgb_unknown_pos))
+    _lgb_oot_unknown_cut = int(len(_lgb_unknown_pos) * (1 - _TEST_SIZE))
+    _lgb_oot_unknown = _lgb_unknown_pos[_lgb_unknown_perm[_lgb_oot_unknown_cut:]]
+    _lgb_train_unknown = _lgb_unknown_pos[_lgb_unknown_perm[:_lgb_oot_unknown_cut]]
+    _lgb_oot_indices = np.concatenate([_lgb_oot_known, _lgb_oot_unknown])
+    _lgb_train_indices = np.concatenate([_lgb_train_known, _lgb_train_unknown])
+    X_oot = X.iloc[_lgb_oot_indices].copy()
+    y_oot = y.iloc[_lgb_oot_indices].copy()
+    X = X.iloc[_lgb_train_indices].copy()
+    y = y.iloc[_lgb_train_indices].copy()
+    if groups is not None:
+        groups = groups.iloc[_lgb_train_indices].reset_index(drop=True)
 
     # Temporal CV
     # Convert groups to numpy array if provided; _make_cv expects (groups_train, n_splits)
@@ -2026,27 +2063,16 @@ def train_lightgbm_optuna(
         output_figure_path=str(figure_path)
     )
 
-    # Evaluate on OOT test split (hold out most-recent 20%)
-    if groups is not None:
-        oot_threshold = np.percentile(groups, 80)
-        test_mask = groups >= oot_threshold
-        X_test = X[test_mask]
-        y_test = y[test_mask]
-    else:
-        # Fallback: bottom 20% held out
-        test_size = int(len(y) * 0.2)
-        X_test = X.iloc[-test_size:]
-        y_test = y.iloc[-test_size:]
+    # Evaluate on OOT holdout (carved out before HPO — Basel CRE36.54)
+    metrics = evaluate_model(calibrated_model, X_oot, y_oot, model_name="LGB_RAW")
 
-    metrics = evaluate_model(calibrated_model, X_test, y_test, model_name="LGB_RAW")
-
-    # Compute OOF Gini on full dataset (via final calibrated model)
-    y_pred_full = calibrated_model.predict_proba(X)[:, 1]
-    oof_gini = 2 * roc_auc_score(y, y_pred_full) - 1
+    # Compute OOF Gini on training set (final calibrated model on training 80%)
+    y_pred_train = calibrated_model.predict_proba(X)[:, 1]
+    oof_gini = 2 * roc_auc_score(y, y_pred_train) - 1
     metrics["oof_gini"] = oof_gini
 
-    # Compute OOT Gini on test set
-    oot_gini = 2 * roc_auc_score(y_test, calibrated_model.predict_proba(X_test)[:, 1]) - 1
+    # Compute OOT Gini on held-out 20%
+    oot_gini = 2 * roc_auc_score(y_oot, calibrated_model.predict_proba(X_oot)[:, 1]) - 1
     metrics["oot_gini"] = oot_gini
 
     # Task 1: Persist metrics JSON for orchestrator (Phase 04.2.6)
@@ -2071,7 +2097,7 @@ def train_lightgbm_optuna(
     logger.info(f"Saved metrics to {metrics_path}")
 
     # Return tuple per XGBoost pattern
-    return calibrated_model, metrics, X_test, y_test, best_params
+    return calibrated_model, metrics, X_oot, y_oot, best_params
 
 
 def run_lightgbm_ablation_workflow(
@@ -2977,6 +3003,12 @@ def train_catboost_optuna(
     Class imbalance handled via ``scale_pos_weight = n_neg / n_pos`` only — single strategy
     per phase scope (D-03: no SMOTE, no is_unbalance, CatBoost's ordered boosting).
 
+    **Basel CRE36.54 compliance:** An out-of-time (OOT) holdout of the most-recent
+    ``_TEST_SIZE`` (20%) of rows — sorted by ``_TEMPORAL_SORT_COL`` — is carved out
+    *before* HPO begins and is never seen during Optuna trials or CV folds. Final OOT
+    Gini is reported after full refit on the remaining 80%, satisfying the regulatory
+    requirement for temporal model validation in internal ratings-based (IRB) models.
+
     Parameters
     ----------
     feature_store_path : str
@@ -2992,8 +3024,8 @@ def train_catboost_optuna(
         (calibrated_model, metrics_dict, X_test, y_test, best_params)
         - calibrated_model: CatBoost with Platt calibration applied
         - metrics_dict: {Gini, AUC-ROC, KS, Brier, BrierSkill, oof_gini, oot_gini}
-        - X_test: held-out test set features
-        - y_test: held-out test set labels
+        - X_test: OOT held-out test set features (most-recent 20% by temporal order)
+        - y_test: OOT held-out test set labels
         - best_params: best hyperparameters from Optuna study
     """
     import json as _json
@@ -3025,10 +3057,33 @@ def train_catboost_optuna(
     if n_neg == 0:
         raise ValueError("y has no negative samples.")
 
-    # Train/test split
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=_TEST_SIZE, random_state=_RANDOM_STATE, stratify=y
-    )
+    # --- OOT temporal split — Basel CRE36.54 ---
+    # Hold out most-recent 20% BEFORE HPO; never seen during training or calibration.
+    if _TEMPORAL_SORT_COL not in X.columns:
+        raise ValueError(
+            f"Temporal sort column '{_TEMPORAL_SORT_COL}' not in X. "
+            "OOT split is required for Basel CRE36 compliance. "
+            "Rebuild feature store with build_tree_feature_store()."
+        )
+    _cat_temporal_vals = X[_TEMPORAL_SORT_COL].values
+    _cat_nan_mask = np.isnan(_cat_temporal_vals)
+    _cat_known_pos = np.where(~_cat_nan_mask)[0]
+    _cat_unknown_pos = np.where(_cat_nan_mask)[0]
+    _cat_known_sorted = _cat_known_pos[np.argsort(_cat_temporal_vals[_cat_known_pos])]
+    _cat_oot_known_cut = int(len(_cat_known_sorted) * (1 - _TEST_SIZE))
+    _cat_oot_known = _cat_known_sorted[_cat_oot_known_cut:]
+    _cat_train_known = _cat_known_sorted[:_cat_oot_known_cut]
+    _cat_rng = np.random.default_rng(_RANDOM_STATE)
+    _cat_unknown_perm = _cat_rng.permutation(len(_cat_unknown_pos))
+    _cat_oot_unknown_cut = int(len(_cat_unknown_pos) * (1 - _TEST_SIZE))
+    _cat_oot_unknown = _cat_unknown_pos[_cat_unknown_perm[_cat_oot_unknown_cut:]]
+    _cat_train_unknown = _cat_unknown_pos[_cat_unknown_perm[:_cat_oot_unknown_cut]]
+    _cat_oot_indices = np.concatenate([_cat_oot_known, _cat_oot_unknown])
+    _cat_train_indices = np.concatenate([_cat_train_known, _cat_train_unknown])
+    X_oot = X.iloc[_cat_oot_indices].copy()
+    y_oot = y.iloc[_cat_oot_indices].copy()
+    X_train = X.iloc[_cat_train_indices].copy()
+    y_train = y.iloc[_cat_train_indices].copy()
 
     # Compute scale_pos_weight (D-03)
     scale_pos_weight = n_neg / max(n_pos, 1)
@@ -3138,16 +3193,21 @@ def train_catboost_optuna(
     final_model = CatBoostClassifier(**stage2_params)
     final_model.fit(X_train.to_numpy(), y_train.to_numpy(), verbose=False)
 
-    # Evaluate (D-09)
-    metrics = evaluate_model(final_model, X_test, y_test, "CatBoost (Raw, scale_pos_weight)")
+    # Evaluate on OOT holdout (carved out before HPO — Basel CRE36.54)
+    metrics = evaluate_model(final_model, X_oot, y_oot, "CatBoost (Raw, scale_pos_weight)")
     metrics["n_trials"] = n_trials
     metrics["n_features"] = X.shape[1]
+    oot_gini = 2 * roc_auc_score(y_oot, final_model.predict_proba(X_oot.to_numpy())[:, 1]) - 1
+    metrics["oot_gini"] = oot_gini
 
-    # Calibrate (D-19)
+    # Calibrate on 70/30 split within X_train (not OOT — calibrator must not see holdout)
+    X_train_cal, X_calib, y_train_cal, y_calib = train_test_split(
+        X_train, y_train, test_size=0.3, random_state=_RANDOM_STATE, stratify=y_train
+    )
     calibrated_model, _, _ = calibrate_model(
         final_model,
-        X_train, y_train,
-        X_test, y_test,
+        X_train_cal, y_train_cal,
+        X_calib, y_calib,
         method="sigmoid",
         output_model_path=str(_CAT_MODEL_PATH),
         output_figure_path=str(_CAT_FIGURE_PATH),
@@ -3165,7 +3225,7 @@ def train_catboost_optuna(
     with metrics_out_path.open("w") as fh:
         _json.dump({"Model": "CatBoost (Raw, scale_pos_weight)", **metrics}, fh, indent=2)
 
-    return calibrated_model, metrics, X_test, y_test, best_params
+    return calibrated_model, metrics, X_oot, y_oot, best_params
 
 
 # ---------------------------------------------------------------------------

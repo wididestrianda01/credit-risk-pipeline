@@ -113,6 +113,7 @@ def mock_data() -> tuple[pd.DataFrame, pd.Series]:
     X = pd.DataFrame({
         "f1": np.where(y == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
         "f2": np.where(y == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
+        "prev_days_decision_mean": np.arange(n, dtype=float),
     })
     return X, pd.Series(y, name="TARGET")
 
@@ -903,6 +904,7 @@ def lgb_optuna_result(tmp_path_factory):
     X = pd.DataFrame({
         "f1": np.where(y_arr == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
         "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
+        "prev_days_decision_mean": np.arange(n, dtype=float),
     })
     y = pd.Series(y_arr, name="TARGET")
 
@@ -1210,6 +1212,7 @@ def calibration_inputs(lgb_optuna_result) -> tuple:
     X_all = pd.DataFrame({
         "f1": np.where(y_arr == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
         "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
+        "prev_days_decision_mean": np.arange(n, dtype=float),
     })
     from sklearn.model_selection import train_test_split as tts
     X_train, _, y_train, _ = tts(
@@ -1935,6 +1938,7 @@ def catboost_result(tmp_path_factory):
     df = pd.DataFrame({
         "f1": np.where(y_arr == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
         "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
+        "prev_days_decision_mean": np.arange(n, dtype=float),
         "TARGET": y_arr,
     })
     feature_store_path = tmp / "X_tree_raw.parquet"
@@ -1982,7 +1986,7 @@ class TestCatBoostOptuna:
         rng = np.random.default_rng(7)
         n = 300
         y_arr = np.zeros(n, dtype=int); y_arr[:24] = 1; rng.shuffle(y_arr)
-        df = pd.DataFrame({"f1": rng.normal(0, 1, n), "f2": rng.normal(0, 1, n), "TARGET": y_arr})
+        df = pd.DataFrame({"f1": rng.normal(0, 1, n), "f2": rng.normal(0, 1, n), "prev_days_decision_mean": np.arange(n, dtype=float), "TARGET": y_arr})
         feature_store_path = tmp_path / "X_tree_raw.parquet"
         df.to_parquet(feature_store_path)
         train_catboost_optuna(str(feature_store_path), n_trials=1)
@@ -1998,7 +2002,7 @@ class TestCatBoostOptuna:
         rng = np.random.default_rng(8)
         n = 300
         y_arr = np.zeros(n, dtype=int); y_arr[:24] = 1; rng.shuffle(y_arr)
-        df = pd.DataFrame({"f1": rng.normal(0, 1, n), "f2": rng.normal(0, 1, n), "TARGET": y_arr})
+        df = pd.DataFrame({"f1": rng.normal(0, 1, n), "f2": rng.normal(0, 1, n), "prev_days_decision_mean": np.arange(n, dtype=float), "TARGET": y_arr})
         feature_store_path = tmp_path / "X_tree_raw.parquet"
         df.to_parquet(feature_store_path)
         train_catboost_optuna(str(feature_store_path), n_trials=1)
@@ -2013,7 +2017,7 @@ class TestCatBoostOptuna:
         rng = np.random.default_rng(9)
         n = 300
         y_arr = np.zeros(n, dtype=int); y_arr[:24] = 1; rng.shuffle(y_arr)
-        df = pd.DataFrame({"f1": rng.normal(0, 1, n), "f2": rng.normal(0, 1, n), "TARGET": y_arr})
+        df = pd.DataFrame({"f1": rng.normal(0, 1, n), "f2": rng.normal(0, 1, n), "prev_days_decision_mean": np.arange(n, dtype=float), "TARGET": y_arr})
         feature_store_path = tmp_path / "X_tree_raw.parquet"
         df.to_parquet(feature_store_path)
         train_catboost_optuna(str(feature_store_path), n_trials=1)
@@ -2043,7 +2047,7 @@ class TestCatBoostOptuna:
         y_arr = np.zeros(n, dtype=int)
         y_arr[:24] = 1  # 8% positive
         rng.shuffle(y_arr)
-        X = pd.DataFrame({"f1": rng.normal(0, 1, n), "f2": rng.normal(0, 1, n)})
+        X = pd.DataFrame({"f1": rng.normal(0, 1, n), "f2": rng.normal(0, 1, n), "prev_days_decision_mean": np.arange(n, dtype=float)})
         X["TARGET"] = y_arr
         p = tmp_path / "X_imb.parquet"
         X.to_parquet(p, index=False)
@@ -2135,7 +2139,7 @@ class TestCatBoostOptuna:
         rng = np.random.default_rng(10)
         n = 300
         y_arr = np.zeros(n, dtype=int); y_arr[:24] = 1; rng.shuffle(y_arr)
-        df = pd.DataFrame({"f1": rng.normal(0, 1, n), "f2": rng.normal(0, 1, n), "TARGET": y_arr})
+        df = pd.DataFrame({"f1": rng.normal(0, 1, n), "f2": rng.normal(0, 1, n), "prev_days_decision_mean": np.arange(n, dtype=float), "TARGET": y_arr})
         feature_store_path = tmp_path / "X_tree_raw.parquet"
         df.to_parquet(feature_store_path)
         train_catboost_optuna(str(feature_store_path), n_trials=1)
@@ -2348,6 +2352,7 @@ class TestLGBApiExtensions:
             "f1": np.where(y == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
             "f2": np.where(y == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
             "f3": rng.normal(0.0, 1.0, n),
+            "prev_days_decision_mean": np.arange(n, dtype=float),
         })
         return X, pd.Series(y, name="TARGET")
 
@@ -2812,10 +2817,10 @@ class TestExtendedHPOWave0:
 # Wave 1: OOF/OOT Functionality Tests (Phase 04.2.3.1 Tasks 6-7)
 # ---------------------------------------------------------------------------
 
-def test_xgboost_study_name_is_v8():
-    """D-13: Optuna study name is xgboost_raw_v8 (NaN-init OOF fix + raw probs, no rank-norm)."""
+def test_xgboost_study_name_is_v9():
+    """D-13: Optuna study name is xgboost_raw_v9 (temporal OOT split, Basel CRE36.54)."""
     from src.model import _XGB_RAW_STUDY_NAME
-    assert _XGB_RAW_STUDY_NAME == "xgboost_raw_v8"
+    assert _XGB_RAW_STUDY_NAME == "xgboost_raw_v9"
 
 
 def test_train_xgboost_optuna_returns_6_tuple_stub(xgb_optuna_result):
@@ -2993,13 +2998,13 @@ class TestTrainXGBoostOptunaRawFeatures:
         assert model_cal is not None, "Temporal CV auto-detection should succeed"
         assert metrics is not None, "Metrics should be computed"
 
-    def test_train_xgboost_optuna_study_name_xgboost_raw_v8(self, make_mock_parquet, monkeypatch):
+    def test_train_xgboost_optuna_study_name_xgboost_raw_v9(self, make_mock_parquet, monkeypatch):
         """
-        Verifies that Optuna study name is "xgboost_raw_v8" (NaN-init OOF fix, raw probs, no rank-norm).
+        Verifies that Optuna study name is "xgboost_raw_v9" (temporal OOT split, Basel CRE36.54).
 
         Expected behavior (D-13):
-        - Function creates Optuna study with study_name="xgboost_raw_v8"
-        - v8 ensures fresh TPE search after _TemporalCV dead-zone NaN-init fix
+        - Function creates Optuna study with study_name="xgboost_raw_v9"
+        - v9 ensures fresh TPE search after temporal OOT compliance fix
         """
         import optuna as _optuna
         captured_names: list[str] = []
@@ -3013,8 +3018,8 @@ class TestTrainXGBoostOptunaRawFeatures:
 
         parquet_path = make_mock_parquet(n_rows=500, n_features=10)
         train_xgboost_optuna(str(parquet_path), n_trials=2)
-        assert "xgboost_raw_v8" in captured_names, (
-            f"Expected study_name='xgboost_raw_v8' in create_study calls, got: {captured_names}"
+        assert "xgboost_raw_v9" in captured_names, (
+            f"Expected study_name='xgboost_raw_v9' in create_study calls, got: {captured_names}"
         )
 
     def test_train_xgboost_optuna_early_stopping_set(self, make_mock_parquet):
