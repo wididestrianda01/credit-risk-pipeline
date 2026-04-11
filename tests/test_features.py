@@ -124,7 +124,7 @@ EXPECTED_COLUMNS = [
     "EXT_SOURCE_MEDIAN",
     "EXT_SOURCE_STD",
     "EXT_SOURCE_RANGE",
-    "EXT_SOURCE_AVAILABLE_CNT",
+    "EXT_SOURCE_NUM_AVAILABLE",
     "EXT_SOURCE_PROD_12",
     "EXT_SOURCE_PROD_13",
     "EXT_SOURCE_PROD_23",
@@ -214,7 +214,7 @@ def test_ext_source_interactions_present(application_fixture):
     result = engineer_application_features(application_fixture)
     interaction_cols = [
         "EXT_SOURCE_MAX", "EXT_SOURCE_MEDIAN", "EXT_SOURCE_STD",
-        "EXT_SOURCE_RANGE", "EXT_SOURCE_AVAILABLE_CNT",
+        "EXT_SOURCE_RANGE", "EXT_SOURCE_NUM_AVAILABLE",
         "EXT_SOURCE_PROD_12", "EXT_SOURCE_PROD_13", "EXT_SOURCE_PROD_23",
     ]
     missing = [c for c in interaction_cols if c not in result.columns]
@@ -241,17 +241,17 @@ def test_ext_source_std_all_nan_is_sentinel(application_fixture):
 
 
 def test_ext_source_available_cnt_no_nan(application_fixture):
-    """EXT_SOURCE_AVAILABLE_CNT must be an integer count in [0, 3] with no NaN."""
+    """EXT_SOURCE_NUM_AVAILABLE must be an integer count in [0, 3] with no NaN."""
     result = engineer_application_features(application_fixture)
-    col = result["EXT_SOURCE_AVAILABLE_CNT"]
+    col = result["EXT_SOURCE_NUM_AVAILABLE"]
     assert not col.isna().any()
     assert col.between(0, 3).all()
     # Row 4: all three NaN → count = 0
-    assert result.loc[4, "EXT_SOURCE_AVAILABLE_CNT"] == 0.0
+    assert result.loc[4, "EXT_SOURCE_NUM_AVAILABLE"] == 0.0
     # Row 5: only EXT_SOURCE_2 valid → count = 1
-    assert result.loc[5, "EXT_SOURCE_AVAILABLE_CNT"] == 1.0
+    assert result.loc[5, "EXT_SOURCE_NUM_AVAILABLE"] == 1.0
     # Row 0: all three valid → count = 3
-    assert result.loc[0, "EXT_SOURCE_AVAILABLE_CNT"] == 3.0
+    assert result.loc[0, "EXT_SOURCE_NUM_AVAILABLE"] == 3.0
 
 
 def test_ext_source_range_non_negative(application_fixture):
