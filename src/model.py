@@ -2664,7 +2664,10 @@ def train_ensemble_3model(
         X_meta = np.column_stack([oof_lgb, oof_xgb, oof_cat])
         meta_lr = LogisticRegression(C=1.0, max_iter=1000, random_state=_RANDOM_STATE)
         meta_lr.fit(X_meta, y_train)
-        ensemble_model = _LogisticEnsemble3(lgb_final, xgb_final, cat_final, meta_lr)
+        ensemble_model = _LogisticEnsemble3(
+            lgb_final, xgb_final, cat_final, meta_lr,
+            oof_lgb=oof_lgb, oof_xgb=oof_xgb, oof_cat=oof_cat,
+        )
     else:
         raise ValueError(f"method must be 'average' or 'logistic', got '{method}'")
 
@@ -2672,6 +2675,38 @@ def train_ensemble_3model(
     metrics_dict = evaluate_model(ensemble_model, X_test, y_test, f"Ensemble3 ({method})")
 
     return ensemble_model, metrics_dict, X_test, y_test, base_gini_dict
+
+
+def _evaluate_ensemble_gate(oot_gini: float, best_single_gini: float) -> str:
+    """
+    Gate logic for ensemble Gini thresholds (D-12).
+
+    Determines ensemble acceptance based on out-of-time Gini coefficient and
+    improvement over the best single base model.
+
+    Parameters
+    ----------
+    oot_gini : float
+        Out-of-time Gini coefficient for ensemble model.
+    best_single_gini : float
+        Best single model Gini coefficient (max of LGB, XGB, CatBoost).
+
+    Returns
+    -------
+    str
+        Gate result indicating ensemble acceptance:
+        - 'full_pass': oot_gini >= 0.65 (aspirational, strong ensemble)
+        - 'accept_best_available': oot_gini >= 0.58 AND lift >= 0.005
+          (acceptable ensemble with meaningful improvement)
+        - 'investigate': oot_gini < 0.58 OR lift < 0.005
+          (ensemble underperforms; further analysis needed)
+    """
+    if oot_gini >= 0.65:
+        return "full_pass"
+    elif oot_gini >= 0.58 and (oot_gini - best_single_gini) >= 0.005:
+        return "accept_best_available"
+    else:
+        return "investigate"
 
 
 def run_ensemble_workflow(
@@ -2748,6 +2783,7 @@ def run_ensemble_workflow(
         best_single_gini = max(lgb_gini, xgb_gini, cat_gini)
         improvement = ensemble_gini - best_single_gini
         persisted = improvement >= _ENSEMBLE_PERSIST_THRESHOLD
+        gate_result = _evaluate_ensemble_gate(ensemble_gini, best_single_gini)
         if persisted:
             save_model(ensemble, _ENSEMBLE_3MODEL_WORKFLOW_MODEL_PATH)
             weights_payload = {
@@ -2757,6 +2793,7 @@ def run_ensemble_workflow(
                 "ensemble_gini": ensemble_gini,
                 "improvement": improvement,
                 "method": method,
+                "gate_result": gate_result,
             }
             weights_path = Path(_ENSEMBLE_3MODEL_WORKFLOW_WEIGHTS_PATH)
             weights_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2769,6 +2806,7 @@ def run_ensemble_workflow(
             "ensemble_gini": ensemble_gini,
             "improvement": improvement,
             "persisted": persisted,
+            "gate_result": gate_result,
         }
 
     # 2-model path (backward compatible) — unchanged
@@ -2917,12 +2955,38 @@ class _LogisticEnsemble3:
         xgb_model: object,
         cat_model: object,
         meta_lr: LogisticRegression,
+        oof_lgb: np.ndarray | None = None,
+        oof_xgb: np.ndarray | None = None,
+        oof_cat: np.ndarray | None = None,
     ):
-        """Initialize with pre-fitted base models and meta-learner."""
+        """
+        Initialize with pre-fitted base models and meta-learner.
+
+        Parameters
+        ----------
+        lgb_model : object
+            Fitted LightGBM model.
+        xgb_model : object
+            Fitted XGBoost model.
+        cat_model : object
+            Fitted CatBoost model.
+        meta_lr : LogisticRegression
+            Fitted logistic regression meta-learner.
+        oof_lgb : np.ndarray, optional
+            Out-of-fold predictions from LGB during training. Used for
+            regulatory documentation and model audit trails.
+        oof_xgb : np.ndarray, optional
+            Out-of-fold predictions from XGB during training.
+        oof_cat : np.ndarray, optional
+            Out-of-fold predictions from CatBoost during training.
+        """
         self.lgb_model = lgb_model
         self.xgb_model = xgb_model
         self.cat_model = cat_model
         self.meta_lr = meta_lr
+        self.oof_lgb = oof_lgb if oof_lgb is not None else np.array([])
+        self.oof_xgb = oof_xgb if oof_xgb is not None else np.array([])
+        self.oof_cat = oof_cat if oof_cat is not None else np.array([])
 
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
         """

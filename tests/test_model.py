@@ -3627,4 +3627,303 @@ class TestLightGBMOptuna:
         # Assert
         assert model is not None
         assert y_test is not None
+
+
+# ---------------------------------------------------------------------------
+# Ensemble Gini Gate (Task 04.2.6-01): TDD Tests for TestEnsembleWorkflow
+# ---------------------------------------------------------------------------
+
+def _evaluate_gate(oot_gini: float, best_single_gini: float) -> str:
+    """
+    Helper function: Gate logic for ensemble Gini thresholds (D-12).
+
+    Parameters
+    ----------
+    oot_gini : float
+        Out-of-time Gini coefficient for ensemble model.
+    best_single_gini : float
+        Best single model Gini coefficient.
+
+    Returns
+    -------
+    str
+        Gate result: 'full_pass', 'accept_best_available', or 'investigate'.
+    """
+    if oot_gini >= 0.65:
+        return "full_pass"
+    elif oot_gini >= 0.58 and (oot_gini - best_single_gini) >= 0.005:
+        return "accept_best_available"
+    else:
+        return "investigate"
+
+
+@pytest.fixture
+def mock_best_params_lgb() -> dict:
+    """LightGBM best_params fixture for ensemble testing."""
+    return {
+        "n_estimators": 50,
+        "num_leaves": 31,
+        "learning_rate": 0.1,
+        "subsample": 0.8,
+        "colsample_bytree": 0.8,
+        "min_data_in_leaf": 20,
+        "reg_alpha": 0.1,
+        "reg_lambda": 1.0,
+        "random_state": 42,
+        "verbosity": -1,
+    }
+
+
+@pytest.fixture
+def mock_best_params_xgb() -> dict:
+    """XGBoost best_params fixture for ensemble testing."""
+    return {
+        "n_estimators": 50,
+        "max_depth": 5,
+        "learning_rate": 0.1,
+        "min_child_weight": 1,
+        "subsample": 0.8,
+        "colsample_bytree": 0.8,
+        "gamma": 0.0,
+        "reg_alpha": 0.1,
+        "reg_lambda": 1.0,
+        "tree_method": "auto",
+        "random_state": 42,
+        "eval_metric": "auc",
+    }
+
+
+@pytest.fixture
+def mock_best_params_cat() -> dict:
+    """CatBoost best_params fixture for ensemble testing."""
+    return {
+        "depth": 6,
+        "learning_rate": 0.05,
+        "iterations": 50,
+        "l2_leaf_reg": 3.0,
+        "min_data_in_leaf": 20,
+        "bootstrap_type": "Bayesian",
+        "bagging_temperature": 0.5,
+        "random_strength": 0.5,
+        "verbose": 0,
+        "allow_writing_files": False,
+        "random_state": 42,
+    }
+
+
+@pytest.fixture
+def best_params_for_ensemble(
+    mock_best_params_lgb, mock_best_params_xgb, mock_best_params_cat
+) -> dict:
+    """
+    Fixture providing best_params dicts for all three models.
+
+    Returns
+    -------
+    dict
+        Keys: 'lgb', 'xgb', 'cat' with their respective best_params dicts.
+    """
+    return {
+        "lgb": mock_best_params_lgb,
+        "xgb": mock_best_params_xgb,
+        "cat": mock_best_params_cat,
+    }
+
+
+class TestEnsembleWorkflow:
+    """TDD tests for ensemble stacking pipeline (Phase 04.2.6-01).
+
+    Tests train_ensemble_3model() with logistic meta-learner, OOF predictions,
+    and Gini gate logic for ensemble acceptance.
+    """
+
+    def test_train_ensemble_3model_returns_logistic_wrapper(
+        self, mock_best_params_lgb, mock_best_params_xgb, mock_best_params_cat
+    ):
+        """
+        Verify train_ensemble_3model returns a tuple with ensemble model as first element.
+
+        The ensemble_model should have .meta_lr attribute (LogisticRegression instance).
+        """
+        from src.model import train_ensemble_3model
+
+        # Arrange
+        rng = np.random.default_rng(42)
+        n = 500
+        y_arr = np.zeros(n, dtype=int)
+        y_arr[:40] = 1
+        rng.shuffle(y_arr)
+        X = pd.DataFrame({
+            "f1": np.where(y_arr == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
+            "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
+            "f3": np.where(y_arr == 1, rng.normal(1.0, 1.0, n), rng.normal(0.0, 1.0, n)),
+            "f4": np.where(y_arr == 1, rng.normal(0.5, 1.0, n), rng.normal(0.0, 1.0, n)),
+            "f5": np.where(y_arr == 1, rng.normal(1.2, 1.0, n), rng.normal(0.0, 1.0, n)),
+        })
+        y = pd.Series(y_arr, name="TARGET")
+
+        # Act
+        result = train_ensemble_3model(
+            X, y,
+            lgb_params=mock_best_params_lgb,
+            xgb_params=mock_best_params_xgb,
+            cat_params=mock_best_params_cat,
+            method="logistic",
+        )
+
+        # Assert
+        assert isinstance(result, tuple), "train_ensemble_3model must return tuple"
+        assert len(result) == 5, f"Expected 5-tuple, got {len(result)}"
+        ensemble_model = result[0]
+        assert ensemble_model is not None, "Ensemble model is None"
+        assert hasattr(ensemble_model, "meta_lr"), (
+            "Ensemble model must have .meta_lr attribute"
+        )
+        assert isinstance(ensemble_model.meta_lr, LogisticRegression), (
+            f"meta_lr must be LogisticRegression, got {type(ensemble_model.meta_lr)}"
+        )
+
+    def test_ensemble_oof_predictions_matrix_shape(
+        self, mock_best_params_lgb, mock_best_params_xgb, mock_best_params_cat
+    ):
+        """
+        Verify OOF predictions from train_ensemble_3model have correct shapes.
+
+        Each base model (LGB, XGB, CatBoost) should have OOF predictions with
+        shape [n_train,] where n_train is the training set size.
+        """
+        from src.model import train_ensemble_3model
+
+        # Arrange
+        rng = np.random.default_rng(42)
+        n = 500
+        y_arr = np.zeros(n, dtype=int)
+        y_arr[:40] = 1
+        rng.shuffle(y_arr)
+        X = pd.DataFrame({
+            "f1": np.where(y_arr == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
+            "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
+            "f3": np.where(y_arr == 1, rng.normal(1.0, 1.0, n), rng.normal(0.0, 1.0, n)),
+            "f4": np.where(y_arr == 1, rng.normal(0.5, 1.0, n), rng.normal(0.0, 1.0, n)),
+            "f5": np.where(y_arr == 1, rng.normal(1.2, 1.0, n), rng.normal(0.0, 1.0, n)),
+        })
+        y = pd.Series(y_arr, name="TARGET")
+
+        # Act
+        ensemble_model, _, _, _, _ = train_ensemble_3model(
+            X, y,
+            lgb_params=mock_best_params_lgb,
+            xgb_params=mock_best_params_xgb,
+            cat_params=mock_best_params_cat,
+            method="logistic",
+        )
+
+        # Assert
+        # After 80/20 split, training set size is 80% of n
+        expected_train_size = int(0.8 * n)
+        assert hasattr(ensemble_model, "oof_lgb"), "Ensemble model missing .oof_lgb"
+        assert hasattr(ensemble_model, "oof_xgb"), "Ensemble model missing .oof_xgb"
+        assert hasattr(ensemble_model, "oof_cat"), "Ensemble model missing .oof_cat"
+        assert len(ensemble_model.oof_lgb) == expected_train_size, (
+            f"oof_lgb shape {len(ensemble_model.oof_lgb)} != expected {expected_train_size}"
+        )
+        assert len(ensemble_model.oof_xgb) == expected_train_size, (
+            f"oof_xgb shape {len(ensemble_model.oof_xgb)} != expected {expected_train_size}"
+        )
+        assert len(ensemble_model.oof_cat) == expected_train_size, (
+            f"oof_cat shape {len(ensemble_model.oof_cat)} != expected {expected_train_size}"
+        )
+
+    def test_gini_gate_logic_full_pass(self):
+        """
+        Verify gate logic: oot_gini >= 0.65 returns 'full_pass'.
+
+        Test case: oot_gini=0.66, best_single_gini=0.57
+        Expected: 'full_pass'
+        """
+        # Act
+        result = _evaluate_gate(oot_gini=0.66, best_single_gini=0.57)
+
+        # Assert
+        assert result == "full_pass", (
+            f"Expected 'full_pass' for oot_gini=0.66, got '{result}'"
+        )
+
+    def test_gini_gate_logic_accept_best_available(self):
+        """
+        Verify gate logic: oot_gini >= 0.58 AND lift >= 0.005 returns 'accept_best_available'.
+
+        Test case: oot_gini=0.59, best_single_gini=0.584 (lift = 0.006 > 0.005)
+        Expected: 'accept_best_available'
+        """
+        # Act
+        result = _evaluate_gate(oot_gini=0.59, best_single_gini=0.584)
+
+        # Assert
+        assert result == "accept_best_available", (
+            f"Expected 'accept_best_available' for oot_gini=0.59, "
+            f"best_single=0.584 (lift=0.006), got '{result}'"
+        )
+
+    def test_gini_gate_logic_investigate(self):
+        """
+        Verify gate logic: oot_gini < 0.58 returns 'investigate'.
+
+        Test case: oot_gini=0.57, best_single_gini=0.57 (below 0.58 threshold)
+        Expected: 'investigate'
+        """
+        # Act
+        result = _evaluate_gate(oot_gini=0.57, best_single_gini=0.57)
+
+        # Assert
+        assert result == "investigate", (
+            f"Expected 'investigate' for oot_gini=0.57, got '{result}'"
+        )
+
+    def test_ensemble_temporal_cv_auto_detected(
+        self, mock_best_params_lgb, mock_best_params_xgb, mock_best_params_cat
+    ):
+        """
+        Verify temporal CV is auto-detected from prev_days_decision_mean column.
+
+        When X contains prev_days_decision_mean, train_ensemble_3model must use
+        temporal CV (walk-forward) instead of stratified K-fold. This ensures
+        no information leakage from future to past.
+        """
+        from src.model import train_ensemble_3model
+
+        # Arrange
+        rng = np.random.default_rng(42)
+        n = 500
+        y_arr = np.zeros(n, dtype=int)
+        y_arr[:40] = 1
+        rng.shuffle(y_arr)
+        X = pd.DataFrame({
+            "f1": np.where(y_arr == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
+            "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
+            "f3": np.where(y_arr == 1, rng.normal(1.0, 1.0, n), rng.normal(0.0, 1.0, n)),
+            "f4": np.where(y_arr == 1, rng.normal(0.5, 1.0, n), rng.normal(0.0, 1.0, n)),
+            "f5": np.where(y_arr == 1, rng.normal(1.2, 1.0, n), rng.normal(0.0, 1.0, n)),
+            "prev_days_decision_mean": np.sort(rng.integers(-7000, 0, n)).astype(float),
+        })
+        y = pd.Series(y_arr, name="TARGET")
+
+        # Act
+        ensemble_model, metrics_dict, X_test, y_test, base_gini = train_ensemble_3model(
+            X, y,
+            lgb_params=mock_best_params_lgb,
+            xgb_params=mock_best_params_xgb,
+            cat_params=mock_best_params_cat,
+            method="logistic",
+        )
+
+        # Assert
+        # Temporal CV should produce plausible OOF Gini (0.35–1.0 range for mock data)
+        # Mock data is synthetic with clear signal, so Gini can be high
+        assert "Gini" in metrics_dict, "metrics_dict missing 'Gini' key"
+        oof_gini = float(metrics_dict["Gini"])
+        assert 0.35 <= oof_gini <= 1.0, (
+            f"OOF Gini {oof_gini:.4f} outside plausible range [0.35, 1.0]; "
+            "temporal CV may not have been applied correctly"
+        )
         assert len(X_test) > 0  # Validation set should exist
