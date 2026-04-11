@@ -463,6 +463,98 @@ def engineer_instalment_streaks(df_inst: pd.DataFrame) -> pd.DataFrame:
     return result_df
 
 
+def engineer_inst_late_rate_12m(df_inst: pd.DataFrame) -> pd.Series:
+    """
+    Compute fraction of instalments with >30 DPD in the last 365 days.
+
+    Captures recent payment behaviour over a 12-month rolling window.
+    Key signal: applicant with recent delinquencies (vs. old ones) is riskier.
+
+    Parameters
+    ----------
+    df_inst : pd.DataFrame
+        installments_payments table with columns:
+        SK_ID_CURR, DAYS_INSTALMENT, DAYS_ENTRY_PAYMENT, AMT_INSTALMENT, AMT_PAYMENT.
+
+        DAYS_INSTALMENT and DAYS_ENTRY_PAYMENT are negative (days before application date).
+        More recent = less negative.
+
+    Returns
+    -------
+    pd.Series
+        Index = SK_ID_CURR (one row per applicant).
+        Values ∈ [0.0, 1.0] (fraction late) or -999.0 (no instalments).
+    """
+    # DPD = max(0, DAYS_ENTRY_PAYMENT - DAYS_INSTALMENT)
+    df = df_inst.copy()
+    df["dpd"] = np.maximum(0, df["DAYS_ENTRY_PAYMENT"] - df["DAYS_INSTALMENT"])
+    df["is_late"] = (df["dpd"] > 30).astype(int)
+
+    # Filter to 12-month window (DAYS_INSTALMENT >= -365)
+    df_12m = df[df["DAYS_INSTALMENT"] >= -365].copy()
+
+    # Use vectorized groupby to compute late rate per applicant
+    grouped_late = df_12m.groupby("SK_ID_CURR")["is_late"]
+    late_rate_12m = grouped_late.sum() / grouped_late.count()
+
+    # Get all unique applicants from the input
+    all_ids = df_inst["SK_ID_CURR"].unique()
+
+    # Reindex to include all applicants, fill missing with sentinel
+    result = late_rate_12m.reindex(all_ids, fill_value=_NAN_SENTINEL)
+    result.index.name = "SK_ID_CURR"
+
+    return result
+
+
+def engineer_inst_late_rate_recent_vs_historical(df_inst: pd.DataFrame) -> pd.Series:
+    """
+    Compute trajectory: late rate in 12m window minus all-time late rate.
+
+    Captures whether payment behaviour is worsening (positive) or improving (negative).
+    Signal: applicants with worsening trajectory default at higher rates than stagnant delinquents.
+
+    Parameters
+    ----------
+    df_inst : pd.DataFrame
+        installments_payments table (same as engineer_inst_late_rate_12m).
+
+    Returns
+    -------
+    pd.Series
+        Index = SK_ID_CURR.
+        Values ∈ [-1.0, 1.0] (late_rate_12m - all_time_late_rate) or -999.0.
+    """
+    # 12m rate (computed via the function above)
+    late_rate_12m = engineer_inst_late_rate_12m(df_inst)
+
+    # All-time rate: compute from entire dataset
+    df = df_inst.copy()
+    df["dpd"] = np.maximum(0, df["DAYS_ENTRY_PAYMENT"] - df["DAYS_INSTALMENT"])
+    df["is_late"] = (df["dpd"] > 30).astype(int)
+
+    # Use vectorized groupby to compute all-time late rate per applicant
+    grouped_late_all = df.groupby("SK_ID_CURR")["is_late"]
+    all_time_rate = grouped_late_all.sum() / grouped_late_all.count()
+
+    # Get all unique applicants from the input
+    all_ids = df_inst["SK_ID_CURR"].unique()
+
+    # Reindex to include all applicants, fill missing with sentinel
+    all_time_rate = all_time_rate.reindex(all_ids, fill_value=_NAN_SENTINEL)
+    all_time_rate.index.name = "SK_ID_CURR"
+
+    # Compute trajectory: 12m - all_time
+    # When either rate is -999.0 (missing), the trajectory should also be -999.0
+    trajectory = late_rate_12m.sub(all_time_rate, fill_value=_NAN_SENTINEL)
+
+    # Sentinel propagation: if either component was sentinel, result should be sentinel
+    mask = (late_rate_12m == _NAN_SENTINEL) | (all_time_rate == _NAN_SENTINEL)
+    trajectory[mask] = _NAN_SENTINEL
+
+    return trajectory
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------

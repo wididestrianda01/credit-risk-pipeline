@@ -2486,8 +2486,14 @@ class TestWave1Features:
         assert isinstance(result, pd.Series), "Should return pd.Series"
         assert result.index.name == "SK_ID_CURR", "Index must be SK_ID_CURR"
         assert result.dtype in [np.float64, float], "Must be numeric"
-        assert (result >= 0).all() or (result == -999.0).all(), "Values ∈ [0,1] or -999 sentinel"
-        assert len(result) <= len(inst_data["SK_ID_CURR"].unique()), "One row per applicant"
+        # Values ∈ [0, 1] for valid applicants or -999.0 for missing
+        _NAN_SENTINEL = -999.0
+        valid_mask = result != _NAN_SENTINEL
+        assert (result[valid_mask] >= 0.0).all(), "Valid values must be >= 0"
+        assert (result[valid_mask] <= 1.0).all(), "Valid values must be <= 1"
+        # Should have one row per unique applicant
+        expected_count = inst_data["SK_ID_CURR"].nunique()
+        assert len(result) == expected_count, f"Expected {expected_count} rows, got {len(result)}"
 
     def test_engineer_inst_late_rate_recent_vs_historical(self, inst_data):
         """FEAT-01b: 12m rate minus historical rate (trajectory)."""
@@ -2496,7 +2502,15 @@ class TestWave1Features:
         result = engineer_inst_late_rate_recent_vs_historical(inst_data)
         assert isinstance(result, pd.Series), "Should return pd.Series"
         assert result.dtype in [np.float64, float], "Must be numeric"
-        assert ((result >= -1) & (result <= 1)) | (result == -999.0), "Values ∈ [-1,1] or -999 sentinel"
+        # Trajectory ∈ [-1, 1] for valid applicants or -999.0 for missing
+        _NAN_SENTINEL = -999.0
+        valid_mask = result != _NAN_SENTINEL
+        assert (result[valid_mask] >= -1.0).all(), "Valid trajectory must be >= -1"
+        assert (result[valid_mask] <= 1.0).all(), "Valid trajectory must be <= 1"
+        # Should have same applicants as 12m rate
+        from src.features import engineer_inst_late_rate_12m
+        late_rate_12m = engineer_inst_late_rate_12m(inst_data)
+        assert len(result) == len(late_rate_12m), "Should have same applicants as 12m rate"
 
     def test_engineer_inst_rolling_30dpd_ratio_3m(self, inst_data):
         """FEAT-02a: Fraction of payments >30DPD in last 90d."""
