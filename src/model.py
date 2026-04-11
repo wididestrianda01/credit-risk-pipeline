@@ -2613,9 +2613,11 @@ def train_ensemble_3model(
         scale_pos_weight = float(n_neg) / float(n_pos) if n_pos > 0 else 1.0
 
         # LightGBM — use is_unbalance=True to match standalone HPO strategy;
-        # scale_pos_weight causes OOF rank reversal vs standalone LGB
+        # scale_pos_weight causes OOF rank reversal vs standalone LGB.
+        # verbosity=-1 silences C++ engine noise that bypasses log_evaluation.
         lgb_params_fold = {k: v for k, v in lgb_params.items() if k != "scale_pos_weight"}
         lgb_params_fold["is_unbalance"] = True
+        lgb_params_fold["verbosity"] = -1
         lgb_fold = lgb.LGBMClassifier(**lgb_params_fold)
         lgb_fold.fit(X_fold_train, y_fold_train)
         oof_lgb[val_idx] = lgb_fold.predict_proba(X_fold_val)[:, 1]
@@ -2639,6 +2641,7 @@ def train_ensemble_3model(
 
     lgb_params_final = {k: v for k, v in lgb_params.items() if k != "scale_pos_weight"}
     lgb_params_final["is_unbalance"] = True
+    lgb_params_final["verbosity"] = -1
     lgb_final = lgb.LGBMClassifier(**lgb_params_final)
     lgb_final.fit(X_train, y_train)
 
