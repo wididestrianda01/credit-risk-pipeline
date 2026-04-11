@@ -1,0 +1,21 @@
+{
+  "Model": "CatBoost (Raw, auto_class_weights=Balanced)",
+  "oof_gini": 0.5500223887559235,
+  "oot_gini": 0.5788862792751845,
+  "oot_auc": 0.7894431396375923,
+  "gap": -0.028863890519261082,
+  "disposition": "REJECT",
+  "reason": "OOT Gini 0.5789 below minimum 0.6",
+  "best_iterations": 2067,
+  "n_trials": 50,
+  "n_features": 129,
+  "best_params": {
+    "depth": 13,
+    "learning_rate": 0.010023189891735161,
+    "l2_leaf_reg": 36.76320101542113,
+    "min_data_in_leaf": 44,
+    "bagging_temperature": 0.5076206502876651,
+    "random_strength": 0.8058357331106504,
+    "grow_policy": "Lossguide"
+  }
+}

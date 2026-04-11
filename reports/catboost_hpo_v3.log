@@ -1,0 +1,75 @@
+Loading feature store: data/processed/X_tree_raw.parquet  (83 MB)
+Shape after popping TARGET: (307511, 130)
+Train: (246008, 129), OOT: (61503, 129)
+Positive rate — train: 7.503%, OOT: 10.351%
+Running 50 trials …
+[23:29:43] Trial   0 | OOF=0.5354 | BestOOF=0.5354
+[23:30:57] Trial   1 | OOF=0.5442 | BestOOF=0.5442
+[23:32:51] Trial   2 | OOF=0.5470 | BestOOF=0.5470
+[23:33:25] Trial   3 | OOF=0.4972 | BestOOF=0.5470
+[23:33:45] Trial   4 | OOF=0.5423 | BestOOF=0.5470
+[23:35:21] Trial   5 | OOF=0.5419 | BestOOF=0.5470
+[23:43:36] Trial   6 | OOF=0.5478 | BestOOF=0.5478
+[23:45:53] Trial   7 | OOF=0.5411 | BestOOF=0.5478
+[23:46:37] Trial   8 | OOF=0.5232 | BestOOF=0.5478
+[23:47:08] Trial   9 | OOF=0.5419 | BestOOF=0.5478
+[23:49:49] Trial  10 | OOF=0.4519 | BestOOF=0.5478
+[23:52:51] Trial  11 | OOF=0.4358 | BestOOF=0.5478
+[23:54:57] Trial  12 | OOF=0.5441 | BestOOF=0.5478
+[00:03:46] Trial  13 | OOF=0.4624 | BestOOF=0.5478
+[00:08:18] Trial  14 | OOF=0.4582 | BestOOF=0.5478
+[00:17:49] Trial  15 | OOF=0.5422 | BestOOF=0.5478
+[00:21:37] Trial  16 | OOF=0.5475 | BestOOF=0.5478
+[00:25:37] Trial  17 | OOF=0.5478 | BestOOF=0.5478
+[00:35:15] Trial  18 | OOF=0.5494 | BestOOF=0.5494
+[00:45:16] Trial  19 | OOF=0.5481 | BestOOF=0.5494
+[00:55:19] Trial  20 | OOF=0.5483 | BestOOF=0.5494
+[01:04:49] Trial  21 | OOF=0.5488 | BestOOF=0.5494
+[01:13:03] Trial  22 | OOF=0.5494 | BestOOF=0.5494
+[01:20:07] Trial  23 | OOF=0.5490 | BestOOF=0.5494
+[01:27:22] Trial  24 | OOF=0.5488 | BestOOF=0.5494
+[01:36:08] Trial  25 | OOF=0.5497 | BestOOF=0.5497
+[01:40:34] Trial  26 | OOF=0.5488 | BestOOF=0.5497
+[01:50:06] Trial  27 | OOF=0.5500 | BestOOF=0.5500
+[01:56:05] Trial  28 | OOF=0.5494 | BestOOF=0.5500
+[02:02:16] Trial  29 | OOF=0.5484 | BestOOF=0.5500
+[02:06:00] Trial  30 | OOF=0.5487 | BestOOF=0.5500
+[02:15:12] Trial  31 | OOF=0.5490 | BestOOF=0.5500
+[02:22:32] Trial  32 | OOF=0.5486 | BestOOF=0.5500
+[02:31:45] Trial  33 | OOF=0.5487 | BestOOF=0.5500
+[02:37:18] Trial  34 | OOF=0.5493 | BestOOF=0.5500
+[02:45:01] Trial  35 | OOF=0.5488 | BestOOF=0.5500
+[02:50:05] Trial  36 | OOF=0.5479 | BestOOF=0.5500
+[02:58:55] Trial  37 | OOF=0.5489 | BestOOF=0.5500
+[03:07:52] Trial  38 | OOF=0.5478 | BestOOF=0.5500
+[03:17:17] Trial  39 | OOF=0.5491 | BestOOF=0.5500
+[03:23:13] Trial  40 | OOF=0.5500 | BestOOF=0.5500
+[03:29:28] Trial  41 | OOF=0.5499 | BestOOF=0.5500
+[03:33:19] Trial  42 | OOF=0.5490 | BestOOF=0.5500
+[03:39:10] Trial  43 | OOF=0.5500 | BestOOF=0.5500
+[03:45:03] Trial  44 | OOF=0.5498 | BestOOF=0.5500
+[03:51:12] Trial  45 | OOF=0.5495 | BestOOF=0.5500
+[03:58:35] Trial  46 | OOF=0.5215 | BestOOF=0.5500
+[03:59:00] Trial  47 | OOF=0.5339 | BestOOF=0.5500
+[04:00:09] Trial  48 | OOF=0.5458 | BestOOF=0.5500
+[04:01:49] Trial  49 | OOF=0.5454 | BestOOF=0.5500
+/home/wd/.local/lib/python3.14/site-packages/sklearn/calibration.py:330: FutureWarning: The `cv='prefit'` option is deprecated in 1.6 and will be removed in 1.8. You can use CalibratedClassifierCV(FrozenEstimator(estimator)) instead.
+  warnings.warn(
+
+HPO complete. Best OOF Gini: 0.5500
+Stage 1: Refit on 80% of X_train with early stopping to capture best_iteration_ …
+Stage 1 best_iteration_: 2067
+Stage 2: Refit on full X_train with fixed iterations, no early stopping …
+
+OOF Gini : 0.5500
+OOT Gini : 0.5789
+Gap      : -0.0289
+Decision : REJECT — OOT Gini 0.5789 below minimum 0.6
+
+Applying Platt calibration …
+
+Artifacts saved:
+  /home/wd/Working Folder/Development/credit-risk-pipeline/models/catboost_raw_best.pkl
+  /home/wd/Working Folder/Development/credit-risk-pipeline/models/catboost_raw_calibrated.pkl
+  /home/wd/Working Folder/Development/credit-risk-pipeline/models/catboost_raw_params.json
+  /home/wd/Working Folder/Development/credit-risk-pipeline/reports/catboost_raw_eval.json
