@@ -1142,3 +1142,91 @@ def _assert_no_row_multiplication(
             f"{join_label} changed row count: {len(before)} → {len(after)}. "
             "Ensure secondary table is aggregated to one row per SK_ID_CURR before joining."
         )
+
+
+# ---------------------------------------------------------------------------
+# Public helper: load raw secondary tables for Wave 2 feature engineering
+# ---------------------------------------------------------------------------
+
+
+def load_secondary_raw(data_dir: str | Path) -> dict[str, pd.DataFrame]:
+    """
+    Load raw secondary tables needed for Wave 2 temporal trajectory features.
+
+    Prepares each table with the index structure expected by the Wave 2 private
+    functions in ``src/features.py``.
+
+    Parameters
+    ----------
+    data_dir : str or Path
+        Directory containing the raw CSV files (same as used by ``load_data``).
+
+    Returns
+    -------
+    dict with keys:
+        - ``"bbal"`` : bureau_balance merged with bureau for SK_ID_CURR mapping.
+          MultiIndex with named levels ``["SK_ID_CURR", "MONTHS_BALANCE"]``.
+          Contains STATUS column.
+        - ``"inst"`` : installments_payments with SK_ID_CURR as index.
+          Contains DAYS_ENTRY_PAYMENT, DAYS_INSTALMENT, AMT_PAYMENT, AMT_INSTALMENT.
+        - ``"cc"``   : credit_card_balance with SK_ID_CURR as index.
+          AMT_CREDIT_LIMIT_ACTUAL renamed to AMT_CREDIT_LIMIT.
+          Contains AMT_BALANCE, MONTHS_BALANCE, AMT_DRAWINGS_ATM_CURRENT.
+        - ``"prev"`` : previous_application with SK_ID_CURR as index.
+          Contains CODE_REJECT_REASON, NAME_GOODS_CATEGORY, RATE_INTEREST_PRIMARY.
+    """
+    data_dir = Path(data_dir)
+
+    # --- bureau_balance: needs SK_ID_BUREAU → SK_ID_CURR mapping via bureau.csv ---
+    df_bureau = pd.read_csv(
+        data_dir / _FILE_BUREAU,
+        usecols=["SK_ID_CURR", "SK_ID_BUREAU"],
+    )
+    df_bbal_raw = pd.read_csv(
+        data_dir / _FILE_BUREAU_BAL,
+        usecols=["SK_ID_BUREAU", "MONTHS_BALANCE", "STATUS"],
+    )
+    df_bbal = df_bbal_raw.merge(
+        df_bureau[["SK_ID_BUREAU", "SK_ID_CURR"]],
+        on="SK_ID_BUREAU",
+        how="left",
+    )
+    df_bbal = df_bbal.dropna(subset=["SK_ID_CURR"])
+    df_bbal["SK_ID_CURR"] = df_bbal["SK_ID_CURR"].astype(int)
+    df_bbal = df_bbal.set_index(["SK_ID_CURR", "MONTHS_BALANCE"])
+    df_bbal.index.names = ["SK_ID_CURR", "MONTHS_BALANCE"]
+
+    # --- installments_payments ---
+    df_inst = pd.read_csv(
+        data_dir / _FILE_INSTALLMENTS,
+        usecols=["SK_ID_CURR", "DAYS_ENTRY_PAYMENT", "DAYS_INSTALMENT",
+                 "AMT_PAYMENT", "AMT_INSTALMENT"],
+    )
+    # Compute days_past_due required by _inst_payment_consistency_score and
+    # _inst_recency_weighted_dpd; positive = late, negative = paid early.
+    df_inst["days_past_due"] = df_inst["DAYS_ENTRY_PAYMENT"] - df_inst["DAYS_INSTALMENT"]
+    df_inst = df_inst.set_index("SK_ID_CURR")
+
+    # --- credit_card_balance ---
+    df_cc = pd.read_csv(
+        data_dir / _FILE_CC_BAL,
+        usecols=["SK_ID_CURR", "MONTHS_BALANCE", "AMT_BALANCE",
+                 "AMT_CREDIT_LIMIT_ACTUAL", "AMT_DRAWINGS_ATM_CURRENT"],
+    )
+    df_cc = df_cc.rename(columns={"AMT_CREDIT_LIMIT_ACTUAL": "AMT_CREDIT_LIMIT"})
+    df_cc = df_cc.set_index("SK_ID_CURR")
+
+    # --- previous_application ---
+    df_prev = pd.read_csv(
+        data_dir / _FILE_PREV_APP,
+        usecols=["SK_ID_CURR", "CODE_REJECT_REASON",
+                 "NAME_GOODS_CATEGORY", "RATE_INTEREST_PRIMARY"],
+    )
+    df_prev = df_prev.set_index("SK_ID_CURR")
+
+    return {
+        "bbal": df_bbal,
+        "inst": df_inst,
+        "cc": df_cc,
+        "prev": df_prev,
+    }

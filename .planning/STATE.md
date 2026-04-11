@@ -22,13 +22,13 @@ progress:
 
 ## Current Focus
 
-**Active phase:** Phase 04.3 — SHAP + Fairness Analysis
+**Active phase:** Phase 04.2.9 Plan 04 — LGB + XGB HPO on Differentiated Feature Stores
 
 - Phase 04.2.8 complete: model.py split into 5 focused sibling modules; 174 tests pass; root cleanup done
 - Primary model: `lightgbm_raw_calibrated.pkl` — must regenerate before SHAP (file is CORRUPTED, 6KB)
 - Regeneration params in `reports/lgb_compliant_eval.json`
 
-**Queued:** Phase 04.2.9 — Feature Engineering Expansion (parallel track, deferred)
+**Just completed:** Phase 04.2.9 Plan 03 — Build 4 Model-Specific Feature Stores (X_base_v2, X_lgb_v2, X_xgb_v2, X_cat_v2; 8 integration tests pass)
 
 ---
 
@@ -51,6 +51,9 @@ progress:
 | Phase 04.2.7 — Feature Engineering Enhancement | 2026-04-11 | 0.5746 | ⚠️ | Wave 1 (7 features); gate fail (< 0.5845) |
 | Phase 04.2.6 — Ensemble + Gate | 2026-04-11 | 0.5749 | ✅ | gate=investigate; LGB standalone proceeds as primary |
 | Phase 04.2.8 — Split model.py | 2026-04-11 | — | ✅ | 5 sibling modules + facade; 174 tests pass; root cleanup done |
+| Phase 04.2.9.01 — Feature Protection Foundation | 2026-04-11 | — | ✅ | EXT_SOURCE_NUM_AVAILABLE renamed; _PHASE9_PROTECTED (16 features) locked against filters |
+| Phase 04.2.9.02 — Wave 2 Temporal Trajectory Features | 2026-04-11 | — | ✅ | 24 functions (10 bureau + 5 inst + 4 CC + 5 prev_app); 21 tests pass; ready for integration |
+| Phase 04.2.9.03 — Build 4 Model-Specific Feature Stores | 2026-04-11 | — | ✅ | X_base_v2, X_lgb_v2, X_xgb_v2 (145 cols), X_cat_v2 (149 cols); 8 tests pass; Wave 2 integration deferred |
 
 **Ensemble post-mortem summary (Phase 04.2.6):** All three models trained on `X_tree_raw` produced OOF correlations ≥ 0.95 — no orthogonal signal for meta-learner. Meta-learner coefs: LGB=+3.08, XGB=−1.45, CAT=+1.53. Best combo LGB+CAT avg Gini=0.5754 (+0.0008 vs LGB standalone — below 0.005 threshold). Decision: LGB standalone (OOT Gini=0.5746) is primary model.
 
@@ -63,6 +66,11 @@ progress:
 | `data/processed/X_train.parquet` | ✅ | 307511×195 — raw joined features |
 | `data/processed/X_features.parquet` | ✅ | 307511×68 — WoE store for LR only |
 | `data/processed/X_tree_raw.parquet` | ✅ | 307511×144 — Wave 1 delinquency features; TARGET embedded |
+| `data/processed/X_tree_raw_v1.parquet` | ✅ | Backup of X_tree_raw (Phase 04.2.9.03) |
+| `data/processed/X_base_v2.parquet` | ✅ | 307511×145 — X_tree_raw + EXT_SOURCE_NUM_AVAILABLE |
+| `data/processed/X_lgb_v2.parquet` | ✅ | 307511×145 — identical to X_base_v2 (raw continuous for LGB) |
+| `data/processed/X_xgb_v2.parquet` | ✅ | 307511×145 — X_base_v2 (pragmatic baseline for XGB) |
+| `data/processed/X_cat_v2.parquet` | ✅ | 307511×149 — X_base_v2 + 4 categorical columns (CatBoost) |
 | `data/processed/X_tree_dfs.parquet` | ✅ | 307511×290 — raw+DFS; raw+eng wins for LGB/XGB |
 | `models/optuna_studies.db` | ✅ | Continue existing studies — never restart |
 | `models/logistic_baseline.pkl` | ✅ | Gini=0.489, KS=0.361 |

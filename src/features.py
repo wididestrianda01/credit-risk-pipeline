@@ -2633,6 +2633,9 @@ def build_tree_feature_store(
     y: pd.Series,
     output_dir: str | Path | None = None,
     df_inst: pd.DataFrame | None = None,
+    df_bbal: pd.DataFrame | None = None,
+    df_cc: pd.DataFrame | None = None,
+    df_prev: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, list[str]]:
     """
     Build raw (non-WoE) feature store for tree-based models (XGBoost, LightGBM, CatBoost).
@@ -2656,8 +2659,20 @@ def build_tree_feature_store(
         Directory to save the raw feature matrix and feature columns list.
         If None, defaults to {_PROJECT_ROOT}/data/processed/.
     df_inst : pd.DataFrame, optional
-        Raw installments_payments table. If provided, Wave 1 instalment-based
-        features are computed and added to the store.
+        Raw installments_payments table (SK_ID_CURR as column). If provided,
+        Wave 1 instalment-based features are computed and added to the store.
+    df_bbal : pd.DataFrame, optional
+        bureau_balance table prepared by ``load_secondary_raw``.
+        MultiIndex (SK_ID_CURR, MONTHS_BALANCE) with STATUS column.
+        If provided, Wave 2 bureau_balance trajectory features are added.
+    df_cc : pd.DataFrame, optional
+        credit_card_balance table prepared by ``load_secondary_raw``.
+        SK_ID_CURR as index; AMT_CREDIT_LIMIT_ACTUAL already renamed to AMT_CREDIT_LIMIT.
+        If provided, Wave 2 credit-card trajectory features are added.
+    df_prev : pd.DataFrame, optional
+        previous_application table prepared by ``load_secondary_raw``.
+        SK_ID_CURR as index.
+        If provided, Wave 2 previous-application signals are added.
 
     Returns
     -------
@@ -2682,6 +2697,10 @@ def build_tree_feature_store(
 
     **Wave 1 Features:** If df_inst is provided, Wave 1 delinquency trajectory features
     (inst_late_rate_12m, inst_rolling_30dpd_ratio_3m, etc.) are computed and added to the store.
+
+    **Wave 2 Features:** If df_bbal / df_cc / df_prev are provided (via load_secondary_raw),
+    24 temporal trajectory features are computed and added. Alignment uses
+    ``X_eng["SK_ID_CURR"].map(result)`` — index-safe regardless of integer vs SK_ID_CURR index.
     """
     if output_dir is None:
         output_dir = _PROJECT_ROOT / "data" / "processed"
@@ -2707,6 +2726,67 @@ def build_tree_feature_store(
     # Bureau-level features (operate on aggregated columns already in X_eng)
     X_eng["bureau_dpd_trend_3m_vs_12m"] = engineer_bureau_dpd_trend_3m_vs_12m(X_eng).values
     X_eng["bureau_debt_to_new_credit"] = engineer_bureau_debt_to_new_credit(X_eng).values
+
+    # Wave 2 features (Phase 04.2.9 — temporal trajectory signals from secondary tables)
+    # Alignment: sk_id.map(result) looks up by SK_ID_CURR value, index-safe.
+    sk_id = X_eng["SK_ID_CURR"]
+
+    if df_bbal is not None:
+        X_eng["bbal_ever_30dpd"] = sk_id.map(_bbal_ever_30dpd(df_bbal)).fillna(0.0)
+        X_eng["bbal_ever_60dpd"] = sk_id.map(_bbal_ever_60dpd(df_bbal)).fillna(0.0)
+        X_eng["bbal_ever_90dpd"] = sk_id.map(_bbal_ever_90dpd(df_bbal)).fillna(0.0)
+        X_eng["bbal_pct_current"] = sk_id.map(_bbal_pct_current(df_bbal)).fillna(0.0)
+        X_eng["bbal_dpd_escalation"] = sk_id.map(_bbal_dpd_escalation(df_bbal)).fillna(0.0)
+        X_eng["bbal_max_status_code"] = sk_id.map(_bbal_max_status_code(df_bbal)).fillna(-1.0)
+        X_eng["bbal_status_volatility"] = sk_id.map(_bbal_status_volatility(df_bbal)).fillna(0.0)
+        X_eng["bbal_max_dpd_months_ago"] = sk_id.map(_bbal_max_dpd_months_ago(df_bbal)).fillna(0.0)
+        # _bbal_improving_flag and _bbal_dpd_acceleration_3m use pre-aggregated DPD rate
+        # columns already in X_eng (integer index). Fallback to zeros if columns absent.
+        _dpd_3m = X_eng.get("bureau_bbal_dpd_rate_3m_mean", pd.Series(0.0, index=X_eng.index)).fillna(0.0)
+        _dpd_6m = X_eng.get("bureau_bbal_dpd_rate_6m_mean", pd.Series(0.0, index=X_eng.index)).fillna(0.0)
+        _dpd_12m = X_eng.get("bureau_bbal_dpd_rate_12m_mean", pd.Series(0.0, index=X_eng.index)).fillna(0.0)
+        X_eng["bbal_improving_flag"] = _bbal_improving_flag(df_bbal, _dpd_3m, _dpd_6m).values
+        X_eng["bbal_dpd_acceleration_3m"] = _bbal_dpd_acceleration_3m(_dpd_3m, _dpd_6m, _dpd_12m).values
+
+    if df_inst is not None:
+        # Normalise to a flat DataFrame with SK_ID_CURR as column for windowed computations
+        _d = df_inst.copy() if "SK_ID_CURR" in df_inst.columns else df_inst.reset_index()
+        # Ensure days_past_due is present (may be absent when df_inst comes from Wave-1 load path)
+        if "days_past_due" not in _d.columns:
+            _d["days_past_due"] = _d["DAYS_ENTRY_PAYMENT"] - _d["DAYS_INSTALMENT"]
+        # Wave 2 inst functions expect SK_ID_CURR as index
+        _df_inst_idx = _d.set_index("SK_ID_CURR")
+        X_eng["inst_payment_consistency_score"] = sk_id.map(_inst_payment_consistency_score(_df_inst_idx)).fillna(0.0)
+        X_eng["inst_recency_weighted_dpd"] = sk_id.map(_inst_recency_weighted_dpd(_df_inst_idx)).fillna(0.0)
+        X_eng["inst_early_payment_pct"] = sk_id.map(_inst_early_payment_pct(_df_inst_idx)).fillna(0.0)
+        X_eng["inst_large_payment_freq"] = sk_id.map(_inst_large_payment_freq(_df_inst_idx)).fillna(0.0)
+        # _inst_late_payment_acceleration needs windowed late-rate Series
+        _d["_is_late"] = (_d["days_past_due"] > 30).astype(float)
+        _grp_3m = _d[_d["DAYS_INSTALMENT"] >= -90].groupby("SK_ID_CURR")["_is_late"]
+        _grp_6m = _d[(_d["DAYS_INSTALMENT"] < -90) & (_d["DAYS_INSTALMENT"] >= -180)].groupby("SK_ID_CURR")["_is_late"]
+        _late_3m = (_grp_3m.sum() / _grp_3m.count()).fillna(0.0)
+        _late_6m = (_grp_6m.sum() / _grp_6m.count()).fillna(0.0)
+        X_eng["inst_late_payment_acceleration"] = sk_id.map(
+            _inst_late_payment_acceleration(_late_3m, _late_6m)
+        ).fillna(0.0)
+
+    if df_cc is not None:
+        X_eng["cc_balance_velocity_3m"] = sk_id.map(_cc_balance_velocity_3m(df_cc)).fillna(0.0)
+        X_eng["cc_utilization_trend"] = sk_id.map(_cc_utilization_trend(df_cc)).fillna(0.0)
+        X_eng["cc_balance_volatility"] = sk_id.map(_cc_balance_volatility(df_cc)).fillna(0.0)
+        X_eng["cc_atm_drawing_frequency"] = sk_id.map(_cc_atm_drawing_frequency(df_cc)).fillna(0.0)
+
+    if df_prev is not None:
+        X_eng["prev_reject_fraud_flag"] = sk_id.map(_prev_reject_fraud_flag(df_prev)).fillna(0.0)
+        X_eng["prev_reject_high_risk_pct"] = sk_id.map(_prev_reject_high_risk_pct(df_prev)).fillna(0.0)
+        X_eng["prev_goods_secured_pct"] = sk_id.map(_prev_goods_secured_pct(df_prev)).fillna(0.0)
+        X_eng["prev_interest_rate_mean"] = sk_id.map(_prev_interest_rate_mean(df_prev)).fillna(0.0)
+
+    # current_to_bureau_debt_ratio — uses only X_eng aggregated columns, no raw table needed
+    if "AMT_CREDIT" in X_eng.columns and "bureau_credit_debt_sum" in X_eng.columns:
+        X_eng["current_to_bureau_debt_ratio"] = _current_to_bureau_debt_ratio(
+            X_eng["AMT_CREDIT"], X_eng["bureau_credit_debt_sum"]
+        )
 
     # D-20, D-21: Enforce regulatory compliance
     # Drop CODE_GENDER (GDPR Art. 21) and thin_file_young (EU AI Act Art. 6 age discrimination)
