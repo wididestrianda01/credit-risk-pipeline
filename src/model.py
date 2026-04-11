@@ -2807,6 +2807,7 @@ def run_ensemble_workflow(
             "improvement": improvement,
             "persisted": persisted,
             "gate_result": gate_result,
+            "ensemble_model": ensemble,
         }
 
     # 2-model path (backward compatible) — unchanged

@@ -24,7 +24,7 @@ from sklearn.metrics import brier_score_loss
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-from src.model import run_ensemble_workflow
+from src.model import run_ensemble_workflow, calibrate_model, save_model
 from src.utils import gini_coefficient, ks_statistic, evaluate_model
 
 # Absolute paths
@@ -318,6 +318,118 @@ def extract_and_log_ensemble_weights(context: dict) -> dict:
     return ensemble_weights
 
 
+def build_calibration_set(X_train: pd.DataFrame, y_train: pd.Series, target_positive_rate: float = 0.08) -> tuple:
+    """
+    Subsample X_train and y_train to target positive rate for calibration.
+    Keep all positives, undersample negatives proportionally.
+
+    Parameters
+    ----------
+    X_train : pd.DataFrame
+        Training feature matrix.
+    y_train : pd.Series
+        Training labels aligned with X_train.
+    target_positive_rate : float, default 0.08
+        Target positive rate for calibration set (deployment base rate).
+
+    Returns
+    -------
+    X_calib, y_calib : tuple
+        Subsampled DataFrames/Series with target positive rate.
+    """
+    # Indices of positive and negative samples
+    pos_indices = np.where(y_train == 1)[0]
+    neg_indices = np.where(y_train == 0)[0]
+
+    n_pos = len(pos_indices)
+    # Calculate required negatives to achieve target positive rate
+    # target_pos_rate = n_pos / (n_pos + n_neg)
+    # n_neg = n_pos * (1 - target_pos_rate) / target_pos_rate
+    n_neg = int(n_pos * (1 - target_positive_rate) / target_positive_rate)
+
+    # Undersample negatives (random without replacement)
+    np.random.seed(_RANDOM_SEED)
+    selected_neg_indices = np.random.choice(neg_indices, size=min(n_neg, len(neg_indices)), replace=False)
+
+    # Combine and create subsampled set
+    calib_indices = np.concatenate([pos_indices, selected_neg_indices])
+    X_calib = X_train.iloc[calib_indices].copy()
+    y_calib = y_train.iloc[calib_indices].copy()
+
+    achieved_rate = y_calib.mean()
+    print(f"  Calibration set: {len(X_calib)} rows | positive rate: {achieved_rate:.2%} (target: {target_positive_rate:.2%})")
+
+    return X_calib, y_calib
+
+
+def calibrate_and_persist_ensemble(context: dict) -> dict:
+    """
+    Apply Platt sigmoid calibration to ensemble and persist artifacts.
+
+    Parameters
+    ----------
+    context : dict
+        Dictionary with keys:
+        - ensemble_result: dict from run_ensemble_workflow() with ensemble_model
+        - X_train, y_train: Training set (80% after OOT carve)
+        - X_oot, y_oot: Frozen OOT holdout
+
+    Returns
+    -------
+    dict
+        Calibration result with paths and metrics.
+    """
+    print("\n[Wave 2/2] Calibration and Artifact Persistence...")
+
+    ensemble_model = context["ensemble_result"]["ensemble_model"]
+    X_train = context["X_train"]
+    y_train = context["y_train"]
+    X_oot = context["X_oot"]
+    y_oot = context["y_oot"]
+
+    # 1. Save uncalibrated ensemble (reference/diagnostics)
+    print("[1/3] Saving uncalibrated ensemble...")
+    ensemble_best_path = _MODELS_DIR / "ensemble_best.pkl"
+    save_model(ensemble_model, str(ensemble_best_path))
+    print(f"  ✓ Saved to {ensemble_best_path}")
+
+    # 2. Build calibration set (8% positive rate subsampling)
+    print("[2/3] Building calibration set (8% positive rate)...")
+    X_calib, y_calib = build_calibration_set(X_train, y_train, target_positive_rate=0.08)
+
+    # 3. Calibrate ensemble using calibrate_model()
+    # calibrate_model() handles FrozenEstimator + CalibratedClassifierCV internally
+    print("[3/3] Applying Platt sigmoid calibration...")
+
+    # Ensure reports/figures directory exists
+    (_REPORTS_DIR / "figures").mkdir(parents=True, exist_ok=True)
+
+    calibrated_model, brier_uncal, brier_cal = calibrate_model(
+        model=ensemble_model,
+        X_train=X_calib,
+        y_train=y_calib,
+        X_test=X_oot,
+        y_test=y_oot,
+        method="sigmoid",
+        output_model_path=str(_MODELS_DIR / "ensemble_calibrated.pkl"),
+        output_figure_path=str(_REPORTS_DIR / "figures" / "ensemble_calibration_curve.png")
+    )
+
+    print(f"  ✓ Calibrated model saved to {_MODELS_DIR / 'ensemble_calibrated.pkl'}")
+    print(f"  ✓ Reliability diagram saved to {_REPORTS_DIR / 'figures' / 'ensemble_calibration_curve.png'}")
+
+    # Print calibration improvement
+    print(f"  Calibration improvement (Brier): {brier_uncal:.4f} → {brier_cal:.4f} (delta: {brier_uncal - brier_cal:.4f})")
+
+    return {
+        "ensemble_best_path": ensemble_best_path,
+        "ensemble_calibrated_path": _MODELS_DIR / "ensemble_calibrated.pkl",
+        "calibration_curve_path": _REPORTS_DIR / "figures" / "ensemble_calibration_curve.png",
+        "brier_uncalibrated": brier_uncal,
+        "brier_calibrated": brier_cal
+    }
+
+
 def main():
     """Orchestrate ensemble workflow: load params, train, evaluate, gate, benchmark."""
 
@@ -389,10 +501,14 @@ def main():
     # 5. Extract and log ensemble weights
     ensemble_weights = extract_and_log_ensemble_weights(context)
 
+    # 6. Calibration and artifact persistence (Plan 04.2.6-03)
+    calibration_result = calibrate_and_persist_ensemble(context)
+
     return {
         "context": context,
         "benchmark_df": benchmark_df,
-        "ensemble_weights": ensemble_weights
+        "ensemble_weights": ensemble_weights,
+        "calibration_result": calibration_result
     }
 
 
@@ -401,3 +517,6 @@ if __name__ == "__main__":
     print("\n[✓] Ensemble orchestration complete. All artifacts written.")
     print(f"    - Benchmark table: {_REPORTS_DIR / 'model_benchmark.csv'}")
     print(f"    - Ensemble weights: {_REPORTS_DIR / 'ensemble_weights.json'}")
+    print(f"    - Uncalibrated ensemble: {_MODELS_DIR / 'ensemble_best.pkl'}")
+    print(f"    - Calibrated ensemble: {_MODELS_DIR / 'ensemble_calibrated.pkl'}")
+    print(f"    - Reliability diagram: {_REPORTS_DIR / 'figures' / 'ensemble_calibration_curve.png'}")

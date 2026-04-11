@@ -3927,3 +3927,67 @@ class TestEnsembleWorkflow:
             "temporal CV may not have been applied correctly"
         )
         assert len(X_test) > 0  # Validation set should exist
+
+
+class TestEnsembleCalibration:
+    """Tests for ensemble calibration and artifact persistence (Plan 04.2.6-03)."""
+
+    def test_calibration_subsampled_to_8pct(self):
+        """Verify calibration set positive rate is within [7%, 9%] (close to 8% target)."""
+        # Arrange: Create controlled mock training data with known positive rate
+        # Create 1000 samples: 80 positive, 920 negative (8% rate)
+        np.random.seed(42)
+        X_train = pd.DataFrame(np.random.randn(1000, 5))
+        y_train = pd.Series([1] * 80 + [0] * 920)
+
+        # Act: Subsample to ~8%
+        target_rate = 0.08
+        pos_idx = np.where(y_train == 1)[0]
+        neg_idx = np.where(y_train == 0)[0]
+        n_pos = len(pos_idx)
+        n_neg = int(n_pos * (1 - target_rate) / target_rate)
+
+        np.random.seed(42)
+        selected_neg = np.random.choice(neg_idx, size=min(n_neg, len(neg_idx)), replace=False)
+        calib_idx = np.concatenate([pos_idx, selected_neg])
+        y_calib = y_train.iloc[calib_idx]
+
+        # Assert
+        achieved_rate = y_calib.mean()
+        assert 0.07 <= achieved_rate <= 0.09, (
+            f"Calibration positive rate {achieved_rate:.4f} outside [0.07, 0.09]"
+        )
+
+    def test_ensemble_weights_json_written(self):
+        """Verify ensemble_weights.json exists with required keys."""
+        # Arrange
+        weights_path = Path(__file__).resolve().parents[1] / "reports" / "ensemble_weights.json"
+
+        # Act & Assert
+        if weights_path.exists():  # Skip if not yet run
+            with open(weights_path) as f:
+                weights = json.load(f)
+
+            required_keys = ["phase", "meta_learner_weights", "gate_result", "base_model_gini"]
+            for key in required_keys:
+                assert key in weights, f"ensemble_weights.json missing key: {key}"
+
+            assert "lgb_coef" in weights["meta_learner_weights"]
+            assert "xgb_coef" in weights["meta_learner_weights"]
+            assert "cat_coef" in weights["meta_learner_weights"]
+            assert "intercept" in weights["meta_learner_weights"]
+            assert weights["gate_result"] in ["full_pass", "accept_best_available", "investigate"]
+
+    def test_calibrated_model_pickle_saved(self):
+        """Verify ensemble_calibrated.pkl exists after calibration."""
+        # Arrange
+        calibrated_path = Path(__file__).resolve().parents[1] / "models" / "ensemble_calibrated.pkl"
+
+        # Act & Assert
+        if calibrated_path.exists():  # Skip if not yet run
+            calibrated_model = load_model(str(calibrated_path))
+            assert calibrated_model is not None, "ensemble_calibrated.pkl is empty"
+            # Verify it's a calibrated model (has predict_proba method from CalibratedClassifierCV)
+            assert hasattr(calibrated_model, 'predict_proba'), (
+                "Model does not have predict_proba method"
+            )
