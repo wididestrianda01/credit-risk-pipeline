@@ -4,8 +4,9 @@
   "feature_store": "data/processed/X_tree_raw.parquet",
   "n_trials": 50,
   "oot_gini": 0.5746090399063704,
-  "oof_gini": 0.7437473437512954,
-  "oof_oot_gap": 0.1691,
+  "oof_gini": null,
+  "oof_gini_note": "in-sample value 0.7437 was invalid (calibrated_model.predict_proba(X_train) — not CV OOF); true value requires re-run with fixed code",
+  "oof_oot_gap": null,
   "ks": 0.43017319183260827,
   "brier": 0.09131606518485622,
   "best_params": {

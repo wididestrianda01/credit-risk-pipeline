@@ -1844,6 +1844,10 @@ def train_lightgbm_optuna(
     # Initialize predictions arrays with NaN (NaN marks unvalidated samples per XGB pattern)
     oof_preds = np.full(len(oof_indices), np.nan)
     oot_preds = np.full(len(oot_indices), np.nan)
+    # Track best-trial OOF predictions for post-HPO OOF Gini computation.
+    # Using a list container so the objective can update it without nonlocal reassignment.
+    _best_oof_preds = [np.full(len(oof_indices), np.nan)]
+    _best_oot_gini_seen = [-np.inf]
 
     # HPO objective with full parameter search space per D-10
     def objective(trial: optuna.Trial) -> float:
@@ -1987,6 +1991,11 @@ def train_lightgbm_optuna(
         # Set user_attr for best_iteration (per D-08)
         trial.set_user_attr("best_iteration", int(np.mean(best_iteration_list)))
 
+        # Track best-trial OOF preds so post-HPO can compute true OOF Gini
+        if oot_gini > _best_oot_gini_seen[0]:
+            _best_oot_gini_seen[0] = oot_gini
+            _best_oof_preds[0] = oof_preds_trial.copy()
+
         # Report trial value for pruning
         trial.report(oot_gini, step=0)
 
@@ -2066,9 +2075,14 @@ def train_lightgbm_optuna(
     # Evaluate on OOT holdout (carved out before HPO — Basel CRE36.54)
     metrics = evaluate_model(calibrated_model, X_oot, y_oot, model_name="LGB_RAW")
 
-    # Compute OOF Gini on training set (final calibrated model on training 80%)
-    y_pred_train = calibrated_model.predict_proba(X)[:, 1]
-    oof_gini = 2 * roc_auc_score(y, y_pred_train) - 1
+    # Compute true OOF Gini from best-trial OOF predictions (accumulated during HPO).
+    # These are uncalibrated LGB scores from held-out CV folds — rank-preserving,
+    # so Platt calibration does not affect Gini.
+    _best_oof_valid = ~np.isnan(_best_oof_preds[0])
+    if _best_oof_valid.sum() > 0:
+        oof_gini = 2 * roc_auc_score(y.iloc[oof_indices][_best_oof_valid], _best_oof_preds[0][_best_oof_valid]) - 1
+    else:
+        oof_gini = float("nan")
     metrics["oof_gini"] = oof_gini
 
     # Compute OOT Gini on held-out 20%
@@ -3210,13 +3224,6 @@ def train_catboost_optuna(
     final_model = CatBoostClassifier(**stage2_params)
     final_model.fit(X_train.to_numpy(), y_train.to_numpy(), verbose=False)
 
-    # Evaluate on OOT holdout (carved out before HPO — Basel CRE36.54)
-    metrics = evaluate_model(final_model, X_oot, y_oot, "CatBoost (Raw, scale_pos_weight)")
-    metrics["n_trials"] = n_trials
-    metrics["n_features"] = X.shape[1]
-    oot_gini = 2 * roc_auc_score(y_oot, final_model.predict_proba(X_oot.to_numpy())[:, 1]) - 1
-    metrics["oot_gini"] = oot_gini
-
     # Calibrate on 70/30 split within X_train (not OOT — calibrator must not see holdout)
     X_train_cal, X_calib, y_train_cal, y_calib = train_test_split(
         X_train, y_train, test_size=0.3, random_state=_RANDOM_STATE, stratify=y_train
@@ -3229,6 +3236,13 @@ def train_catboost_optuna(
         output_model_path=str(_CAT_MODEL_PATH),
         output_figure_path=str(_CAT_FIGURE_PATH),
     )
+
+    # Evaluate on OOT holdout using the calibrated model (Brier, Gini, KS all on calibrated probs)
+    metrics = evaluate_model(calibrated_model, X_oot, y_oot, "CatBoost (Raw, scale_pos_weight)")
+    metrics["n_trials"] = n_trials
+    metrics["n_features"] = X.shape[1]
+    oot_gini = 2 * roc_auc_score(y_oot, calibrated_model.predict_proba(X_oot)[:, 1]) - 1
+    metrics["oot_gini"] = oot_gini
 
     # Save params JSON
     params_path = Path(_CAT_PARAMS_PATH)
