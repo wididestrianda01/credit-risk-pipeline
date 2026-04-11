@@ -231,7 +231,7 @@ def _engineer_ext_source(df: pd.DataFrame) -> pd.DataFrame:
     -------
     pd.DataFrame
         Copy of df with EXT_SOURCE_{MEAN,MIN,MAX,MEDIAN,STD,RANGE,
-        AVAILABLE_CNT,12,13,23}.
+        NUM_AVAILABLE,12,13,23}.
     """
     out = df.copy()
 
@@ -265,7 +265,7 @@ def _engineer_ext_source(df: pd.DataFrame) -> pd.DataFrame:
     out["EXT_SOURCE_MEDIAN"]        = _s(ext_median).fillna(_NAN_SENTINEL)
     out["EXT_SOURCE_STD"]           = _s(ext_std).fillna(_NAN_SENTINEL)
     out["EXT_SOURCE_RANGE"]         = _s(ext_range).fillna(_NAN_SENTINEL)
-    out["EXT_SOURCE_AVAILABLE_CNT"] = _s(avail_cnt)  # always 0–3, no NaN
+    out["EXT_SOURCE_NUM_AVAILABLE"] = _s(avail_cnt)  # always 0–3, no NaN
     out["EXT_SOURCE_PROD_12"]       = _s(prod_12).fillna(_NAN_SENTINEL)
     out["EXT_SOURCE_PROD_13"]       = _s(prod_13).fillna(_NAN_SENTINEL)
     out["EXT_SOURCE_PROD_23"]       = _s(prod_23).fillna(_NAN_SENTINEL)
@@ -2039,8 +2039,32 @@ def build_tree_feature_store(
         "bureau_dpd_trend_3m_vs_12m",
         "bureau_debt_to_new_credit",
     ]
+
+    # Phase 9 domain-expert features — exempt from variance filter and correlation dedup.
+    # These are high-value features for Wave 2 feature engineering that would otherwise be
+    # filtered out by correlation with existing features, despite being independent signals.
+    _PHASE9_PROTECTED = [
+        "ANNUITY_INCOME_RATIO",
+        "EMPLOYED_TO_AGE_RATIO",
+        "EXT_SOURCE_NUM_AVAILABLE",
+        "bbal_ever_30dpd",
+        "bbal_ever_60dpd",
+        "bbal_ever_90dpd",
+        "bbal_pct_current",
+        "bbal_dpd_escalation",
+        "bbal_improving_flag",
+        "inst_late_payment_acceleration",
+        "inst_payment_consistency_score",
+        "inst_recency_weighted_dpd",
+        "cc_balance_velocity_3m",
+        "cc_utilization_trend",
+        "prev_reject_fraud_flag",
+        "current_to_bureau_debt_ratio",
+    ]
+
     # Stash protected columns that are present, so they survive the filters below.
-    _protected_present = [c for c in _WAVE1_PROTECTED if c in X_iv.columns]
+    protected_cols = set(_WAVE1_PROTECTED + _PHASE9_PROTECTED)
+    _protected_present = [c for c in protected_cols if c in X_iv.columns]
     _protected_data = X_iv[_protected_present].copy() if _protected_present else None
 
     # Layer 6a: Remove low-variance features (variance < 1%)
@@ -2067,7 +2091,7 @@ def build_tree_feature_store(
 
     # Layer 6b: Remove correlated features (|r| > 0.95)
     # Compute Pearson correlation matrix and drop one of each highly-correlated pair.
-    # Protected Wave 1 features are never dropped, even if they correlate > 0.95.
+    # Protected Wave 1 and Phase 9 features are never dropped, even if they correlate > 0.95.
     if X_var.shape[1] > 1:
         corr_matrix = X_var.corr().abs()
 
@@ -2076,8 +2100,8 @@ def build_tree_feature_store(
         for i in range(len(corr_matrix.columns)):
             for j in range(i + 1, len(corr_matrix.columns)):
                 if corr_matrix.iloc[i, j] > 0.95:
-                    # Never drop a protected Wave 1 feature
-                    if corr_matrix.columns[j] not in _WAVE1_PROTECTED:
+                    # Never drop a protected Wave 1 or Phase 9 feature
+                    if corr_matrix.columns[j] not in protected_cols:
                         pairs_to_drop.append(corr_matrix.columns[j])
 
         # Keep first of each pair, drop second
