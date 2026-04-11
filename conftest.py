@@ -237,3 +237,237 @@ def make_mock_parquet(tmp_path: Path):
         return path
 
     return _factory
+
+
+# ---------------------------------------------------------------------------
+# Wave 1 Fixtures: Delinquency Trajectory Features (Phase 04.2.7)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def df_inst_fixture() -> pd.DataFrame:
+    """
+    Mock installments_payments table with 50 applicants and varying DPD patterns.
+
+    This fixture provides ~300 rows of instalment payment history data with
+    realistic delinquency patterns:
+    - Clean history (10 applicants): no DPD
+    - Recent 30+DPD (15 applicants): DPD > 30 in last 30 days
+    - Historical DPD (10 applicants): DPD > 30 from 180+ days ago
+    - Escalating DPD (10 applicants): older clean, recent DPD
+    - Single instalment (5 applicants): edge case, only 1 record
+
+    Columns
+    -------
+    SK_ID_CURR : int
+        Applicant ID (1-50)
+    DAYS_INSTALMENT : float
+        Days scheduled instalment was due (negative, relative to application date)
+    DAYS_ENTRY_PAYMENT : float
+        Days the payment was actually made (negative)
+        DPD = max(0, DAYS_ENTRY_PAYMENT - DAYS_INSTALMENT)
+    AMT_INSTALMENT : float
+        Amount due for the instalment
+    AMT_PAYMENT : float
+        Amount actually paid
+    """
+    rng = np.random.default_rng(42)
+    rows = []
+
+    # ==================== Group 1: Clean history (10 applicants) ====================
+    for sk_id in range(1, 11):
+        # 8-12 instalments, all on-time
+        n_instal = rng.integers(8, 13)
+        for i in range(n_instal):
+            days_instal = -30 * (n_instal - i)  # Spread over last 300 days
+            days_entry = days_instal - rng.integers(-5, 6)  # On-time ±5 days (negative)
+            amt_instal = 5000 + rng.normal(0, 500)
+            amt_payment = amt_instal + rng.normal(0, 200)  # Usually on-time, slight overpayment
+            rows.append({
+                "SK_ID_CURR": sk_id,
+                "DAYS_INSTALMENT": days_instal,
+                "DAYS_ENTRY_PAYMENT": days_entry,
+                "AMT_INSTALMENT": amt_instal,
+                "AMT_PAYMENT": amt_payment,
+            })
+
+    # ==================== Group 2: Recent 30+DPD (15 applicants) ====================
+    for sk_id in range(11, 26):
+        # 6-10 instalments with recent DPD
+        n_instal = rng.integers(6, 11)
+        for i in range(n_instal):
+            days_instal = -30 * (n_instal - i)
+            # Last 2-3 instalments have significant DPD (40-60 days late)
+            if i >= n_instal - rng.integers(2, 4):
+                dpd_days = rng.integers(40, 61)
+                days_entry = days_instal + dpd_days  # Late payment
+            else:
+                days_entry = days_instal - rng.integers(-5, 6)
+            amt_instal = 4500 + rng.normal(0, 500)
+            amt_payment = amt_instal * rng.uniform(0.7, 1.0)  # Partial or late payment
+            rows.append({
+                "SK_ID_CURR": sk_id,
+                "DAYS_INSTALMENT": days_instal,
+                "DAYS_ENTRY_PAYMENT": days_entry,
+                "AMT_INSTALMENT": amt_instal,
+                "AMT_PAYMENT": amt_payment,
+            })
+
+    # ==================== Group 3: Historical DPD (10 applicants) ====================
+    for sk_id in range(26, 36):
+        # 7-12 instalments, DPD was 180+ days ago, recent on-time
+        n_instal = rng.integers(7, 13)
+        for i in range(n_instal):
+            days_instal = -30 * (n_instal - i)
+            # Early instalments (7+ months ago) had DPD
+            if i < rng.integers(2, 4):
+                dpd_days = rng.integers(30, 90)
+                days_entry = days_instal + dpd_days
+            else:
+                days_entry = days_instal - rng.integers(-5, 6)
+            amt_instal = 5500 + rng.normal(0, 500)
+            amt_payment = amt_instal + rng.normal(0, 200)
+            rows.append({
+                "SK_ID_CURR": sk_id,
+                "DAYS_INSTALMENT": days_instal,
+                "DAYS_ENTRY_PAYMENT": days_entry,
+                "AMT_INSTALMENT": amt_instal,
+                "AMT_PAYMENT": amt_payment,
+            })
+
+    # ==================== Group 4: Escalating DPD (10 applicants) ====================
+    for sk_id in range(36, 46):
+        # 8-11 instalments, clean early, worsening recent
+        n_instal = rng.integers(8, 12)
+        for i in range(n_instal):
+            days_instal = -30 * (n_instal - i)
+            # Escalation: early on-time, recent increasingly late
+            if i < n_instal // 2:
+                days_entry = days_instal - rng.integers(-5, 6)
+            else:
+                # Worsening trend: 30, 45, 60 days late
+                dpd_days = 30 + 15 * (i - n_instal // 2)
+                days_entry = days_instal + min(dpd_days, 90)
+            amt_instal = 4800 + rng.normal(0, 500)
+            amt_payment = amt_instal * rng.uniform(0.6, 1.0)
+            rows.append({
+                "SK_ID_CURR": sk_id,
+                "DAYS_INSTALMENT": days_instal,
+                "DAYS_ENTRY_PAYMENT": days_entry,
+                "AMT_INSTALMENT": amt_instal,
+                "AMT_PAYMENT": amt_payment,
+            })
+
+    # ==================== Group 5: Single instalment (5 applicants) ====================
+    for sk_id in range(46, 51):
+        # Edge case: only 1 instalment record (new credit or data cutoff)
+        days_instal = -30
+        days_entry = days_instal - rng.integers(-5, 6)
+        amt_instal = 3000 + rng.normal(0, 500)
+        amt_payment = amt_instal + rng.normal(0, 200)
+        rows.append({
+            "SK_ID_CURR": sk_id,
+            "DAYS_INSTALMENT": days_instal,
+            "DAYS_ENTRY_PAYMENT": days_entry,
+            "AMT_INSTALMENT": amt_instal,
+            "AMT_PAYMENT": amt_payment,
+        })
+
+    df = pd.DataFrame(rows)
+    df = df.astype({
+        "SK_ID_CURR": int,
+        "DAYS_INSTALMENT": float,
+        "DAYS_ENTRY_PAYMENT": float,
+        "AMT_INSTALMENT": float,
+        "AMT_PAYMENT": float,
+    })
+    return df
+
+
+@pytest.fixture(scope="module")
+def df_bureau_balance_fixture() -> pd.DataFrame:
+    """
+    Mock bureau_balance table with credit bureau account-level delinquency status.
+
+    This fixture provides ~500 rows of bureau balance history for the same
+    50 applicants used in df_inst_fixture. Each row represents a monthly
+    snapshot of an account's delinquency status.
+
+    Columns
+    -------
+    SK_ID_BUREAU : int
+        Unique identifier for a credit bureau account (1-200)
+    SK_ID_CURR : int
+        Applicant ID (1-50), linked to df_inst_fixture
+    MONTHS_BALANCE : int
+        Month relative to application date (-60 to 0, where 0 is most recent)
+    STATUS : str
+        Delinquency status encoding:
+        - '0': Current (no DPD)
+        - '1': 1-30 days past due
+        - '2': 31-60 days past due
+        - '3': 61-90 days past due
+        - '4': 90+ days past due
+        - 'X': Closed account
+        - 'C': Closed with 0 balance
+
+    Notes
+    -----
+    Each SK_ID_CURR can have multiple accounts (SK_ID_BUREAU values).
+    The STATUS distribution matches DPD patterns from df_inst_fixture:
+    - Clean applicants: mostly '0' (current)
+    - Recent DPD applicants: '1' or '2' in recent months
+    - Historical DPD applicants: '0' in recent months, higher DPD in old months
+    """
+    rng = np.random.default_rng(42)
+    rows = []
+
+    # Create 4-6 accounts per applicant (some have multiple credit accounts)
+    for sk_id in range(1, 51):
+        n_accounts = rng.integers(4, 7)  # 4-6 accounts per applicant
+        for account_num in range(n_accounts):
+            bureau_id = sk_id * 10 + account_num  # Simple ID generation
+            # Each account has 15-45 monthly snapshots
+            n_months = rng.integers(15, 46)
+            months = sorted(rng.choice(np.arange(-60, 1), size=n_months, replace=False))
+
+            # Determine this applicant's DPD pattern
+            if sk_id <= 10:
+                # Clean: mostly '0'
+                status_dist = {'0': 0.95, '1': 0.03, '2': 0.02, '3': 0, '4': 0, 'X': 0, 'C': 0}
+            elif sk_id <= 25:
+                # Recent DPD: recent months high DPD, mix otherwise
+                status_dist = {'0': 0.60, '1': 0.20, '2': 0.10, '3': 0.05, '4': 0.03, 'X': 0.01, 'C': 0.01}
+            elif sk_id <= 35:
+                # Historical DPD: old months high DPD, recent clean
+                status_dist = {'0': 0.85, '1': 0.05, '2': 0.05, '3': 0.03, '4': 0.01, 'X': 0.01, 'C': 0}
+            elif sk_id <= 45:
+                # Escalating: mix of all statuses with worsening trend
+                status_dist = {'0': 0.50, '1': 0.20, '2': 0.15, '3': 0.08, '4': 0.05, 'X': 0.01, 'C': 0.01}
+            else:
+                # New accounts: limited history, mostly clean
+                status_dist = {'0': 0.90, '1': 0.05, '2': 0.03, '3': 0.01, '4': 0.01, 'X': 0, 'C': 0}
+
+            for month_balance in months:
+                # Status varies slightly with recency for realistic patterns
+                if sk_id <= 35 and month_balance < -180 and sk_id > 10:
+                    # Historical DPD pattern: high DPD in far past
+                    status = rng.choice(['0', '1', '2', '3', '4'], p=[0.4, 0.25, 0.2, 0.1, 0.05])
+                else:
+                    status = rng.choice(list(status_dist.keys()), p=list(status_dist.values()))
+
+                rows.append({
+                    "SK_ID_BUREAU": bureau_id,
+                    "SK_ID_CURR": sk_id,
+                    "MONTHS_BALANCE": month_balance,
+                    "STATUS": status,
+                })
+
+    df = pd.DataFrame(rows)
+    df = df.astype({
+        "SK_ID_BUREAU": int,
+        "SK_ID_CURR": int,
+        "MONTHS_BALANCE": int,
+        "STATUS": str,
+    })
+    return df

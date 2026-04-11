@@ -2458,3 +2458,92 @@ class TestBuildTreeFeatureStoreL6Filters:
                         f"High correlation found: {corr_matrix.columns[i]} vs "
                         f"{corr_matrix.columns[j]}: {corr_val:.4f}"
                     )
+
+
+# ---------------------------------------------------------------------------
+# Wave 1 Features: Delinquency Trajectory Features (Phase 04.2.7)
+# ---------------------------------------------------------------------------
+
+
+class TestWave1Features:
+    """Wave 1 delinquency trajectory features (Phase 04.2.7)."""
+
+    @pytest.fixture
+    def inst_data(self, df_inst_fixture):
+        """Instalment data fixture."""
+        return df_inst_fixture
+
+    @pytest.fixture
+    def bureau_data(self, df_bureau_balance_fixture):
+        """Bureau balance data fixture."""
+        return df_bureau_balance_fixture
+
+    def test_engineer_inst_late_rate_12m(self, inst_data):
+        """FEAT-01a: Fraction of payments >30DPD in last 365d."""
+        from src.features import engineer_inst_late_rate_12m
+
+        result = engineer_inst_late_rate_12m(inst_data)
+        assert isinstance(result, pd.Series), "Should return pd.Series"
+        assert result.index.name == "SK_ID_CURR", "Index must be SK_ID_CURR"
+        assert result.dtype in [np.float64, float], "Must be numeric"
+        assert (result >= 0).all() or (result == -999.0).all(), "Values ∈ [0,1] or -999 sentinel"
+        assert len(result) <= len(inst_data["SK_ID_CURR"].unique()), "One row per applicant"
+
+    def test_engineer_inst_late_rate_recent_vs_historical(self, inst_data):
+        """FEAT-01b: 12m rate minus historical rate (trajectory)."""
+        from src.features import engineer_inst_late_rate_recent_vs_historical
+
+        result = engineer_inst_late_rate_recent_vs_historical(inst_data)
+        assert isinstance(result, pd.Series), "Should return pd.Series"
+        assert result.dtype in [np.float64, float], "Must be numeric"
+        assert ((result >= -1) & (result <= 1)) | (result == -999.0), "Values ∈ [-1,1] or -999 sentinel"
+
+    def test_engineer_inst_rolling_30dpd_ratio_3m(self, inst_data):
+        """FEAT-02a: Fraction of payments >30DPD in last 90d."""
+        from src.features import engineer_inst_rolling_30dpd_ratio_3m
+
+        result = engineer_inst_rolling_30dpd_ratio_3m(inst_data)
+        assert isinstance(result, pd.Series), "Should return pd.Series"
+        assert result.dtype in [np.float64, float], "Must be numeric"
+        assert (result >= 0).all() or (result == -999.0).all(), "Values ∈ [0,1] or -999 sentinel"
+
+    def test_engineer_inst_delinquency_escalation_flag(self, inst_data):
+        """FEAT-02b: Flag if 3m rate > 6m rate (worsening trend)."""
+        from src.features import engineer_inst_delinquency_escalation_flag
+
+        result = engineer_inst_delinquency_escalation_flag(inst_data)
+        assert isinstance(result, pd.Series), "Should return pd.Series"
+        assert result.dtype in [np.float64, float], "Must be numeric"
+        assert set(result.unique()).issubset({0.0, 1.0, -999.0}), "Values must be {0, 1, -999}"
+
+    def test_engineer_inst_days_since_last_30dpd(self, inst_data):
+        """FEAT-02c: Days since most recent 30+DPD event; -1 if never."""
+        from src.features import engineer_inst_days_since_last_30dpd
+
+        result = engineer_inst_days_since_last_30dpd(inst_data)
+        assert isinstance(result, pd.Series), "Should return pd.Series"
+        assert result.dtype in [np.float64, float], "Must be numeric"
+        assert (result >= -1).all() or (result == -999.0).all(), "Values ≥ -1 or -999 sentinel"
+
+    def test_engineer_bureau_dpd_trend_3m_vs_12m(self, bureau_data):
+        """FEAT-03: DPD rate last 3m minus DPD rate 3–12m (trend)."""
+        from src.features import engineer_bureau_dpd_trend_3m_vs_12m
+
+        result = engineer_bureau_dpd_trend_3m_vs_12m(bureau_data)
+        assert isinstance(result, pd.Series), "Should return pd.Series"
+        assert result.index.name == "SK_ID_CURR", "Index must be SK_ID_CURR"
+        assert result.dtype in [np.float64, float], "Must be numeric"
+        assert ((result >= -1) & (result <= 1)) | (result == -999.0), "Values ∈ [-1,1] or -999"
+
+    def test_engineer_bureau_debt_to_new_credit(self, inst_data, application_fixture):
+        """FEAT-04: Bureau outstanding debt / new loan amount."""
+        from src.features import engineer_bureau_debt_to_new_credit
+
+        # This feature requires both bureau aggregates + AMT_CREDIT from application
+        # Mock application table with SK_ID_CURR and AMT_CREDIT
+        app = application_fixture[["AMT_CREDIT"]].head(50).copy()
+        app["SK_ID_CURR"] = range(1, 51)
+        result = engineer_bureau_debt_to_new_credit(inst_data, app)
+        assert isinstance(result, pd.Series), "Should return pd.Series"
+        assert result.dtype in [np.float64, float], "Must be numeric"
+        assert (result >= 0).all() or (result == -999.0).all(), "Values ≥ 0 or -999 sentinel"
