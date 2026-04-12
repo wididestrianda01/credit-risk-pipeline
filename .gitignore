@@ -1,7 +1,7 @@
-# AI guidance and personal reference docs
-CLAUDE.md
-P2_CreditRisk_Reference.md
-credit_risk_tasks_list.md
+# Root-level markdown files (private notes, AI guidance, reference docs)
+# Keep README.md tracked; ignore everything else at root level
+/*.md
+!README.md
 
 # Claude Code local settings
 .claude/
@@ -66,9 +66,6 @@ catboost_info/
 
 # Documentation stubs (not committed)
 docs/
-feature.md
-lgb.md
-REVIEW.md
 
 # Environment
 .env
