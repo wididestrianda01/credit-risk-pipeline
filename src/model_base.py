@@ -50,9 +50,12 @@ _CV_N_SPLITS: int = 10
 _CV_EMBARGO_FRAC: float = 0.02
 
 # Column used to auto-detect temporal ordering when groups is not supplied.
-# prev_days_decision_mean is the mean number of days before application that
-# previous applications were decided — a robust proxy for applicant vintage.
-_TEMPORAL_SORT_COL: str = "prev_days_decision_mean"
+# SK_ID_CURR is the sequential application intake ID — monotonically increasing,
+# no NaN values, and directly reflects application arrival order per Home Credit
+# data documentation. This is preferred over relative proxies such as
+# prev_days_decision_mean, which measure days-before-THIS-application and can
+# reverse true temporal order when applicants have differently-aged prior loans.
+_TEMPORAL_SORT_COL: str = "SK_ID_CURR"
 
 # Logistic regression baseline hyperparameters (IRB scorecard config)
 # C=0.1 (strong L2 regularisation) keeps coefficients stable across vintages —
