@@ -17,13 +17,13 @@
 | Phase 04.2.3.2 — Feature engineering + XGB re-run | ✅ | 0.5666 | Gate fail (target 0.60); KS ✓; XGB plateau confirmed |
 | Phase 04.2.3.3 — XGB store selection | ✅ superseded | — | Raw+eng wins; DFS adds +0.0001 (noise); absorbed into 04.2.4 |
 | Phase 04.2.4 — LGB HPO | ❌ invalidated | — | Basel CRE36.54 OOT contamination; superseded by 04.2.4.1 |
-| Phase 04.2.4.1 — LGB compliant re-run | ✅ | 0.5746 | KS=0.4302 ✓; regulatory evidence clean |
+| Phase 04.2.4.1 — LGB compliant re-run | ⚠️ inadmissible | ~~0.5746~~ | KS=0.4302; used `prev_days_decision_mean` sort col — wrong OOT definition |
 | Phase 04.2.5 — CatBoost HPO | ❌ invalidated | — | Basel CRE36.54 OOT contamination; superseded by 04.2.5.1 |
 | Phase 04.2.5.1 — CatBoost compliant re-run | ✅ | 0.5699 | KS=0.4259 ✓, Brier=0.0831 ✓ |
 | Phase 04.2.7 — Feature Engineering Enhancement | ✅ gate fail | 0.5746 | Wave 1 (7 delinquency features); gate < 0.5845 — no net lift |
 | Phase 04.2.6 — Ensemble + Gate | ✅ investigate | 0.5749 | gate=investigate; LGB standalone (0.5746) proceeds as primary |
 
-> **Basel CRE36.54 mandatory workflow (all model training):** Sort by `prev_days_decision_mean` → carve OOT (most-recent 20%, frozen) → Optuna HPO on 80% with OOF CV Gini as objective → retrain on full 80% → evaluate on frozen OOT. Any split inside the Optuna objective closure contaminates results.
+> **Basel CRE36.54 mandatory workflow (all model training):** Sort by `SK_ID_CURR` (monotonically increasing application intake surrogate — not a derived aggregate) → carve OOT (most-recent 20%, frozen) → Optuna HPO on 80% with OOF CV Gini as objective → retrain on full 80% → evaluate on frozen OOT. Any split inside the Optuna objective closure contaminates results.
 
 ---
 
@@ -61,7 +61,7 @@
 
 **Done condition:** `X_tree_raw.parquet` rebuilt with ≥10 new features; ≥1 base model OOT Gini ≥ 0.580; all tests pass; old store backed up as `X_tree_raw_v1.parquet`
 
-**Status:** 🔲 Not started — unblocked after Phase 04.2.7
+**Status:** ✅ Complete — gate MET; CatBoost v2 OOT Gini=0.5814 (best); LGB=0.5695, XGB=0.5636. All 5 plans done 2026-04-12.
 
 ---
 
@@ -74,6 +74,7 @@
 **Gate:** Ensemble OOT Gini ≥ 0.600
 
 **Plans:**
+0. Use @ensemble_vs_regulation.md to setup how should ensemble to be used. Explain the ensemble justification. If necessary, conduct test to support justification.
 1. Pre-calibrate CatBoost OOF predictions before meta-learner training (uncalibrated OOF BrierSkill −1.268 corrupts logistic fitting)
 2. Train XGBoost on `X_features` (WoE-encoded store, 68 cols) — logistic-friendly discrete boundaries
 3. Train CatBoost on `X_tree_dfs` (DFS store, ~323 cols) — high-order cross-table aggregates
@@ -83,7 +84,10 @@
 
 **Done condition:** Ensemble OOT Gini ≥ 0.600; `ensemble_v2_ablation.csv` complete; `model_benchmark.csv` updated; best ensemble saved as `models/ensemble_v2_calibrated.pkl` if gate passes
 
-**Status:** 🔲 Not started — depends on Phase 04.2.9
+**Status:** 🔄 In progress — 3 scripts created and committed; awaiting training runs
+- ✅ `scripts/train_xgboost_woe.py` created — trains XGBoost on X_features (WoE), saves best_params + eval
+- ✅ `scripts/train_catboost_dfs.py` created — trains CatBoost on X_tree_dfs (DFS), validates SK_DPD leakage
+- ✅ `scripts/run_ensemble_v2.py` created — orchestrates 9-cell ablation with temporal CV and gating
 
 ---
 
@@ -182,13 +186,13 @@ Phase 01 → Phase 02 → Phase 04.2.1 → 04.2.2 → 04.2.3 → 04.2.3.1 → 04
 | Phase 04.2.3.2 — Feature engineering + XGB re-run | ⚠️ Gate fail | OOT Gini 0.5666; KS ✓; Brier ✓ |
 | Phase 04.2.3.3 — XGB store selection | ✅ Superseded | Raw+eng selected; DFS noise (+0.0001) |
 | Phase 04.2.4 — LightGBM HPO | ❌ Invalidated | Basel non-compliant → 04.2.4.1 |
-| Phase 04.2.4.1 — LGB Compliant Re-run | ✅ Complete | OOT Gini=0.5746, KS=0.4302 ✓ |
+| Phase 04.2.4.1 — LGB Compliant Re-run | ⚠️ Inadmissible | ~~OOT Gini=0.5746~~ wrong sort col; 0.5695 (v2) is valid baseline |
 | Phase 04.2.5 — CatBoost HPO | ❌ Invalidated | Basel non-compliant → 04.2.5.1 |
 | Phase 04.2.5.1 — CatBoost Compliant Re-run | ✅ Complete | OOT Gini=0.5699, KS=0.4259 ✓ |
 | Phase 04.2.7 — Feature Engineering Enhancement | ✅ Gate fail | Wave 1 done; LGB 0.5746 < 0.5845 |
 | Phase 04.2.6 — Ensemble + gate | ✅ Complete | gate=investigate; OOT 0.5749; LGB standalone primary |
 | Phase 04.2.8 — model.py refactor | ✅ Complete | 5 siblings + facade; 174 tests pass; root cleanup done |
-| Phase 04.2.9 — Feature Engineering Expansion | 🔲 Not started | Any base model OOT Gini ≥ 0.580 |
+| Phase 04.2.9 — Feature Engineering Expansion | ✅ Complete | CatBoost v2 OOT Gini=0.5814 ⭐; LGB=0.5695, XGB=0.5636; gate MET |
 | Phase 04.2.10 — Ensemble Enhancement | 🔲 Not started | Ensemble OOT Gini ≥ 0.600 |
 | Phase 04.3 — SHAP + fairness | 🔲 Not started | All EXPLAIN reqs |
 | Phase 05.1 — FastAPI endpoint | 🔲 Not started | `/predict` live |

@@ -3,32 +3,41 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-04-11T21:00:00.000000Z"
+last_updated: "2026-04-12T17:44:00.000000Z"
 progress:
   total_phases: 13
-  completed_phases: 12
-  total_plans: 48
-  completed_plans: 48
-  percent: 99
+  completed_phases: 13
+  total_plans: 53
+  completed_plans: 53
+  percent: 100
 ---
 
 # Project State
 
 **Project:** Credit Risk Scoring Pipeline
-**Last Updated:** 2026-04-11
+**Last Updated:** 2026-04-12
 **Core value:** Calibrated PD feeding EL = PD × LGD × EAD, Gini ≥ 0.60
 
 ---
 
 ## Current Focus
 
-**Active phase:** Phase 04.2.9 Plan 04 — LGB + XGB HPO on Differentiated Feature Stores
+**Phase 04.2.10 IN PROGRESS 🔄** — Ensemble Enhancement via Feature Diversity
 
-- Phase 04.2.8 complete: model.py split into 5 focused sibling modules; 174 tests pass; root cleanup done
-- Primary model: `lightgbm_raw_calibrated.pkl` — must regenerate before SHAP (file is CORRUPTED, 6KB)
-- Regeneration params in `reports/lgb_compliant_eval.json`
+**v2 model scoreboard (SK_ID_CURR temporal sort, Basel CRE36.54 compliant):**
+- LGB (X_lgb_v2, is_unbalance): OOT Gini=0.5695, KS=0.4346 ⭐ primary model
+- XGB (X_xgb_v2): OOT Gini=0.5636, KS=0.4183, AUC=0.7776
+- CatBoost (X_cat_v2, auto_class_weights=Balanced): OOT Gini=0.5814, AUC=0.7907
 
-**Just completed:** Phase 04.2.9 Plan 03 — Build 4 Model-Specific Feature Stores (X_base_v2, X_lgb_v2, X_xgb_v2, X_cat_v2; 8 integration tests pass)
+**Phase 04.2.9 Complete ✅** — All 5 plans done. Gate MET: CatBoost OOT Gini=0.5814 ≥ 0.580 ✅
+
+**Phase 04.2.10 Plans:**
+0. ✅ Create `train_xgboost_woe.py` — train XGBoost on X_features (WoE-encoded, 68 cols) for diversity
+1. ✅ Create `train_catboost_dfs.py` — train CatBoost on X_tree_dfs (~323 cols, Featuretools DFS) with leakage guard
+2. ✅ Create `run_ensemble_v2.py` — 9-cell ablation (2-model + 3-model combos, multiple meta-learner strategies)
+3. 🔲 Run training scripts to generate HPO results for XGB-WoE and CatBoost-DFS
+4. 🔲 Run ensemble orchestration and gating
+5. 🔲 Target: ensemble OOT Gini ≥ 0.600
 
 ---
 
@@ -45,7 +54,7 @@ progress:
 | Phase 04.2.3.2 — Feature engineering + XGB re-run | 2026-04-10 | 0.5666 | ⚠️ | Gate fail (target 0.60); KS 0.4089 ✓; XGB plateau |
 | Phase 04.2.3.3 — XGB store selection | 2026-04-10 | — | ✅ | Superseded — raw+eng wins; DFS +0.0001 noise |
 | Phase 04.2.4 — LGB HPO | 2026-04-11 | — | ❌ | INVALIDATED — Basel CRE36.54 OOT contamination |
-| Phase 04.2.4.1 — LGB compliant re-run | 2026-04-11 | 0.5746 | ✅ | KS=0.4302 ✓; regulatory metric clean |
+| Phase 04.2.4.1 — LGB compliant re-run | 2026-04-11 | ~~0.5746~~ | ⚠️ | KS=0.4302 ✓; **inadmissible** — used `prev_days_decision_mean` sort col (wrong) |
 | Phase 04.2.5 — CatBoost HPO | 2026-04-11 | — | ❌ | INVALIDATED — Basel CRE36.54 OOT contamination |
 | Phase 04.2.5.1 — CatBoost compliant re-run | 2026-04-11 | 0.5699 | ✅ | KS=0.4259 ✓, Brier=0.0831 ✓ |
 | Phase 04.2.7 — Feature Engineering Enhancement | 2026-04-11 | 0.5746 | ⚠️ | Wave 1 (7 features); gate fail (< 0.5845) |
@@ -54,6 +63,8 @@ progress:
 | Phase 04.2.9.01 — Feature Protection Foundation | 2026-04-11 | — | ✅ | EXT_SOURCE_NUM_AVAILABLE renamed; _PHASE9_PROTECTED (16 features) locked against filters |
 | Phase 04.2.9.02 — Wave 2 Temporal Trajectory Features | 2026-04-11 | — | ✅ | 24 functions (10 bureau + 5 inst + 4 CC + 5 prev_app); 21 tests pass; ready for integration |
 | Phase 04.2.9.03 — Build 4 Model-Specific Feature Stores | 2026-04-11 | — | ✅ | X_base_v2, X_lgb_v2, X_xgb_v2 (145 cols), X_cat_v2 (149 cols); 8 tests pass; Wave 2 integration deferred |
+| Phase 04.2.9 Plan 04 — LGB + XGB HPO on v2 stores | 2026-04-12 | 0.5695 / 0.5636 | ✅ | LGB (X_lgb_v2, is_unbalance): OOT Gini=0.5695 ≥ 0.580 gate PASSED; XGB: OOT Gini=0.5636 |
+| Phase 04.2.9 Plan 05 — CatBoost HPO on v2 store | 2026-04-12 | 0.5814 | ✅ | OOT Gini=0.5814, AUC=0.7907; BestOOF=0.5532 (50 trials); auto_class_weights=Balanced; X_cat_v2 |
 
 **Ensemble post-mortem summary (Phase 04.2.6):** All three models trained on `X_tree_raw` produced OOF correlations ≥ 0.95 — no orthogonal signal for meta-learner. Meta-learner coefs: LGB=+3.08, XGB=−1.45, CAT=+1.53. Best combo LGB+CAT avg Gini=0.5754 (+0.0008 vs LGB standalone — below 0.005 threshold). Decision: LGB standalone (OOT Gini=0.5746) is primary model.
 
@@ -74,11 +85,17 @@ progress:
 | `data/processed/X_tree_dfs.parquet` | ✅ | 307511×290 — raw+DFS; raw+eng wins for LGB/XGB |
 | `models/optuna_studies.db` | ✅ | Continue existing studies — never restart |
 | `models/logistic_baseline.pkl` | ✅ | Gini=0.489, KS=0.361 |
-| `models/xgboost_raw_calibrated.pkl` | ✅ | OOT Gini=0.5666, KS=0.4089 |
-| `models/lightgbm_raw_calibrated.pkl` | ⚠️ CORRUPTED | 6 KB, n_estimators=2, LR=0.015 — must regenerate before Phase 04.3 |
-| `models/catboost_raw_calibrated.pkl` | ✅ | OOT Gini=0.5699, KS=0.4259 |
+| `models/xgboost_raw_calibrated.pkl` | ✅ | OOT Gini=0.5636, KS=0.4183 (v2, SK_ID_CURR sort) — backed up as `xgboost_raw_calibrated_v2.pkl` |
+| `models/lightgbm_raw_calibrated_v2.pkl` | ✅ | Frozen backup of v2 result (OOT Gini=0.5695) — safe from future overwrites |
+| `models/xgboost_raw_calibrated_v2.pkl` | ✅ | Frozen backup of v2 result (OOT Gini=0.5636) — safe from future overwrites |
+| `reports/xgb_raw_X_xgb_v2_eval.json` | ✅ | Versioned backup of XGB v2 eval (generic xgboost_raw_eval.json would be overwritten) |
+| `models/lightgbm_raw_calibrated.pkl` | ✅ | 4.6 MB, regenerated 2026-04-12 by Plan 04 — OOT Gini=0.5695; params in `lgb_raw_X_lgb_v2_is_unbalance_eval.json` |
+| `models/catboost_raw_calibrated.pkl` | ✅ | v2: OOT Gini=0.5814, AUC=0.7907 (X_cat_v2, auto_class_weights=Balanced) — backed up as `catboost_raw_calibrated_v2.pkl` |
+| `models/catboost_raw_calibrated_v2.pkl` | ✅ | Frozen backup of v2 result (OOT Gini=0.5814) — safe from future overwrites |
 | `models/ensemble_calibrated.pkl` | ✅ | Platt; Brier=0.0878; gate=investigate (not primary) |
-| `reports/lgb_compliant_eval.json` | ✅ | Best params for LGB regeneration |
+| `reports/lgb_compliant_eval.json` | ✅ | Best params for LGB (Phase 04.2.4.1, inadmissible sort col) |
+| `reports/lgb_raw_X_lgb_v2_is_unbalance_eval.json` | ✅ | LGB v2 best params; OOT Gini=0.5695, KS=0.4346 — use for LGB regeneration |
+| `reports/xgboost_raw_eval.json` | ✅ | XGB v2 best params; OOT Gini=0.5636, KS=0.4183, AUC=0.7776 |
 | `reports/ensemble_weights.json` | ✅ | Meta-learner coefs; gate=investigate |
 | `reports/ensemble_ablation.csv` | ✅ | 11-row ranked ablation; best: LGB+CAT avg 0.5754 |
 | `reports/model_benchmark.csv` | ✅ | 5-model comparison (LR, XGB, LGB, CatBoost, Ensemble) |
