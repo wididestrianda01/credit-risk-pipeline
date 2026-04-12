@@ -138,12 +138,24 @@ def _run_cv(params: dict, X_tr: pd.DataFrame, y_tr: pd.Series) -> float:
     """Return mean OOF Gini over stratified 5-fold CV."""
     cv = StratifiedKFold(n_splits=_N_CV_SPLITS, shuffle=True, random_state=_RANDOM_STATE)
     ginis: list[float] = []
+
+    # Detect categorical columns
+    cat_cols = [c for c in X_tr.columns if X_tr[c].dtype == object]
+
     for _, (ti, vi) in enumerate(cv.split(X_tr, y_tr)):
-        X_f, X_v = X_tr.iloc[ti].to_numpy(), X_tr.iloc[vi].to_numpy()
+        X_f = X_tr.iloc[ti].copy()
+        X_v = X_tr.iloc[vi].copy()
         y_f, y_v = y_tr.iloc[ti].to_numpy(), y_tr.iloc[vi].to_numpy()
+
+        # Fill NaN in categorical columns with empty string
+        for col in cat_cols:
+            X_f[col] = X_f[col].fillna("")
+            X_v[col] = X_v[col].fillna("")
+
         m = CatBoostClassifier(**params)
         m.fit(
             X_f, y_f,
+            cat_features=cat_cols,
             eval_set=(X_v, y_v),
             verbose=False,
         )
@@ -234,6 +246,17 @@ def main() -> None:
     X_tr, X_val_es, y_tr, y_val_es = train_test_split(
         X_train, y_train, test_size=0.2, stratify=y_train, random_state=_RANDOM_STATE
     )
+
+    # Detect categorical columns
+    cat_cols = [c for c in X_train.columns if X_train[c].dtype == object]
+
+    # Fill NaN in categorical columns with empty string
+    X_tr = X_tr.copy()
+    X_val_es = X_val_es.copy()
+    for col in cat_cols:
+        X_tr[col] = X_tr[col].fillna("")
+        X_val_es[col] = X_val_es[col].fillna("")
+
     stage1_params = {
         **best_params,
         "bootstrap_type": "Bayesian",
@@ -246,14 +269,21 @@ def main() -> None:
     }
     stage1_model = CatBoostClassifier(**stage1_params)
     stage1_model.fit(
-        X_tr.to_numpy(), y_tr.to_numpy(),
-        eval_set=(X_val_es.to_numpy(), y_val_es.to_numpy()),
+        X_tr, y_tr.to_numpy(),
+        cat_features=cat_cols,
+        eval_set=(X_val_es, y_val_es.to_numpy()),
         verbose=False,
     )
     best_iterations = stage1_model.best_iteration_ or _ITERATIONS_MAX
     print(f"Stage 1 best_iteration_: {best_iterations}")
 
     print("Stage 2: Refit on full X_train with fixed iterations, no early stopping …")
+
+    # Fill NaN in categorical columns with empty string
+    X_train_stage2 = X_train.copy()
+    for col in cat_cols:
+        X_train_stage2[col] = X_train_stage2[col].fillna("")
+
     stage2_params = {
         **best_params,
         "bootstrap_type": "Bayesian",
@@ -264,10 +294,13 @@ def main() -> None:
         "iterations": best_iterations,
     }
     final_model = CatBoostClassifier(**stage2_params)
-    final_model.fit(X_train.to_numpy(), y_train.to_numpy(), verbose=False)
+    final_model.fit(X_train_stage2, y_train.to_numpy(), cat_features=cat_cols, verbose=False)
 
     # ── OOT evaluation ───────────────────────────────────────────────────────
-    oot_preds = final_model.predict_proba(X_oot.to_numpy())[:, 1]
+    X_oot_pred = X_oot.copy()
+    for col in cat_cols:
+        X_oot_pred[col] = X_oot_pred[col].fillna("")
+    oot_preds = final_model.predict_proba(X_oot_pred)[:, 1]
     oot_auc = roc_auc_score(y_oot, oot_preds)
     oot_gini = 2 * oot_auc - 1
 
@@ -295,7 +328,7 @@ def main() -> None:
     calibrated_model = CalibratedClassifierCV(
         FrozenEstimator(final_model), cv="prefit", method="sigmoid"
     )
-    calibrated_model.fit(X_train.to_numpy(), y_train.to_numpy())
+    calibrated_model.fit(X_train_stage2, y_train.to_numpy())
 
     # ── Persist ──────────────────────────────────────────────────────────────
     model_path = _ROOT / _MODEL_PATH
