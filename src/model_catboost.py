@@ -188,6 +188,13 @@ def train_catboost_optuna(
     y = df.pop("TARGET").astype(int)
     X = df
 
+    # CatBoost's C++ engine cannot handle pd.NA (pandas nullable extension types).
+    # Convert any nullable Int/Float/Boolean columns → float64 (pd.NA becomes np.nan).
+    ext_cols = [c for c in X.columns if pd.api.types.is_extension_array_dtype(X[c])]
+    if ext_cols:
+        X = X.copy()
+        X[ext_cols] = X[ext_cols].astype("float64")
+
     # Input guards
     if n_trials < 1:
         raise ValueError(f"n_trials must be >= 1, got {n_trials}.")

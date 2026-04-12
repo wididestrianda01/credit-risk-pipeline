@@ -50,13 +50,15 @@ def check_leaky_columns(feature_store_path: str) -> None:
     """
     df = pd.read_parquet(feature_store_path)
 
-    # Known SK_DPD leaky column patterns
+    # Known SK_DPD leaky column patterns (observation-time delinquency status).
+    # NOTE: inst_days_past_due_* is NOT leaky — it is historical payment behaviour
+    # aggregated from installments_payments.DAYS_PAST_DUE (backward-looking).
+    # Only the SK_DPD columns from POS/CC tables represent current-status leakage.
     leaky_patterns = [
-        "SK_DPD",  # Direct leakage
-        "prev_sk_dpd",
-        "inst_days_past_due",
-        "cc_sk_dpd",
-        "pos_sk_dpd",
+        "SK_DPD",       # Direct credit bureau delinquency flag (observation-time)
+        "prev_sk_dpd",  # Previous application delinquency flag
+        "cc_sk_dpd",    # Credit card current delinquency flag
+        "pos_sk_dpd",   # POS current delinquency flag
     ]
 
     leaky_found = []
