@@ -302,6 +302,13 @@ def generate_catboost_oof_predictions(
     oof_preds : np.ndarray
         OOF predictions (shape n_train,).
     """
+    # CatBoost C++ engine cannot handle pd.NA (pandas nullable extension types).
+    # Convert any nullable Int/Float/Boolean columns → float64 (pd.NA → np.nan).
+    ext_cols = [c for c in X_train.columns if pd.api.types.is_extension_array_dtype(X_train[c])]
+    if ext_cols:
+        X_train = X_train.copy()
+        X_train[ext_cols] = X_train[ext_cols].astype("float64")
+
     cv = _make_cv(groups_train=None, n_splits=5)
     oof_preds = np.zeros(len(X_train))
 
@@ -594,7 +601,13 @@ def run_ensemble_v2(
     doot = xgb.DMatrix(X_xgb_oot.values)
     xgb_oot_pred = xgb_model_oot.predict(doot)
 
-    # CatBoost OOT
+    # CatBoost OOT — convert nullable extension types first
+    ext_cols_cat = [c for c in X_cat_train.columns if pd.api.types.is_extension_array_dtype(X_cat_train[c])]
+    if ext_cols_cat:
+        X_cat_train = X_cat_train.copy()
+        X_cat_train[ext_cols_cat] = X_cat_train[ext_cols_cat].astype("float64")
+        X_cat_oot = X_cat_oot.copy()
+        X_cat_oot[ext_cols_cat] = X_cat_oot[ext_cols_cat].astype("float64")
     cat_model_oot = CatBoostClassifier(**{**cat_params, "iterations": 1000, "verbose": 0})
     cat_model_oot.fit(X_cat_train.values, y_train.values, verbose=False)
     cat_oot_pred_raw = cat_model_oot.predict_proba(X_cat_oot.values)[:, 1]

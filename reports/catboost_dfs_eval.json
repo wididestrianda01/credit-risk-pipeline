@@ -1,0 +1,12 @@
+{
+  "Store": "X_tree_dfs",
+  "Strategy": "scale_pos_weight",
+  "Model": "CatBoost (DFS, Calibrated)",
+  "AUC-ROC": 0.7803920956837822,
+  "Gini": 0.5607841913675644,
+  "OOT_Gini": 0.5607841913675644,
+  "KS": 0.42748618475847855,
+  "Brier": 0.06586878305995077,
+  "BrierSkill": 0.09898008403387937,
+  "AvgPrecision": 0.2648550915184845
+}

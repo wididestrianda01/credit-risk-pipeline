@@ -1,0 +1,12 @@
+{
+  "Store": "X_features",
+  "Strategy": "scale_pos_weight",
+  "Model": "XGBoost (WoE, Calibrated)",
+  "AUC-ROC": 0.7733665509733073,
+  "Gini": 0.5467331019466146,
+  "OOT_Gini": 0.5518737730230341,
+  "KS": 0.41585235868617926,
+  "Brier": 0.06722952626473302,
+  "BrierSkill": 0.09739552016762476,
+  "AvgPrecision": 0.26147352036327165
+}

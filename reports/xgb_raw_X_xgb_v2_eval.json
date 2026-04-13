@@ -1,0 +1,14 @@
+{
+  "Model": "XGBoost (Raw, Calibrated)",
+  "AUC-ROC": 0.7775535213594071,
+  "Gini": 0.5551070427188143,
+  "KS": 0.41826644395521234,
+  "Brier": 0.06667583881315392,
+  "BrierSkill": 0.1048291702613996,
+  "AvgPrecision": 0.2757041219971465,
+  "oof_gini": 0.5400375368957024,
+  "oot_gini": 0.563552081871904,
+  "gap": -0.023514544976201535,
+  "disposition": "REJECT",
+  "reason": "OOT Gini 0.5636 below minimum 0.60 threshold"
+}

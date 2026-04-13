@@ -72,7 +72,7 @@ def main():
 
     exit_code = 0
     try:
-        model, metrics, X_test, y_test, best_params = train_xgboost_optuna(
+        model, metrics, X_test, y_test, best_params, _oof_preds = train_xgboost_optuna(
             str(feature_store_path), n_trials=n_trials
         )
 
