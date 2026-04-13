@@ -39,7 +39,7 @@ import src as _src  # noqa: E402
 if "credit_engine" not in sys.modules:
     sys.modules["credit_engine"] = _src
 
-from credit_engine.model import train_lightgbm_optuna, run_lightgbm_ablation_workflow  # noqa: E402
+from credit_engine.model import train_lightgbm_optuna  # noqa: E402
 
 
 def main():
@@ -85,50 +85,10 @@ def main():
 
     try:
         if args.ablation:
-            # --- Ablation mode: run 9 cells ---
-            print(f"Running full LightGBM ablation (3 stores × 3 strategies = 9 cells)")
-            print(f"Number of trials per cell: {n_trials}")
-            print(f"Total trials: {n_trials * 9}")
-            print(f"Estimated runtime: 2-4 hours depending on hardware")
-            print("="*60)
-            import sys as _sys; _sys.stdout.flush()
+            # --- Ablation mode: not supported ---
+            print("ERROR: Ablation mode is not available in this version.", file=sys.stderr)
+            sys.exit(1)
 
-            results = run_lightgbm_ablation_workflow(n_trials=n_trials)
-
-            # Verify comparison table was created
-            comparison_path = Path("reports") / "lgb_raw_ablation_comparison.csv"
-            if comparison_path.exists():
-                import pandas as pd
-                comparison_df = pd.read_csv(comparison_path)
-                print("\n" + "="*60)
-                print("Ablation Complete — Comparison Table")
-                print("="*60)
-                print(comparison_df[["Store", "Strategy", "OOT_Gini", "BrierSkill"]].to_string(index=False))
-                print("="*60)
-
-                # Extract best model info
-                if len(comparison_df) > 0:
-                    best_idx = comparison_df["OOT_Gini"].idxmax()
-                    best_row = comparison_df.iloc[best_idx]
-                    print(f"\nBest Model: {best_row['Store']} + {best_row['Strategy']}")
-                    print(f"OOT Gini: {best_row['OOT_Gini']:.4f}")
-                    print(f"BrierSkill: {best_row['BrierSkill']:.4f}")
-
-                    # Verify gates
-                    if best_row["OOT_Gini"] > 0.60:
-                        print(f"✓ OOT Gini gate PASSED (> 0.60)")
-                        exit_code = 0
-                    else:
-                        print(f"✗ OOT Gini gate FAILED ({best_row['OOT_Gini']:.4f} <= 0.60)")
-                        exit_code = 1
-
-            print("\nArtifacts saved:")
-            print("  - reports/lgb_raw_ablation_comparison.csv")
-            print("  - reports/lgb_raw_Xtrain_*.json (3 strategy variants)")
-            print("  - reports/lgb_raw_Xtreeraw_*.json (3 strategy variants)")
-            print("  - reports/lgb_raw_Xtreeds_*.json (3 strategy variants)")
-            print("  - models/lightgbm_raw_calibrated.pkl (best model)")
-            print("  - reports/figures/lgb_raw_calibration_plot.png (best model)")
 
         else:
             # --- Single-run mode ---
