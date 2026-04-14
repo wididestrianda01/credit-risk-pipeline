@@ -66,6 +66,7 @@ catboost_info/
 
 # Documentation stubs (not committed)
 docs/
+context/
 
 # Environment
 .env
