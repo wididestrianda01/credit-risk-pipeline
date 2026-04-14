@@ -504,7 +504,9 @@ def compute_fairness_metrics(
                 dem_par = y_pred_group.mean()
 
                 # Equalised odds: TPR and FPR at threshold
-                tn, fp, fn, tp = confusion_matrix(y_group, y_pred_binary_group).ravel()
+                # Use labels=[0, 1] to ensure 2x2 confusion matrix shape even if one class is missing
+                cm = confusion_matrix(y_group, y_pred_binary_group, labels=[0, 1])
+                tn, fp, fn, tp = cm.ravel()
                 tpr = tp / (tp + fn) if (tp + fn) > 0 else 0.0
                 fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
 
@@ -530,7 +532,9 @@ def compute_fairness_metrics(
                 dem_par = y_pred_group.mean()
 
                 # Equalised odds
-                tn, fp, fn, tp = confusion_matrix(y_group, y_pred_binary_group).ravel()
+                # Use labels=[0, 1] to ensure 2x2 confusion matrix shape even if one class is missing
+                cm = confusion_matrix(y_group, y_pred_binary_group, labels=[0, 1])
+                tn, fp, fn, tp = cm.ravel()
                 tpr = tp / (tp + fn) if (tp + fn) > 0 else 0.0
                 fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
 
