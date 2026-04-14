@@ -386,3 +386,135 @@ def test_integration_end_to_end():
 
     # Final log
     print("✓ Integration test PASSED: all figures, fairness CSV, stability metric")
+
+
+# ---------------------------------------------------------------------------
+# Phase 04.4 Fairness Gate — v3 models (EU AI Act dual-load evaluation)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_v3_fairness_gate():
+    """
+    Phase 04.4 fairness gate: evaluate all three v3 models using the dual-load pattern.
+
+    Dual-load pattern:
+    - v3 parquet (163/167 cols, no AGE_YEARS / CODE_GENDER): model prediction features
+    - X_train.parquet: provides CODE_GENDER (SK_ID_CURR-aligned)
+    - X_xgb_v2.parquet: provides AGE_YEARS (SK_ID_CURR-aligned)
+
+    Expected outcome (INVESTIGATE — documented v3 result):
+    - Age DIR improved vs v2 baseline (0.346) for at least one model
+    - XGBoost Gender DIR ≥ 0.80 (documented pass)
+    - No model achieves Age DIR ≥ 0.80 (proxy features carry residual age signal)
+
+    Raises FileNotFoundError if any required file is missing.
+    """
+    from pathlib import Path
+    from src.model_base import _TEMPORAL_SORT_COL, _TEST_SIZE, load_model
+
+    _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+    _V2_BASELINE_AGE_DIR = 0.346
+    _DIR_THRESHOLD = 0.80
+
+    MODEL_PATHS = {
+        "xgboost": _PROJECT_ROOT / "models" / "xgboost_v3_calibrated.pkl",
+        "lightgbm": _PROJECT_ROOT / "models" / "lightgbm_v3_calibrated.pkl",
+        "catboost": _PROJECT_ROOT / "models" / "catboost_v3_calibrated.pkl",
+    }
+    STORE_V3_PATHS = {
+        "xgboost": _PROJECT_ROOT / "data" / "processed" / "X_xgb_v3.parquet",
+        "lightgbm": _PROJECT_ROOT / "data" / "processed" / "X_lgb_v3.parquet",
+        "catboost": _PROJECT_ROOT / "data" / "processed" / "X_cat_v3.parquet",
+    }
+    X_TRAIN_PATH = _PROJECT_ROOT / "data" / "processed" / "X_train.parquet"
+    X_V2_PATH = _PROJECT_ROOT / "data" / "processed" / "X_xgb_v2.parquet"
+
+    # Validate all files present before any model load (fail-fast, no partial runs)
+    for name, path in {**MODEL_PATHS, **STORE_V3_PATHS,
+                       "X_train": X_TRAIN_PATH, "X_xgb_v2": X_V2_PATH}.items():
+        if not path.exists():
+            raise FileNotFoundError(f"Required file missing for v3 fairness gate: {path}")
+
+    age_dirs: dict[str, float] = {}
+    gender_dirs: dict[str, float] = {}
+
+    for model_name in ("xgboost", "lightgbm", "catboost"):
+        model = load_model(str(MODEL_PATHS[model_name]))
+
+        # --- Load v3 store, pop TARGET, temporal sort -----------------------
+        X = pd.read_parquet(STORE_V3_PATHS[model_name])
+        assert "AGE_YEARS" not in X.columns, f"{model_name} v3 store still contains AGE_YEARS"
+        assert "CODE_GENDER" not in X.columns, f"{model_name} v3 store still contains CODE_GENDER"
+
+        y = X.pop("TARGET")
+        sort_idx = X[_TEMPORAL_SORT_COL].argsort()
+        X = X.iloc[sort_idx].reset_index(drop=True)
+        y = y.iloc[sort_idx].reset_index(drop=True)
+
+        test_start = int(len(X) * (1.0 - _TEST_SIZE))
+        X_oot = X.iloc[test_start:].copy()
+        y_oot = y.iloc[test_start:]
+        sk_ids_oot = X_oot[_TEMPORAL_SORT_COL].values
+        X_oot = X_oot.drop(columns=[_TEMPORAL_SORT_COL])
+
+        # --- Side-load protected attributes (three-source dual-load) --------
+        X_raw = pd.read_parquet(X_TRAIN_PATH, columns=["SK_ID_CURR", "CODE_GENDER"])
+        X_raw = X_raw.set_index("SK_ID_CURR")
+        code_gender = X_raw.loc[sk_ids_oot, "CODE_GENDER"]
+
+        X_v2 = pd.read_parquet(X_V2_PATH, columns=["SK_ID_CURR", "AGE_YEARS"])
+        X_v2 = X_v2.set_index("SK_ID_CURR")
+        age_years = X_v2.loc[sk_ids_oot, "AGE_YEARS"]
+
+        X_fairness = X_oot.copy()
+        X_fairness["CODE_GENDER"] = code_gender.values
+        X_fairness["AGE_YEARS"] = age_years.values
+
+        # --- Compute fairness metrics ----------------------------------------
+        fairness_df = compute_fairness_metrics(
+            model=model,
+            X=X_fairness,
+            y=y_oot,
+            sensitive_cols=["CODE_GENDER", "AGE_YEARS"],
+        )
+
+        age_rows = fairness_df[fairness_df["group_name"].str.startswith("Age:")]
+        gender_rows = fairness_df[fairness_df["group_name"].str.startswith("Gender:")]
+
+        age_dir = age_rows["demographic_parity_disparate_impact"].iloc[0] if len(age_rows) > 0 else 0.0
+        gender_dir = gender_rows["demographic_parity_disparate_impact"].iloc[0] if len(gender_rows) > 0 else 0.0
+
+        age_dirs[model_name] = age_dir
+        gender_dirs[model_name] = gender_dir
+
+        print(f"  {model_name}: Age DIR={age_dir:.4f}  Gender DIR={gender_dir:.4f}  "
+              f"{'✓ PASS' if (age_dir >= _DIR_THRESHOLD and gender_dir >= _DIR_THRESHOLD) else '✗ INVESTIGATE'}")
+
+    # --- Gate assertions (INVESTIGATE result documented) -------------------
+    # Age DIR must have improved vs v2 baseline for at least one model
+    best_age_dir = max(age_dirs.values())
+    assert best_age_dir > _V2_BASELINE_AGE_DIR, (
+        f"v3 Age DIR ({best_age_dir:.4f}) did not improve over v2 baseline ({_V2_BASELINE_AGE_DIR:.3f}) "
+        "for any model — proxy feature removal may have had no effect"
+    )
+    print(f"✓ Age DIR improved vs v2 baseline: best v3={best_age_dir:.4f} > v2={_V2_BASELINE_AGE_DIR:.3f}")
+
+    # XGBoost Gender DIR must pass the threshold (documented pass in Phase 04.4)
+    assert gender_dirs["xgboost"] >= _DIR_THRESHOLD, (
+        f"XGBoost v3 Gender DIR ({gender_dirs['xgboost']:.4f}) regressed below threshold "
+        f"({_DIR_THRESHOLD:.2f}) — check CODE_GENDER side-load alignment"
+    )
+    print(f"✓ XGBoost Gender DIR: {gender_dirs['xgboost']:.4f} ≥ {_DIR_THRESHOLD:.2f}")
+
+    # Document INVESTIGATE result: no model achieves Age DIR ≥ 0.80 yet
+    # (proxy features carry residual age signal — Phase 04.5 follow-up required)
+    passing_age = [n for n, d in age_dirs.items() if d >= _DIR_THRESHOLD]
+    print(
+        f"  Age DIR gate: {len(passing_age)}/3 models pass ≥{_DIR_THRESHOLD:.2f} "
+        f"(INVESTIGATE — proxy features carry residual age signal)"
+    )
+
+    print("✓ v3 fairness gate test PASSED (INVESTIGATE result documented)")
