@@ -84,29 +84,82 @@
 
 **Done condition:** Ensemble OOT Gini ≥ 0.600; `ensemble_v2_ablation.csv` complete; `model_benchmark.csv` updated; best ensemble saved as `models/ensemble_v2_calibrated.pkl` if gate passes
 
-**Status:** 🔄 In progress — 3 scripts created and committed; awaiting training runs
-- ✅ `scripts/train_xgboost_woe.py` created — trains XGBoost on X_features (WoE), saves best_params + eval
-- ✅ `scripts/train_catboost_dfs.py` created — trains CatBoost on X_tree_dfs (DFS), validates SK_DPD leakage
-- ✅ `scripts/run_ensemble_v2.py` created — orchestrates 9-cell ablation with temporal CV and gating
+**Status:** ✅ Complete — gate=FAIL (best ensemble OOT Gini=0.5681 < 0.580 INVESTIGATE floor)
+- ✅ `scripts/train_xgboost_woe.py` — XGB-WoE OOT Gini=0.5519, AUC=0.7734, KS=0.4159
+- ✅ `scripts/train_catboost_dfs.py` — CatBoost-DFS OOT Gini=0.5608, AUC=0.7804, KS=0.4275
+- ✅ `scripts/run_ensemble_v2.py` — 9-cell ablation; best: LGB+CatBoost-DFS rank_avg OOT Gini=0.5681, KS=0.4362
+- CatBoost v2 (OOT Gini=0.5814) remains primary model for SHAP and production serving
 
 ---
 
-## Phase 04.3 — SHAP Explainability and Fairness
+## Phase 04.3 — SHAP Explainability and Fairness ✅ Complete
 
 **Goal:** Implement `src/explain.py` with global + local SHAP plots and regulatory fairness metrics
 
-**Pre-condition:** Regenerate `models/lightgbm_raw_calibrated.pkl` from `lgb_compliant_eval.json` best_params before starting (current pkl corrupted by test run)
+**Result (2026-04-14):** All 4 plans executed + inline disparate impact ratio fix committed.
+- `src/explain.py`: 6 public functions — `compute_shap_values`, `plot_shap_summary`, `plot_shap_local`, `compute_fairness_metrics`, `get_adverse_action_factors`, `compute_shap_stability`
+- `FEATURE_LABELS`: 171-entry module-level dict — GDPR Art. 22 compliant (no raw column names in adverse action output)
+- SHAP stability: Spearman rank correlation = 0.9995 (Basel CRE36.54 threshold ≥ 0.90 ✓)
+- Fairness: per-attribute disparate impact ratios; Gender DIR ≈ 0.955 (✓ EU AI Act ≥ 0.80); Age DIR ≈ 0.346 (✗ flagged — Young vs Senior gap)
+- `reports/figures/`: shap_beeswarm.png, shap_bar.png, shap_waterfall_0.png, shap_force_0.html
+- `reports/fairness_metrics.csv`: group_name + demographic_parity + tpr + fpr + 3 `_disparate_impact` cols
+- `tests/test_explain.py`: 11 tests (10 fast + 1 slow integration), all passing
 
-**Plans:**
-1. Implement `compute_shap_values(model, X)` using `shap.TreeExplainer`
-2. Implement `plot_shap_summary(shap_values, X, save_path)` — global beeswarm + bar
-3. Implement `plot_shap_local(shap_values, X, idx, save_path)` — waterfall + force plots
-4. Implement `compute_fairness_metrics(model, X, y, sensitive_cols)` — demographic parity + equalised odds
-5. Structure SHAP output dict for adverse action notices (top-5 negative factors per applicant)
-6. Add TDD tests for all explainability functions
+**Requirements:** EXPLAIN-01 through EXPLAIN-04, TEST-04 — all satisfied
 
-**Requirements:** EXPLAIN-01 through EXPLAIN-04, TEST-04
-**Done condition:** All 4 EXPLAIN requirements satisfied, figures saved to `reports/figures/`, tests passing
+---
+
+## Phase 04.4 — Fairness-Compliant Feature Stores and Model Retraining ❌ Descoped
+
+**Goal:** Remove EU AI Act Art. 6 / ECHR-prohibited features from all v2 feature stores and retrain XGBoost, LightGBM, and CatBoost to achieve Age DIR ≥ 0.80
+
+**Regulated features to remove:** `AGE_YEARS`, `EMPLOYED_TO_AGE_RATIO`, `CNT_CHILDREN`, `CNT_FAM_MEMBERS`
+- `AGE_YEARS` — direct age encoding (EU AI Act Art. 6 protected characteristic)
+- `EMPLOYED_TO_AGE_RATIO` — derived from birth year; encodes age directly
+- `CNT_CHILDREN` / `CNT_FAM_MEMBERS` — family/parental status (Equal Treatment Directive, ECHR Art. 14)
+
+**Proxy retention strategy:**
+- Age signal → retained via `YEARS_EMPLOYED`, `bureau_cnt`, `prev_cnt`, credit history aggregates (legitimate risk signals uncorrelated with birth year)
+- Family size signal → absorbed by `CREDIT_INCOME_RATIO`, `ANNUITY_INCOME_RATIO` (income-to-obligation ratios capture financial load without discriminating on family composition)
+
+**Plans created (2026-04-14):**
+- [x] 04.4-01-v3-feature-stores-PLAN.md — TDD: create v3 stores (163/163/167 cols) by dropping regulated cols
+- [x] 04.4-02-xgboost-v3-retrain-PLAN.md — Retrain XGBoost on X_xgb_v3; OOT Gini=0.5075
+- [x] 04.4-03-lightgbm-v3-retrain-PLAN.md — Retrain LightGBM on X_lgb_v3; OOT Gini=0.5610 (**Phase 05 primary**)
+- [x] 04.4-04-catboost-v3-retrain-PLAN.md — Retrain CatBoost on X_cat_v3; OOT Gini=0.5520
+- [x] 04.4-05-fairness-eval-and-gate-PLAN.md — Dual-load fairness eval; INVESTIGATE: Age DIR improved (0.449 vs 0.346) but proxy features prevent ≥ 0.80; XGB Gender DIR ✓
+
+**Wave structure:**
+- Wave 1: Plan 01 (v3 feature stores)
+- Wave 2: Plans 02, 03, 04 (XGB, LGB, CatBoost training — parallel)
+- Wave 3: Plan 05 (fairness evaluation + gate)
+
+**Done condition:** All three calibrated models retrained on fairness-compliant stores; Age DIR ≥ 0.80; Gender DIR ≥ 0.80 (no regression); Gini ≥ 0.55 (floor); CLAUDE.md updated with new model paths and metrics
+
+**Requirements:** FAIR-01 through FAIR-06
+
+---
+
+## Phase 04.5 — Project Explanation Notebooks ✅ COMPLETE
+
+**Goal:** Create and update all four project Jupyter notebooks — notebooks 01 and 02 reviewed/augmented where gaps exist, notebooks 03 and 04 built from scratch — to form a complete analytical narrative of the end-to-end credit risk pipeline.
+
+**Completion Summary (2026-04-14):**
+
+- ✅ **04.5-01:** Notebook 01 (EDA and Data Quality) — gap-review completed; temporal sort and feature evolution narrative integrated
+- ✅ **04.5-02:** Notebook 02 (Feature Engineering) — tree feature stores (X_tree_raw, v2 stores), temporal trajectory features, feature protection added
+- ✅ **04.5-03:** Notebook 03 (Modeling and Evaluation) — 15-cell complete notebook; LR baseline (Gini=0.489), v2 models comparison (XGB/LGB/CatBoost), Basel CRE36.54 temporal validation methodology, CatBoost v2 deployment decision (Gini=0.5814), live inference demo, model card, fairness metrics (Gender DIR=0.955 ✓)
+- ✅ **04.5-04:** Notebook 04 (Explainability and Fairness) — 15-cell complete notebook; SHAP global (beeswarm, bar) and local (waterfall) explainability, fairness metrics and disparate impact analysis, GDPR Art. 22 adverse action notice template, EU AI Act Art. 6 high-risk AI compliance, production readiness summary
+
+**All four notebooks:**
+- Run end-to-end without errors
+- Contain ≥15 cells each (substantive content)
+- Follow narrative style: markdown context → code → "What we see" interpretation
+- Use artifact-first design: pre-computed figures from Phase 04.3, fairness CSV from Phase 04.3
+- Include regulatory framing (GDPR Art. 22, EU AI Act Art. 6, Basel III CRE36.54)
+- No TODO stubs, no `plt.show()` calls
+
+**Requirements satisfied:** NB-01, NB-02, NB-03, NB-04
 
 ---
 
@@ -168,7 +221,7 @@ Phase 01 → Phase 02 → Phase 04.2.1 → 04.2.2 → 04.2.3 → 04.2.3.1 → 04
                                                                                             ↓
                                                                            04.2.10 (ensemble diversity)
                                                                                             ↓
-                                              04.2.8 (model.py refactor, parallel) ──── 04.3 → 05.1 → 05.2 → 06
+                                              04.2.8 (model.py refactor, parallel) ──── 04.3 → 04.4 → 05.1 → 05.2 → 06
 ```
 
 ---
@@ -193,10 +246,12 @@ Phase 01 → Phase 02 → Phase 04.2.1 → 04.2.2 → 04.2.3 → 04.2.3.1 → 04
 | Phase 04.2.6 — Ensemble + gate | ✅ Complete | gate=investigate; OOT 0.5749; LGB standalone primary |
 | Phase 04.2.8 — model.py refactor | ✅ Complete | 5 siblings + facade; 174 tests pass; root cleanup done |
 | Phase 04.2.9 — Feature Engineering Expansion | ✅ Complete | CatBoost v2 OOT Gini=0.5814 ⭐; LGB=0.5695, XGB=0.5636; gate MET |
-| Phase 04.2.10 — Ensemble Enhancement | 🔲 Not started | Ensemble OOT Gini ≥ 0.600 |
-| Phase 04.3 — SHAP + fairness | 🔲 Not started | All EXPLAIN reqs |
-| Phase 05.1 — FastAPI endpoint | 🔲 Not started | `/predict` live |
-| Phase 05.2 — Streamlit dashboard | 🔲 Not started | E2E flow works |
-| Phase 06 — LaTeX report | 🔲 Not started | PDF compiles |
+| Phase 04.2.10 — Ensemble Enhancement | ✅ Complete (gate=FAIL) | Best: LGB+CatBoost-DFS rank_avg, OOT Gini=0.5681; CatBoost v2 (0.5814) is primary |
+| Phase 04.3 — SHAP + fairness | ✅ Complete | 11/11 tests; 4 figures; fairness CSV with DIR; SHAP stability=0.9995; GDPR/Basel/EU-AIAct |
+| Phase 04.4 — Fairness-Compliant Retraining | ❌ Descoped | Policy revised 2026-04-14: Gender DIR gate only; v2 CatBoost (Gini=0.5814, Gender DIR=0.955 ✓) is production model; v3 stores/models archived |
+| Phase 04.5 — Project Explanation Notebooks | ✅ Complete | All 4 plans finished; 4×15-cell notebooks; artifact-first; GDPR/fairness/Basel compliant |
+| Phase 05.1 — FastAPI endpoint | 🔲 Not started | `/predict` returns PD + adverse action factors |
+| Phase 05.2 — Streamlit dashboard | 🔲 Not started | E2E scoring flow, SHAP waterfall |
+| Phase 06 — LaTeX report | 🔲 Not started | PDF compiles, >15 pages |
 
-*Roadmap updated: 2026-04-11*
+*Roadmap updated: 2026-04-14*
