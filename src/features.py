@@ -3796,3 +3796,128 @@ def build_dfs_feature_store(
         pickle.dump(feature_columns, fh)
 
     return X_merged, feature_columns
+
+
+# ============================================================================
+# Phase 04.4: Build EU AI Act Fairness-Compliant v3 Feature Stores
+# ============================================================================
+
+
+def build_v3_feature_stores(data_dir: str) -> None:
+    """
+    Create fairness-compliant v3 feature stores by dropping regulated columns from v2.
+
+    Regulated columns (EU AI Act Art. 6 + ECHR Art. 14):
+    - AGE_YEARS (direct age encoding)
+    - EMPLOYED_TO_AGE_RATIO (derived from age)
+    - CNT_CHILDREN (family status)
+    - CNT_FAM_MEMBERS (family composition)
+
+    v2 stores (immutable baseline) remain unchanged.
+    v3 stores are saved as new parquet files.
+
+    Parameters
+    ----------
+    data_dir : str
+        Path to data directory (typically "data/")
+
+    Returns
+    -------
+    None
+
+    Side effects
+    -----------
+    Creates three new parquet files in data/processed/:
+    - X_lgb_v3.parquet (307,511 × 163)
+    - X_xgb_v3.parquet (307,511 × 163)
+    - X_cat_v3.parquet (307,511 × 167)
+
+    Also creates feature_removal_audit.txt with metadata.
+
+    Raises
+    ------
+    AssertionError
+        If v2 store not found or regulated columns missing.
+    """
+    from pathlib import Path
+
+    data_dir = Path(data_dir)
+    processed_dir = data_dir / "processed"
+
+    # Regulated columns to remove (identical across all v3 stores)
+    regulated_cols = [
+        "AGE_YEARS",
+        "EMPLOYED_TO_AGE_RATIO",
+        "CNT_CHILDREN",
+        "CNT_FAM_MEMBERS",
+    ]
+
+    # v2 → v3 mapping
+    stores = {
+        "X_lgb_v2.parquet": "X_lgb_v3.parquet",
+        "X_xgb_v2.parquet": "X_xgb_v3.parquet",
+        "X_cat_v2.parquet": "X_cat_v3.parquet",
+    }
+
+    audit_log = []
+
+    for v2_name, v3_name in stores.items():
+        v2_path = processed_dir / v2_name
+        v3_path = processed_dir / v3_name
+
+        # Load v2 store
+        assert v2_path.exists(), f"v2 store not found: {v2_path}"
+        df_v2 = pd.read_parquet(v2_path)
+        print(f"\nLoaded {v2_name}: shape={df_v2.shape}")
+
+        # Verify regulated columns present
+        found_cols = [c for c in regulated_cols if c in df_v2.columns]
+        if not found_cols:
+            raise AssertionError(
+                f"No regulated columns found in {v2_name}. "
+                f"Expected at least one of {regulated_cols}, found none."
+            )
+        print(f"  Found regulated cols: {found_cols}")
+
+        # Drop regulated columns
+        df_v3 = df_v2.drop(columns=found_cols, errors="ignore")
+        print(f"  Dropped {len(found_cols)} regulated cols → shape={df_v3.shape}")
+
+        # Verify AGE_YEARS and key regulated cols are gone
+        for col in ["AGE_YEARS", "EMPLOYED_TO_AGE_RATIO"]:
+            assert col not in df_v3.columns, f"{col} still present after drop!"
+
+        # Verify row count unchanged (pure column drop)
+        assert len(df_v3) == len(df_v2), "Row count changed — unexpected filtering occurred"
+
+        # Verify index preserved
+        assert df_v3.index.equals(df_v2.index), "Index mismatch after drop"
+
+        # Save v3 store
+        df_v3.to_parquet(v3_path, index=False)
+        print(f"  Saved {v3_name} ({df_v3.shape[0]} rows × {df_v3.shape[1]} cols)")
+
+        # Log entry
+        audit_log.append({
+            "v2_file": v2_name,
+            "v3_file": v3_name,
+            "v2_shape": df_v2.shape,
+            "v3_shape": df_v3.shape,
+            "cols_dropped": len(found_cols),
+            "timestamp": pd.Timestamp.now().isoformat(),
+        })
+
+    # Write audit log
+    audit_path = processed_dir / "feature_removal_audit.txt"
+    with open(audit_path, "w") as f:
+        f.write("Feature Removal Audit — Phase 04.4 (Fairness Compliance)\n")
+        f.write("=" * 70 + "\n\n")
+        f.write(f"Timestamp: {pd.Timestamp.now().isoformat()}\n")
+        f.write(f"Regulated columns removed: {', '.join(regulated_cols)}\n\n")
+        for entry in audit_log:
+            f.write(f"  {entry['v2_file']} → {entry['v3_file']}\n")
+            f.write(f"    v2 shape: {entry['v2_shape']}  |  v3 shape: {entry['v3_shape']}\n")
+            f.write(f"    Cols dropped: {entry['cols_dropped']}\n\n")
+
+    print(f"\nAudit log written to {audit_path}")
+    print(f"v3 feature stores creation complete.")
