@@ -3894,7 +3894,7 @@ def build_v3_feature_stores(data_dir: str) -> None:
         assert df_v3.index.equals(df_v2.index), "Index mismatch after drop"
 
         # Save v3 store
-        df_v3.to_parquet(v3_path, index=False)
+        df_v3.to_parquet(v3_path, index=True)
         print(f"  Saved {v3_name} ({df_v3.shape[0]} rows × {df_v3.shape[1]} cols)")
 
         # Log entry
