@@ -4015,13 +4015,11 @@ class TestEnsembleCalibration:
 
         Validates:
         - Model pickle is valid
-        - Model has correct feature count (163, matching X_xgb_v3)
         - Model.predict_proba() returns valid probabilities (0 ≤ p ≤ 1)
         - OOT Gini can be computed from predictions
         """
         from src.utils import gini_coefficient
 
-        # Load v3 model
         project_root = Path(__file__).resolve().parents[1]
         model_path = project_root / "models" / "xgboost_v3_calibrated.pkl"
         if not model_path.exists():
@@ -4030,29 +4028,81 @@ class TestEnsembleCalibration:
         model = load_model(str(model_path))
         assert model is not None, "Model load returned None"
 
-        # Load v3 store (no AGE_YEARS)
-        X_v3_path = project_root / "data" / "processed" / "X_xgb_v3.parquet"
-        X_v3 = pd.read_parquet(X_v3_path)
+        # Load v3 store — pop TARGET and drop SK_ID_CURR (not model features)
+        X_v3 = pd.read_parquet(project_root / "data" / "processed" / "X_xgb_v3.parquet")
         assert "AGE_YEARS" not in X_v3.columns, "AGE_YEARS should not be in v3 store"
-        assert X_v3.shape[1] == 163, f"Expected 163 cols, got {X_v3.shape[1]}"
+        y_all = X_v3.pop("TARGET")
+        X_v3 = X_v3.drop(columns=["SK_ID_CURR"], errors="ignore")
 
-        # Load target
-        y_path = project_root / "data" / "processed" / "y_train.parquet"
-        y = pd.read_parquet(y_path).squeeze()
-
-        # Subset to OOT (last 20%, matching train_xgboost_v3.py)
+        # OOT: last 20% (temporal order, matching train_xgboost_v3.py)
         test_start = int(len(X_v3) * 0.8)
         X_oot = X_v3.iloc[test_start:]
-        y_oot = y.iloc[test_start:]
+        y_oot = y_all.iloc[test_start:]
 
-        # Score
         y_pred_proba = model.predict_proba(X_oot)[:, 1]
         assert len(y_pred_proba) == len(y_oot), "Score length mismatch"
-        assert (y_pred_proba >= 0).all() and (y_pred_proba <= 1).all(), (
-            "Probabilities out of [0, 1]"
-        )
+        assert (y_pred_proba >= 0).all() and (y_pred_proba <= 1).all()
 
-        # Compute Gini
         oot_gini = gini_coefficient(y_oot, y_pred_proba)
         assert oot_gini >= 0.45, f"OOT Gini {oot_gini:.4f} suspiciously low"
         print(f"✓ XGBoost v3 OOT Gini: {oot_gini:.4f}")
+
+    @pytest.mark.integration
+    def test_lightgbm_v3_model_loads(self):
+        """Integration test: LightGBM v3 model loads and scores OOT set."""
+        from src.utils import gini_coefficient
+
+        project_root = Path(__file__).resolve().parents[1]
+        model_path = project_root / "models" / "lightgbm_v3_calibrated.pkl"
+        if not model_path.exists():
+            pytest.skip(f"v3 model not found: {model_path}")
+
+        model = load_model(str(model_path))
+        assert model is not None, "Model load returned None"
+
+        X_v3 = pd.read_parquet(project_root / "data" / "processed" / "X_lgb_v3.parquet")
+        assert "AGE_YEARS" not in X_v3.columns, "AGE_YEARS should not be in v3 store"
+        y_all = X_v3.pop("TARGET")
+        X_v3 = X_v3.drop(columns=["SK_ID_CURR"], errors="ignore")
+
+        test_start = int(len(X_v3) * 0.8)
+        X_oot = X_v3.iloc[test_start:]
+        y_oot = y_all.iloc[test_start:]
+
+        y_pred_proba = model.predict_proba(X_oot)[:, 1]
+        assert len(y_pred_proba) == len(y_oot), "Score length mismatch"
+        assert (y_pred_proba >= 0).all() and (y_pred_proba <= 1).all()
+
+        oot_gini = gini_coefficient(y_oot, y_pred_proba)
+        assert oot_gini >= 0.45, f"OOT Gini {oot_gini:.4f} suspiciously low"
+        print(f"✓ LightGBM v3 OOT Gini: {oot_gini:.4f}")
+
+    @pytest.mark.integration
+    def test_catboost_v3_model_loads(self):
+        """Integration test: CatBoost v3 model loads and scores OOT set."""
+        from src.utils import gini_coefficient
+
+        project_root = Path(__file__).resolve().parents[1]
+        model_path = project_root / "models" / "catboost_v3_calibrated.pkl"
+        if not model_path.exists():
+            pytest.skip(f"v3 model not found: {model_path}")
+
+        model = load_model(str(model_path))
+        assert model is not None, "Model load returned None"
+
+        X_v3 = pd.read_parquet(project_root / "data" / "processed" / "X_cat_v3.parquet")
+        assert "AGE_YEARS" not in X_v3.columns, "AGE_YEARS should not be in v3 store"
+        y_all = X_v3.pop("TARGET")
+        X_v3 = X_v3.drop(columns=["SK_ID_CURR"], errors="ignore")
+
+        test_start = int(len(X_v3) * 0.8)
+        X_oot = X_v3.iloc[test_start:]
+        y_oot = y_all.iloc[test_start:]
+
+        y_pred_proba = model.predict_proba(X_oot)[:, 1]
+        assert len(y_pred_proba) == len(y_oot), "Score length mismatch"
+        assert (y_pred_proba >= 0).all() and (y_pred_proba <= 1).all()
+
+        oot_gini = gini_coefficient(y_oot, y_pred_proba)
+        assert oot_gini >= 0.45, f"OOT Gini {oot_gini:.4f} suspiciously low"
+        print(f"✓ CatBoost v3 OOT Gini: {oot_gini:.4f}")

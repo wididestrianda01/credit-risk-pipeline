@@ -1,26 +1,27 @@
 #!/usr/bin/env python
 """
-train_xgboost_v3.py
--------------------
-Train XGBoost on the fairness-compliant v3 feature store (X_xgb_v3.parquet).
+train_catboost_v3.py
+--------------------
+Train CatBoost on the fairness-compliant v3 feature store (X_cat_v3.parquet).
 
-Uses the best hyperparameters from the existing xgboost_raw_v9 Optuna study
-(104 completed trials, OOF Gini 0.5434) — no re-HPO needed since v3 removes
-only 4 of 163 features (~2.5% change), making the v2-optimal params valid.
+Uses best hyperparameters from the catboost_raw_v3 Optuna study
+(51 completed trials, OOF Gini 0.5532, trial 36) — no re-HPO needed since v3
+removes only 4 of 167 features (~2.4% change), making the v2-optimal params valid.
 
 Basel CRE36.54 compliant temporal validation workflow:
-1. Load v3 store (163 features — no regulated columns)
+1. Load v3 store (167 features — no regulated columns)
 2. Verify AGE_YEARS and other regulated columns are absent
-3. Sort by SK_ID_CURR (monotonically increasing application intake ID)
-4. Carve OOT: freeze most-recent 20% rows (never touched during training)
-5. Train on 80% with best v2 params (single fit — no data leakage)
-6. Calibrate with Platt scaling on 80% train / 20% OOT
-7. Evaluate on frozen OOT → OOT Gini is the regulatory metric
-8. Save model and eval JSON
+3. Extract TARGET label from store (pop to prevent leakage)
+4. Sort by SK_ID_CURR (monotonically increasing application intake ID)
+5. Carve OOT: freeze most-recent 20% rows
+6. Single fit on 80% with best params + auto_class_weights=Balanced
+7. Calibrate with Platt scaling
+8. Evaluate on frozen OOT → OOT Gini is the regulatory metric
+9. Save model and eval JSON
 
 Output:
-- models/xgboost_v3_calibrated.pkl   (Platt-calibrated XGBoostClassifier)
-- reports/xgboost_v3_eval.json       (OOT metrics + params + timestamp)
+- models/catboost_v3_calibrated.pkl   (Platt-calibrated CatBoostClassifier)
+- reports/catboost_v3_eval.json       (OOT metrics + params + timestamp)
 """
 
 from __future__ import annotations
@@ -32,32 +33,31 @@ from pathlib import Path
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-import numpy as np
 import pandas as pd
-import xgboost as xgb
+from catboost import CatBoostClassifier
 
 from src.model_base import (
+    _CAT_ITERATIONS,
     _RANDOM_STATE,
     _TEMPORAL_SORT_COL,
     _TEST_SIZE,
-    _XGB_N_ESTIMATORS,
     calibrate_model,
     save_model,
 )
 from src.utils import evaluate_model
 
-# Best hyperparameters from xgboost_raw_v9 study (trial 47, OOF Gini=0.5434)
-# These were optimised over 104 Optuna trials on the v2 feature store.
-# v3 removes 4 of 163 features — param transfer is sound.
+# Best hyperparameters from catboost_raw_v3 Optuna study
+# (trial 36, OOF Gini=0.5532, 51 trials)
+# v3 removes 4 of 167 features — param transfer is sound.
+# bootstrap_type="Bayesian" is required for bagging_temperature to be valid.
 _BEST_PARAMS: dict = {
-    "colsample_bytree": 0.7595552940919579,
-    "gamma": 1.56955566496891,
-    "learning_rate": 0.03617558383839258,
-    "max_depth": 3,
-    "min_child_weight": 4.804611119097033,
-    "reg_alpha": 1.710682197819308,
-    "reg_lambda": 2.581717713228335e-08,
-    "subsample": 0.6050648219798987,
+    "depth": 10,
+    "learning_rate": 0.00831889320253293,
+    "l2_leaf_reg": 22.046459293778387,
+    "min_data_in_leaf": 5,
+    "bagging_temperature": 1.0436052172524026,
+    "random_strength": 0.00026211230471279157,
+    "grow_policy": "Lossguide",
 }
 
 _REGULATED_COLS: list[str] = [
@@ -67,14 +67,14 @@ _REGULATED_COLS: list[str] = [
     "CNT_FAM_MEMBERS",
 ]
 
-_FEATURE_STORE_PATH = _PROJECT_ROOT / "data" / "processed" / "X_xgb_v3.parquet"
-_MODEL_OUTPUT_PATH = _PROJECT_ROOT / "models" / "xgboost_v3_calibrated.pkl"
-_EVAL_OUTPUT_PATH = _PROJECT_ROOT / "reports" / "xgboost_v3_eval.json"
-_FIGURE_OUTPUT_PATH = _PROJECT_ROOT / "reports" / "figures" / "xgboost_v3_calibration.png"
+_FEATURE_STORE_PATH = _PROJECT_ROOT / "data" / "processed" / "X_cat_v3.parquet"
+_MODEL_OUTPUT_PATH = _PROJECT_ROOT / "models" / "catboost_v3_calibrated.pkl"
+_EVAL_OUTPUT_PATH = _PROJECT_ROOT / "reports" / "catboost_v3_eval.json"
+_FIGURE_OUTPUT_PATH = _PROJECT_ROOT / "reports" / "figures" / "catboost_v3_calibration.png"
 
 
 def main() -> None:
-    """Train XGBoost v3 with Basel CRE36.54 temporal validation workflow."""
+    """Train CatBoost v3 with Basel CRE36.54 temporal validation workflow."""
 
     # 1-2. Load v3 store and verify compliance
     print("Loading v3 feature store...")
@@ -83,7 +83,7 @@ def main() -> None:
 
     for col in _REGULATED_COLS:
         assert col not in X.columns, (
-            f"{col} present in X_xgb_v3 — using wrong store"
+            f"{col} present in X_cat_v3 — using wrong store"
         )
     print(f"  Regulated columns absent: {_REGULATED_COLS}")
 
@@ -113,24 +113,24 @@ def main() -> None:
 
     print(f"  Train 80%: {X_train.shape}  |  OOT 20%: {X_oot.shape}")
 
-    # Compute scale_pos_weight from training set only
-    n_neg = int((y_train == 0).sum())
-    n_pos = int((y_train == 1).sum())
-    scale_pos_weight = n_neg / n_pos
-    print(f"  scale_pos_weight: {scale_pos_weight:.2f}")
-
     # 6. Single fit on 80% with best params
-    print("\nTraining XGBoost v3 on 80% training set...")
-    model = xgb.XGBClassifier(
-        n_estimators=_XGB_N_ESTIMATORS,
-        scale_pos_weight=scale_pos_weight,
-        eval_metric="auc",
-        use_label_encoder=False,
-        random_state=_RANDOM_STATE,
-        n_jobs=-1,
+    # Identify categorical (string/object) feature indices for CatBoost
+    cat_feature_names = X_train.select_dtypes(include=["object", "category"]).columns.tolist()
+    cat_feature_indices = [X_train.columns.get_loc(c) for c in cat_feature_names]
+    print(f"  Categorical features: {cat_feature_names}")
+
+    print("\nTraining CatBoost v3 on 80% training set...")
+    model = CatBoostClassifier(
         **_BEST_PARAMS,
+        iterations=_CAT_ITERATIONS,
+        bootstrap_type="Bayesian",  # required for bagging_temperature
+        auto_class_weights="Balanced",
+        eval_metric="AUC",
+        random_seed=_RANDOM_STATE,
+        thread_count=-1,
+        verbose=False,
     )
-    model.fit(X_train, y_train, verbose=False)
+    model.fit(X_train, y_train, cat_features=cat_feature_indices)
     print("  Training complete")
 
     # 7. Platt calibration (train on 80%, score OOT)
@@ -150,7 +150,7 @@ def main() -> None:
 
     # 8. Evaluate on frozen OOT
     print("\nEvaluating on frozen OOT set...")
-    eval_metrics = evaluate_model(calibrated_model, X_oot, y_oot, model_name="xgboost_v3")
+    eval_metrics = evaluate_model(calibrated_model, X_oot, y_oot, model_name="catboost_v3")
 
     oot_gini = eval_metrics.get("Gini")
     oot_ks = eval_metrics.get("KS")
@@ -172,18 +172,18 @@ def main() -> None:
     # 9. Save eval JSON
     print("\nSaving evaluation metrics...")
     eval_json = {
-        "model": "xgboost_v3",
-        "feature_store": "X_xgb_v3.parquet",
-        "feature_count": X_train.shape[1],  # after dropping TARGET + SK_ID_CURR
+        "model": "catboost_v3",
+        "feature_store": "X_cat_v3.parquet",
+        "feature_count": X_train.shape[1],
         "regulated_cols_removed": _REGULATED_COLS,
         "oot_gini": float(oot_gini),
         "oot_ks": float(oot_ks),
         "oot_brier": float(oot_brier),
         "oot_auc": float(oot_auc),
         "best_params": _BEST_PARAMS,
-        "params_source": "xgboost_raw_v9 Optuna study (trial 47, OOF Gini=0.5434, 104 trials)",
-        "n_estimators": _XGB_N_ESTIMATORS,
-        "scale_pos_weight": scale_pos_weight,
+        "params_source": "catboost_raw_v3 Optuna study (trial 36, OOF Gini=0.5532, 51 trials)",
+        "iterations": _CAT_ITERATIONS,
+        "auto_class_weights": "Balanced",
         "temporal_sort_col": _TEMPORAL_SORT_COL,
         "oot_fraction": _TEST_SIZE,
         "train_rows": X_train.shape[0],
@@ -197,7 +197,7 @@ def main() -> None:
     print(f"  Model: {_MODEL_OUTPUT_PATH}")
 
     print("\n" + "=" * 70)
-    print("XGBoost v3 training COMPLETE")
+    print("CatBoost v3 training COMPLETE")
     print("=" * 70)
 
 

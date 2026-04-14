@@ -1,26 +1,28 @@
 #!/usr/bin/env python
 """
-train_xgboost_v3.py
--------------------
-Train XGBoost on the fairness-compliant v3 feature store (X_xgb_v3.parquet).
+train_lightgbm_v3.py
+--------------------
+Train LightGBM on the fairness-compliant v3 feature store (X_lgb_v3.parquet).
 
-Uses the best hyperparameters from the existing xgboost_raw_v9 Optuna study
-(104 completed trials, OOF Gini 0.5434) — no re-HPO needed since v3 removes
-only 4 of 163 features (~2.5% change), making the v2-optimal params valid.
+Uses best hyperparameters from the lgb_raw_X_lgb_v2_is_unbalance Optuna study
+(51 completed trials, OOF Gini 0.5676, trial 26) — no re-HPO needed since v3
+removes only 4 of 163 features (~2.5% change), making the v2-optimal params valid.
 
 Basel CRE36.54 compliant temporal validation workflow:
 1. Load v3 store (163 features — no regulated columns)
 2. Verify AGE_YEARS and other regulated columns are absent
-3. Sort by SK_ID_CURR (monotonically increasing application intake ID)
-4. Carve OOT: freeze most-recent 20% rows (never touched during training)
-5. Train on 80% with best v2 params (single fit — no data leakage)
-6. Calibrate with Platt scaling on 80% train / 20% OOT
-7. Evaluate on frozen OOT → OOT Gini is the regulatory metric
-8. Save model and eval JSON
+3. Extract TARGET label from store (pop to prevent leakage)
+4. Sort by SK_ID_CURR (monotonically increasing application intake ID)
+5. Carve OOT: freeze most-recent 20% rows
+6. Find best n_estimators via early stopping on 15% inner validation split
+7. Retrain on full 80% with best_iteration
+8. Calibrate with Platt scaling
+9. Evaluate on frozen OOT → OOT Gini is the regulatory metric
+10. Save model and eval JSON
 
 Output:
-- models/xgboost_v3_calibrated.pkl   (Platt-calibrated XGBoostClassifier)
-- reports/xgboost_v3_eval.json       (OOT metrics + params + timestamp)
+- models/lightgbm_v3_calibrated.pkl   (Platt-calibrated LGBMClassifier)
+- reports/lightgbm_v3_eval.json       (OOT metrics + params + timestamp)
 """
 
 from __future__ import annotations
@@ -32,33 +34,39 @@ from pathlib import Path
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
+import lightgbm as lgb
 import numpy as np
 import pandas as pd
-import xgboost as xgb
 
 from src.model_base import (
     _RANDOM_STATE,
     _TEMPORAL_SORT_COL,
     _TEST_SIZE,
-    _XGB_N_ESTIMATORS,
     calibrate_model,
     save_model,
 )
 from src.utils import evaluate_model
 
-# Best hyperparameters from xgboost_raw_v9 study (trial 47, OOF Gini=0.5434)
-# These were optimised over 104 Optuna trials on the v2 feature store.
+# Best hyperparameters from lgb_raw_X_lgb_v2_is_unbalance study
+# (trial 26, OOF Gini=0.5676, 51 trials)
 # v3 removes 4 of 163 features — param transfer is sound.
 _BEST_PARAMS: dict = {
-    "colsample_bytree": 0.7595552940919579,
-    "gamma": 1.56955566496891,
-    "learning_rate": 0.03617558383839258,
-    "max_depth": 3,
-    "min_child_weight": 4.804611119097033,
-    "reg_alpha": 1.710682197819308,
-    "reg_lambda": 2.581717713228335e-08,
-    "subsample": 0.6050648219798987,
+    "learning_rate": 0.0211035346361329,
+    "num_leaves": 49,
+    "max_depth": 8,
+    "min_child_samples": 372,
+    "min_child_weight": 0.0013442267377792995,
+    "subsample": 0.855847351759121,
+    "colsample_bytree": 0.7233394009311871,
+    "reg_alpha": 5.173906490535256,
+    "reg_lambda": 9.838443900320089,
+    "path_smooth": 8.152537176771556,
 }
+
+# n_estimators taken directly from the v2 Optuna study's best trial user_attrs
+# (best_iteration=843 from lgb_raw_X_lgb_v2_is_unbalance study, trial 26)
+# No early stopping needed — param transfer is valid for v3 (only 4 features removed).
+_LGB_N_ESTIMATORS: int = 844  # best_iteration + 1 from v2 study
 
 _REGULATED_COLS: list[str] = [
     "AGE_YEARS",
@@ -67,14 +75,14 @@ _REGULATED_COLS: list[str] = [
     "CNT_FAM_MEMBERS",
 ]
 
-_FEATURE_STORE_PATH = _PROJECT_ROOT / "data" / "processed" / "X_xgb_v3.parquet"
-_MODEL_OUTPUT_PATH = _PROJECT_ROOT / "models" / "xgboost_v3_calibrated.pkl"
-_EVAL_OUTPUT_PATH = _PROJECT_ROOT / "reports" / "xgboost_v3_eval.json"
-_FIGURE_OUTPUT_PATH = _PROJECT_ROOT / "reports" / "figures" / "xgboost_v3_calibration.png"
+_FEATURE_STORE_PATH = _PROJECT_ROOT / "data" / "processed" / "X_lgb_v3.parquet"
+_MODEL_OUTPUT_PATH = _PROJECT_ROOT / "models" / "lightgbm_v3_calibrated.pkl"
+_EVAL_OUTPUT_PATH = _PROJECT_ROOT / "reports" / "lightgbm_v3_eval.json"
+_FIGURE_OUTPUT_PATH = _PROJECT_ROOT / "reports" / "figures" / "lightgbm_v3_calibration.png"
 
 
 def main() -> None:
-    """Train XGBoost v3 with Basel CRE36.54 temporal validation workflow."""
+    """Train LightGBM v3 with Basel CRE36.54 temporal validation workflow."""
 
     # 1-2. Load v3 store and verify compliance
     print("Loading v3 feature store...")
@@ -83,7 +91,7 @@ def main() -> None:
 
     for col in _REGULATED_COLS:
         assert col not in X.columns, (
-            f"{col} present in X_xgb_v3 — using wrong store"
+            f"{col} present in X_lgb_v3 — using wrong store"
         )
     print(f"  Regulated columns absent: {_REGULATED_COLS}")
 
@@ -113,27 +121,24 @@ def main() -> None:
 
     print(f"  Train 80%: {X_train.shape}  |  OOT 20%: {X_oot.shape}")
 
-    # Compute scale_pos_weight from training set only
-    n_neg = int((y_train == 0).sum())
-    n_pos = int((y_train == 1).sum())
-    scale_pos_weight = n_neg / n_pos
-    print(f"  scale_pos_weight: {scale_pos_weight:.2f}")
-
     # 6. Single fit on 80% with best params
-    print("\nTraining XGBoost v3 on 80% training set...")
-    model = xgb.XGBClassifier(
-        n_estimators=_XGB_N_ESTIMATORS,
-        scale_pos_weight=scale_pos_weight,
-        eval_metric="auc",
-        use_label_encoder=False,
+    # n_estimators=844 is taken from the v2 Optuna study's best_iteration (843),
+    # which was found via early stopping on OOF CV over 51 trials.
+    # Direct param transfer is valid because v3 removes only 4 of 163 features.
+    print("\nTraining LightGBM v3 on 80% training set...")
+    model = lgb.LGBMClassifier(
+        **_BEST_PARAMS,
+        n_estimators=_LGB_N_ESTIMATORS,
+        is_unbalance=True,
+        boosting_type="gbdt",
         random_state=_RANDOM_STATE,
         n_jobs=-1,
-        **_BEST_PARAMS,
+        verbosity=-1,
     )
-    model.fit(X_train, y_train, verbose=False)
+    model.fit(X_train, y_train, callbacks=[lgb.log_evaluation(period=0)])
     print("  Training complete")
 
-    # 7. Platt calibration (train on 80%, score OOT)
+    # 8. Platt calibration (train on 80%, score OOT)
     print("\nCalibrating with Platt scaling...")
     _FIGURE_OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     calibrated_model, cal_brier, cal_auc = calibrate_model(
@@ -148,9 +153,9 @@ def main() -> None:
     )
     print(f"  Calibration Brier: {cal_brier:.4f}  AUC: {cal_auc:.4f}")
 
-    # 8. Evaluate on frozen OOT
+    # 9. Evaluate on frozen OOT
     print("\nEvaluating on frozen OOT set...")
-    eval_metrics = evaluate_model(calibrated_model, X_oot, y_oot, model_name="xgboost_v3")
+    eval_metrics = evaluate_model(calibrated_model, X_oot, y_oot, model_name="lightgbm_v3")
 
     oot_gini = eval_metrics.get("Gini")
     oot_ks = eval_metrics.get("KS")
@@ -169,21 +174,22 @@ def main() -> None:
     else:
         print(f"\n  ERROR: OOT Gini {oot_gini:.4f} < 0.50 — investigate")
 
-    # 9. Save eval JSON
+    # 10. Save eval JSON
     print("\nSaving evaluation metrics...")
     eval_json = {
-        "model": "xgboost_v3",
-        "feature_store": "X_xgb_v3.parquet",
-        "feature_count": X_train.shape[1],  # after dropping TARGET + SK_ID_CURR
+        "model": "lightgbm_v3",
+        "feature_store": "X_lgb_v3.parquet",
+        "feature_count": X_train.shape[1],
         "regulated_cols_removed": _REGULATED_COLS,
         "oot_gini": float(oot_gini),
         "oot_ks": float(oot_ks),
         "oot_brier": float(oot_brier),
         "oot_auc": float(oot_auc),
         "best_params": _BEST_PARAMS,
-        "params_source": "xgboost_raw_v9 Optuna study (trial 47, OOF Gini=0.5434, 104 trials)",
-        "n_estimators": _XGB_N_ESTIMATORS,
-        "scale_pos_weight": scale_pos_weight,
+        "params_source": "lgb_raw_X_lgb_v2_is_unbalance Optuna study (trial 26, OOF Gini=0.5676, 51 trials)",
+        "best_iteration": _LGB_N_ESTIMATORS - 1,  # 843 (v2 study user_attr)
+        "n_estimators": _LGB_N_ESTIMATORS,
+        "is_unbalance": True,
         "temporal_sort_col": _TEMPORAL_SORT_COL,
         "oot_fraction": _TEST_SIZE,
         "train_rows": X_train.shape[0],
@@ -197,7 +203,7 @@ def main() -> None:
     print(f"  Model: {_MODEL_OUTPUT_PATH}")
 
     print("\n" + "=" * 70)
-    print("XGBoost v3 training COMPLETE")
+    print("LightGBM v3 training COMPLETE")
     print("=" * 70)
 
 
