@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-04-12T17:44:00.000000Z"
+last_updated: "2026-04-14T11:10:00.000000Z"
 progress:
   total_phases: 13
   completed_phases: 13
@@ -15,29 +15,38 @@ progress:
 # Project State
 
 **Project:** Credit Risk Scoring Pipeline
-**Last Updated:** 2026-04-12
+**Last Updated:** 2026-04-14
 **Core value:** Calibrated PD feeding EL = PD × LGD × EAD, Gini ≥ 0.60
 
 ---
 
 ## Current Focus
 
-**Phase 04.2.10 IN PROGRESS 🔄** — Ensemble Enhancement via Feature Diversity
+**Phase 04.3 READY FOR EXECUTION ✅** — SHAP Explainability and Fairness — planning complete; 4 plans (04.3-01 through 04.3-04) wave-structured
 
 **v2 model scoreboard (SK_ID_CURR temporal sort, Basel CRE36.54 compliant):**
 - LGB (X_lgb_v2, is_unbalance): OOT Gini=0.5695, KS=0.4346 ⭐ primary model
 - XGB (X_xgb_v2): OOT Gini=0.5636, KS=0.4183, AUC=0.7776
-- CatBoost (X_cat_v2, auto_class_weights=Balanced): OOT Gini=0.5814, AUC=0.7907
+- CatBoost (X_cat_v2, auto_class_weights=Balanced): OOT Gini=0.5814, AUC=0.7907 ⭐ best single → **SHAP target**
+- XGB-WoE (X_features, diversity): OOT Gini=0.5519, AUC=0.7734, KS=0.4159
+- CatBoost-DFS (X_tree_dfs, diversity): OOT Gini=0.5608, AUC=0.7804, KS=0.4275
 
 **Phase 04.2.9 Complete ✅** — All 5 plans done. Gate MET: CatBoost OOT Gini=0.5814 ≥ 0.580 ✅
+**Phase 04.2.10 Complete ✅** — Gate=FAIL; best ensemble=0.5681 (LGB+CatBoost-DFS rank_avg) < 0.580 floor; CatBoost v2 (0.5814) primary
+**Phase 04.3 Planning ✅** — 4 plans created with proper wave structure:
+  - 04.3-01-PLAN.md (Wave 0): Test infrastructure + catboost_shap_fixture
+  - 04.3-02-PLAN.md (Wave 1): SHAP core functions + complete FEATURE_LABELS (171 entries)
+  - 04.3-03-PLAN.md (Wave 1): Fairness metrics + adverse action factors
+  - 04.3-04-PLAN.md (Wave 2): Integration test (hard failure gates, no pytest.skip)
+**Next: `/gsd-execute-phase 04.3`** — execute test infrastructure (Wave 0), then core + fairness (Wave 1), then integration (Wave 2)
 
 **Phase 04.2.10 Plans:**
-0. ✅ Create `train_xgboost_woe.py` — train XGBoost on X_features (WoE-encoded, 68 cols) for diversity
+0. ✅ Create `train_xgboost_woe.py` — train XGBoost on X_features (WoE-encoded, 81 cols) for diversity
 1. ✅ Create `train_catboost_dfs.py` — train CatBoost on X_tree_dfs (~323 cols, Featuretools DFS) with leakage guard
 2. ✅ Create `run_ensemble_v2.py` — 9-cell ablation (2-model + 3-model combos, multiple meta-learner strategies)
-3. 🔲 Run training scripts to generate HPO results for XGB-WoE and CatBoost-DFS
-4. 🔲 Run ensemble orchestration and gating
-5. 🔲 Target: ensemble OOT Gini ≥ 0.600
+3. ✅ Run HPO: XGB-WoE OOT Gini=0.5519, AUC=0.7734, KS=0.4159; CatBoost-DFS OOT Gini=0.5608, AUC=0.7804, KS=0.4275
+4. ✅ Run ensemble orchestration and gating — best: LGB+CatBoost-DFS rank_avg, OOT Gini=0.5681, KS=0.4362
+5. ✅ Gate=FAIL (0.5681 < 0.580 INVESTIGATE floor); CatBoost v2 (0.5814) is primary; Phase 04.3 next
 
 ---
 
@@ -65,6 +74,7 @@ progress:
 | Phase 04.2.9.03 — Build 4 Model-Specific Feature Stores | 2026-04-11 | — | ✅ | X_base_v2, X_lgb_v2, X_xgb_v2 (145 cols), X_cat_v2 (149 cols); 8 tests pass; Wave 2 integration deferred |
 | Phase 04.2.9 Plan 04 — LGB + XGB HPO on v2 stores | 2026-04-12 | 0.5695 / 0.5636 | ✅ | LGB (X_lgb_v2, is_unbalance): OOT Gini=0.5695 ≥ 0.580 gate PASSED; XGB: OOT Gini=0.5636 |
 | Phase 04.2.9 Plan 05 — CatBoost HPO on v2 store | 2026-04-12 | 0.5814 | ✅ | OOT Gini=0.5814, AUC=0.7907; BestOOF=0.5532 (50 trials); auto_class_weights=Balanced; X_cat_v2 |
+| Phase 04.2.10 — Ensemble Enhancement via Feature Diversity | 2026-04-13 | 0.5681 | ❌ | Best: LGB+CatBoost-DFS rank_avg; 0.5681 < 0.580 INVESTIGATE floor; CatBoost v2 (0.5814) is primary |
 
 **Ensemble post-mortem summary (Phase 04.2.6):** All three models trained on `X_tree_raw` produced OOF correlations ≥ 0.95 — no orthogonal signal for meta-learner. Meta-learner coefs: LGB=+3.08, XGB=−1.45, CAT=+1.53. Best combo LGB+CAT avg Gini=0.5754 (+0.0008 vs LGB standalone — below 0.005 threshold). Decision: LGB standalone (OOT Gini=0.5746) is primary model.
 
@@ -105,7 +115,7 @@ progress:
 | `src/model_lightgbm.py` | ✅ | LightGBM training + Optuna HPO |
 | `src/model_catboost.py` | ✅ | CatBoost training + Optuna HPO |
 | `src/model_ensemble.py` | ✅ | 3-model stacking, meta-learners, ensemble gate |
-| `src/explain.py` | 🔲 | Stub — Phase 04.3 |
+| `src/explain.py` | 🔲 | Stub — Phase 04.3 (planning complete, execution ready) |
 
 *Full session-by-session notes: `.planning/SESSION_LOG.md`*
 *Project initialized: 2026-04-07*

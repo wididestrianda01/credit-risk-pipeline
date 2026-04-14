@@ -471,3 +471,80 @@ def df_bureau_balance_fixture() -> pd.DataFrame:
         "STATUS": str,
     })
     return df
+
+
+# ---------------------------------------------------------------------------
+# Wave 0: SHAP Explainability (Phase 04.3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def catboost_shap_fixture():
+    """
+    Real mini-CatBoost model trained on 200 synthetic rows.
+
+    No mocking — tests must verify booster extraction and SHAP value shapes
+    against a real model. Training takes < 5 seconds.
+
+    Returns
+    -------
+    tuple
+        (model, explainer, shap_values, X_oot_mini, y_mini)
+        where:
+        - model: CalibratedClassifierCV(FrozenEstimator(CatBoostClassifier))
+        - explainer: shap.TreeExplainer
+        - shap_values: shap.Explanation object (n_samples=200, n_features=~20)
+        - X_oot_mini: DataFrame (200 × ~20 cols, synthetic features)
+        - y_mini: Series (200 labels, binary 0/1)
+    """
+    import shap
+    from catboost import CatBoostClassifier
+    from sklearn.calibration import CalibratedClassifierCV
+    from sklearn.frozen import FrozenEstimator
+
+    rng = np.random.default_rng(42)
+    n_samples = 200
+    n_features = 20
+
+    # Generate synthetic features
+    X_mini = pd.DataFrame({
+        f"feature_{i}": rng.normal(0, 1, n_samples)
+        for i in range(n_features)
+    })
+
+    # Synthetic target: imbalanced binary (8% positive, 92% negative, matching production)
+    y_mini = pd.Series(
+        rng.choice([0, 1], size=n_samples, p=[0.92, 0.08]),
+        name="target"
+    )
+
+    # Train raw CatBoost (no calibration yet)
+    cat_model = CatBoostClassifier(
+        iterations=50,
+        depth=4,
+        learning_rate=0.1,
+        verbose=False,
+        random_state=42,
+    )
+    cat_model.fit(X_mini, y_mini)
+
+    # Wrap in CalibratedClassifierCV with FrozenEstimator (production pattern)
+    frozen_estimator = FrozenEstimator(cat_model)
+    calibrated_model = CalibratedClassifierCV(frozen_estimator)
+    # Platt calibration on same data (for testing; production would use separate fold)
+    calibrated_model.fit(X_mini, y_mini)
+
+    # Extract raw booster for SHAP (per D-01)
+    raw_booster = calibrated_model.calibrated_classifiers_[0].estimator.estimator
+
+    # Create SHAP explainer with model_output="raw"
+    explainer = shap.TreeExplainer(raw_booster, model_output="raw")
+
+    # Compute SHAP values on mini data
+    shap_values = explainer(X_mini)
+
+    return (calibrated_model, explainer, shap_values, X_mini, y_mini)
+
+
+# End of conftest.py
+# catboost_shap_fixture is available module-scoped for all test_explain.py tests
