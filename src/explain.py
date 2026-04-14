@@ -222,6 +222,77 @@ FEATURE_LABELS: dict[str, str] = {
 }
 
 
+def _auto_label(col: str) -> str:
+    """
+    Generate human-readable label from column name when absent from FEATURE_LABELS.
+
+    Fallback pattern per D-09: production must never crash on missing labels.
+    Tests enforce completeness; production uses this fallback gracefully.
+
+    Parameters
+    ----------
+    col : str
+        Column name (e.g., 'bureau_overdue_flag', 'EXT_SOURCE_1')
+
+    Returns
+    -------
+    str
+        Human-readable label
+
+    Examples
+    --------
+    >>> _auto_label("bureau_overdue_flag")
+    "Bureau: Overdue Flag"
+
+    >>> _auto_label("EXT_SOURCE_1")
+    "Ext Source 1"
+    """
+    parts = col.split("_", maxsplit=1)
+
+    # Check for table prefix (bureau, prev, pos, inst, cc)
+    if len(parts) == 2 and parts[0] in ("bureau", "prev", "pos", "inst", "cc"):
+        prefix = parts[0].title()
+        suffix = parts[1].replace("_", " ").title()
+        return f"{prefix}: {suffix}"
+
+    # Default: replace underscores and title-case
+    return col.replace("_", " ").title()
+
+
+def _derive_age_groups(X: pd.DataFrame) -> pd.Series:
+    """
+    Derive age group tertiles from X['AGE_YEARS'] for fairness analysis.
+
+    Parameters
+    ----------
+    X : DataFrame
+        Must include 'AGE_YEARS' column
+
+    Returns
+    -------
+    Series
+        Categorical: "Young" (<25), "Mid" (25–45), "Senior" (45+)
+
+    Raises
+    ------
+    KeyError
+        If 'AGE_YEARS' not in X.columns
+    """
+    if "AGE_YEARS" not in X.columns:
+        raise KeyError("X must include 'AGE_YEARS' column")
+
+    age = X["AGE_YEARS"]
+
+    groups = pd.cut(
+        age,
+        bins=[0, 25, 45, float("inf")],
+        labels=["Young", "Mid", "Senior"],
+        right=False,
+    )
+
+    return groups
+
+
 def compute_shap_values(model: object, X: pd.DataFrame) -> Any:
     """
     Extract raw CatBoost booster from CalibratedClassifierCV and compute SHAP values.
@@ -373,27 +444,232 @@ def plot_shap_local(
 def compute_fairness_metrics(
     model: object, X: pd.DataFrame, y: pd.Series, sensitive_cols: list[str]
 ) -> pd.DataFrame:
-    """Compute group-level fairness metrics by sensitive attribute."""
-    # TODO: implement
-    raise NotImplementedError
+    """
+    Demographic parity and equalised odds by protected groups.
+
+    Parameters
+    ----------
+    model : CalibratedClassifierCV
+        Fitted model with predict_proba
+    X : DataFrame
+        Features including sensitive_cols (e.g., CODE_GENDER, AGE_YEARS)
+    y : Series
+        Binary labels (0 = non-default, 1 = default)
+    sensitive_cols : list of str
+        Column names of protected attributes (CODE_GENDER, AGE_YEARS)
+
+    Returns
+    -------
+    DataFrame with columns:
+        group_name, demographic_parity (mean PD per group),
+        tpr (True Positive Rate at threshold), fpr (False Positive Rate at threshold),
+        disparate_impact_ratio (min_group_rate / max_group_rate per metric)
+
+    Notes
+    -----
+    - Threshold is prevalence-matched: top 8% by predicted probability
+    - Excludes XNA rows from CODE_GENDER fairness calculation (per D-03)
+    - Metric "demographic_parity" is mean predicted probability (uncalibrated)
+    """
+    from sklearn.metrics import confusion_matrix
+
+    # Predict probabilities
+    # Note: X may contain sensitive_cols; extract only the numeric features for prediction
+    # by selecting all columns except sensitive_cols
+    cols_to_drop = [col for col in sensitive_cols if col in X.columns]
+    X_numeric = X.drop(columns=cols_to_drop) if cols_to_drop else X
+    y_pred = model.predict_proba(X_numeric)[:, 1]  # Probability of default
+
+    # Prevalence-matched threshold (top 8% flagged as defaults; per D-03)
+    threshold = np.percentile(y_pred, 92)
+    y_pred_binary = (y_pred >= threshold).astype(int)
+
+    results = []
+
+    # Process each sensitive column
+    for col in sensitive_cols:
+        if col == "CODE_GENDER":
+            # Binary gender; exclude XNA
+            groups = X[col].unique()
+            groups = [g for g in groups if g != "XNA"]
+
+            for group in groups:
+                mask = X[col] == group
+                X_group = X[mask]
+                y_group = y[mask]
+                y_pred_group = y_pred[mask]
+                y_pred_binary_group = y_pred_binary[mask]
+
+                # Demographic parity: mean predicted probability
+                dem_par = y_pred_group.mean()
+
+                # Equalised odds: TPR and FPR at threshold
+                tn, fp, fn, tp = confusion_matrix(y_group, y_pred_binary_group).ravel()
+                tpr = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+                fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+
+                results.append({
+                    "group_name": f"Gender: {group}",
+                    "demographic_parity": dem_par,
+                    "tpr": tpr,
+                    "fpr": fpr,
+                })
+
+        elif col == "AGE_YEARS":
+            # Age tertiles
+            age_groups = _derive_age_groups(X)
+
+            for group_label in ["Young", "Mid", "Senior"]:
+                mask = age_groups == group_label
+                X_group = X[mask]
+                y_group = y[mask]
+                y_pred_group = y_pred[mask]
+                y_pred_binary_group = y_pred_binary[mask]
+
+                # Demographic parity
+                dem_par = y_pred_group.mean()
+
+                # Equalised odds
+                tn, fp, fn, tp = confusion_matrix(y_group, y_pred_binary_group).ravel()
+                tpr = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+                fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+
+                results.append({
+                    "group_name": f"Age: {group_label}",
+                    "demographic_parity": dem_par,
+                    "tpr": tpr,
+                    "fpr": fpr,
+                })
+
+    # Convert to DataFrame and compute disparate impact ratios
+    df_results = pd.DataFrame(results)
+
+    # Disparate impact ratio per metric (min / max; ≥0.80 = compliant per EU AI Act)
+    for metric in ["demographic_parity", "tpr", "fpr"]:
+        metric_min = df_results[metric].min()
+        metric_max = df_results[metric].max()
+        df_results[f"{metric}_disparate_impact"] = (
+            metric_min / metric_max if metric_max > 0 else 0.0
+        )
+
+    return df_results
 
 
 def get_adverse_action_factors(
     shap_explanation: Any, idx: int, feature_labels: dict[str, str], top_n: int = 5
 ) -> list[AdverseActionFactor]:
-    """Get top-N risk-increasing factors for a single applicant (GDPR Art. 22)."""
-    # TODO: implement
-    raise NotImplementedError
-
-
-def compute_shap_stability(shap_train: np.ndarray, shap_oot: np.ndarray) -> float:
     """
-    Spearman correlation of mean(|SHAP|) feature rankings between train and OOT.
+    Extract top-N risk-increasing SHAP factors for GDPR Art. 22 compliance.
 
-    Returns correlation coefficient in [-1, 1]. Value >= 0.90 is considered stable.
+    Returns factors as TypedDict list, JSON-serialisable and FastAPI-ready.
+    Uses human labels from feature_labels; falls back to _auto_label if missing.
+
+    Parameters
+    ----------
+    shap_explanation : shap.Explanation
+        SHAP values from compute_shap_values()
+    idx : int
+        Row index (0-based) to explain
+    feature_labels : dict[str, str]
+        Column name → human label mapping (e.g., FEATURE_LABELS)
+    top_n : int, default 5
+        Return top-N factors by |SHAP| value
+
+    Returns
+    -------
+    list[AdverseActionFactor]
+        Sorted by rank (1 = most influential). All factors have human labels.
+
+    Notes
+    -----
+    - Direction: positive SHAP = increases_risk, negative = decreases_risk
+    - Human labels guaranteed via _auto_label fallback; never KeyError
     """
-    # TODO: implement
-    raise NotImplementedError
+    # Get SHAP values for this sample
+    shap_vals = shap_explanation[idx].values
+    feature_names = shap_explanation.feature_names or list(range(len(shap_vals)))
+
+    # Create factor list with absolute SHAP values
+    factors_with_abs = [
+        (fname, shap_vals[i], abs(shap_vals[i]))
+        for i, fname in enumerate(feature_names)
+    ]
+
+    # Sort by absolute SHAP value; take top-N
+    factors_sorted = sorted(factors_with_abs, key=lambda x: x[2], reverse=True)[:top_n]
+
+    # Build AdverseActionFactor list
+    result = []
+    for rank, (fname, shap_val, _) in enumerate(factors_sorted, start=1):
+        # Get label, fallback to _auto_label
+        human_label = feature_labels.get(fname, _auto_label(fname))
+
+        # Direction
+        direction = "increases_risk" if shap_val > 0 else "decreases_risk"
+
+        factor: AdverseActionFactor = {
+            "feature_name": fname,
+            "human_label": human_label,
+            "shap_value": float(shap_val),
+            "direction": direction,
+            "rank": rank,
+        }
+        result.append(factor)
+
+    return result
+
+
+def compute_shap_stability(
+    shap_train: np.ndarray | Any, shap_oot: np.ndarray | Any
+) -> float:
+    """
+    Spearman rank correlation of mean |SHAP| feature rankings (Basel IRB CRE36.54).
+
+    Measures stability of feature importance across train and OOT sets.
+    Threshold: ≥0.90 = stable; <0.90 = flag for model risk review.
+
+    Parameters
+    ----------
+    shap_train : np.ndarray or shap.Explanation
+        SHAP values on train subsample (~10K rows)
+    shap_oot : np.ndarray or shap.Explanation
+        SHAP values on OOT set (~61K rows)
+
+    Returns
+    -------
+    float
+        Spearman correlation coefficient in [-1, 1]
+
+    Notes
+    -----
+    - Input can be numpy array or shap.Explanation (extracts .values if needed)
+    - If either input has <3 features, returns 0.0 (insufficient data for correlation)
+    """
+    from scipy.stats import spearmanr
+
+    # Extract values if shap.Explanation objects
+    if hasattr(shap_train, "values"):
+        shap_train_vals = shap_train.values
+    else:
+        shap_train_vals = shap_train
+
+    if hasattr(shap_oot, "values"):
+        shap_oot_vals = shap_oot.values
+    else:
+        shap_oot_vals = shap_oot
+
+    # Compute mean absolute SHAP per feature
+    importance_train = np.abs(shap_train_vals).mean(axis=0)
+    importance_oot = np.abs(shap_oot_vals).mean(axis=0)
+
+    # Spearman rank correlation
+    if len(importance_train) < 3 or len(importance_oot) < 3:
+        # Insufficient features for meaningful correlation
+        return 0.0
+
+    corr, _ = spearmanr(importance_train, importance_oot)
+
+    return float(corr) if not np.isnan(corr) else 0.0
 
 
 def fairness_report(
