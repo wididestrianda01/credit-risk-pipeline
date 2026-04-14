@@ -3015,3 +3015,94 @@ class TestPhase0429Plan03FeatureStores:
             found = leaky_cols.intersection(set(X.columns))
             assert len(found) == 0, f"Leaky columns in {store_name}: {found}"
 
+
+
+# ============================================================================
+# Phase 04.4-01: v3 Feature Store Tests (Fairness-Compliant)
+# ============================================================================
+
+
+class TestV3FeatureStores:
+    """Tests for EU AI Act Art. 6 fairness-compliant v3 feature stores."""
+
+    def test_v3_stores_created(self):
+        """After build_v3_feature_stores(), all three parquet files exist."""
+        from src.features import build_v3_feature_stores
+        
+        build_v3_feature_stores("data/")
+        
+        # Verify files exist
+        assert Path("data/processed/X_lgb_v3.parquet").exists()
+        assert Path("data/processed/X_xgb_v3.parquet").exists()
+        assert Path("data/processed/X_cat_v3.parquet").exists()
+
+    def test_v3_regulated_cols_absent(self):
+        """Load each v3 store and verify regulated columns are absent."""
+        import pandas as pd
+        
+        regulated = ["AGE_YEARS", "EMPLOYED_TO_AGE_RATIO", "CNT_CHILDREN", "CNT_FAM_MEMBERS"]
+        
+        for store_path in [
+            "data/processed/X_lgb_v3.parquet",
+            "data/processed/X_xgb_v3.parquet",
+            "data/processed/X_cat_v3.parquet",
+        ]:
+            X_v3 = pd.read_parquet(store_path)
+            for col in regulated:
+                assert col not in X_v3.columns, f"{col} still present in {store_path}"
+
+    def test_v3_cat_cols_intact(self):
+        """X_cat_v3 retains all categorical columns that distinguish v2 from LGB/XGB."""
+        import pandas as pd
+        
+        X_cat_v2 = pd.read_parquet("data/processed/X_cat_v2.parquet")
+        X_cat_v3 = pd.read_parquet("data/processed/X_cat_v3.parquet")
+        X_lgb_v2 = pd.read_parquet("data/processed/X_lgb_v2.parquet")
+        
+        # Find extra categorical columns in v2 CatBoost store
+        extra_cat_cols = set(X_cat_v2.columns) - set(X_lgb_v2.columns)
+        
+        # Verify they all still exist in v3
+        for col in extra_cat_cols:
+            assert col in X_cat_v3.columns, f"Extra cat col {col} missing from v3"
+
+    def test_v2_unmodified_after_v3_build(self):
+        """After v3 build, v2 stores remain unchanged."""
+        import pandas as pd
+        from src.features import build_v3_feature_stores
+        
+        # Load v2 baseline
+        X_lgb_v2_before = pd.read_parquet("data/processed/X_lgb_v2.parquet")
+        shape_before = X_lgb_v2_before.shape
+        
+        # Build v3
+        build_v3_feature_stores("data/")
+        
+        # Reload v2
+        X_lgb_v2_after = pd.read_parquet("data/processed/X_lgb_v2.parquet")
+        
+        # Verify unchanged
+        assert X_lgb_v2_after.shape == shape_before, "v2 shape changed after v3 build"
+
+    def test_v3_index_matches_v2(self):
+        """v3 stores have identical index to corresponding v2 stores."""
+        import pandas as pd
+        
+        X_lgb_v2 = pd.read_parquet("data/processed/X_lgb_v2.parquet")
+        X_lgb_v3 = pd.read_parquet("data/processed/X_lgb_v3.parquet")
+        
+        assert X_lgb_v3.index.equals(X_lgb_v2.index), "v3 index mismatch with v2"
+
+    def test_v3_row_counts_match(self):
+        """All v3 stores have exactly 307,511 rows (pure column drop, no filtering)."""
+        import pandas as pd
+        
+        expected_rows = 307_511
+        
+        for store_path in [
+            "data/processed/X_lgb_v3.parquet",
+            "data/processed/X_xgb_v3.parquet",
+            "data/processed/X_cat_v3.parquet",
+        ]:
+            X_v3 = pd.read_parquet(store_path)
+            assert len(X_v3) == expected_rows, f"{store_path} has {len(X_v3)} rows, expected {expected_rows}"
