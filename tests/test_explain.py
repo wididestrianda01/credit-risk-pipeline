@@ -107,6 +107,12 @@ def test_compute_fairness_metrics(catboost_shap_fixture):
     assert "demographic_parity" in df_fair.columns
     assert "tpr" in df_fair.columns
     assert "fpr" in df_fair.columns
+    # EU AI Act Art. 6 disparate impact ratios must be present per attribute
+    assert "demographic_parity_disparate_impact" in df_fair.columns
+    assert "tpr_disparate_impact" in df_fair.columns
+    assert "fpr_disparate_impact" in df_fair.columns
+    # Disparate impact ratios must be in [0, 1]
+    assert df_fair["demographic_parity_disparate_impact"].between(0, 1).all()
     assert len(df_fair) > 0
 
 
@@ -343,6 +349,14 @@ def test_integration_end_to_end():
             })
 
     df_fair = pd.DataFrame(results)
+
+    # Add per-attribute disparate impact ratios (EU AI Act Art. 6 — ≥0.80 = compliant)
+    df_fair["_attr"] = df_fair["group_name"].str.split(":").str[0]
+    for metric in ["demographic_parity", "tpr", "fpr"]:
+        df_fair[f"{metric}_disparate_impact"] = df_fair.groupby("_attr")[
+            metric
+        ].transform(lambda g: g.min() / g.max() if g.max() > 0 else 0.0)
+    df_fair = df_fair.drop(columns=["_attr"])
 
     # Save fairness CSV
     df_fair.to_csv(Path("reports/fairness_metrics.csv"), index=False)

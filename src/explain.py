@@ -548,13 +548,15 @@ def compute_fairness_metrics(
     # Convert to DataFrame and compute disparate impact ratios
     df_results = pd.DataFrame(results)
 
-    # Disparate impact ratio per metric (min / max; ≥0.80 = compliant per EU AI Act)
+    # Disparate impact ratio per sensitive attribute (EU AI Act Art. 6 — ≥0.80 = compliant)
+    # Computed within each attribute separately (Gender vs Gender, Age vs Age),
+    # not across all groups — mixing gender and age into a single min/max is incorrect.
+    df_results["_attr"] = df_results["group_name"].str.split(":").str[0]
     for metric in ["demographic_parity", "tpr", "fpr"]:
-        metric_min = df_results[metric].min()
-        metric_max = df_results[metric].max()
-        df_results[f"{metric}_disparate_impact"] = (
-            metric_min / metric_max if metric_max > 0 else 0.0
-        )
+        df_results[f"{metric}_disparate_impact"] = df_results.groupby("_attr")[
+            metric
+        ].transform(lambda g: g.min() / g.max() if g.max() > 0 else 0.0)
+    df_results = df_results.drop(columns=["_attr"])
 
     return df_results
 
