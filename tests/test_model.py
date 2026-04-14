@@ -4007,3 +4007,52 @@ class TestEnsembleCalibration:
             assert hasattr(calibrated_model, 'predict_proba'), (
                 "Model does not have predict_proba method"
             )
+
+    @pytest.mark.integration
+    def test_xgboost_v3_model_loads(self):
+        """
+        Integration test: v3 model exists, loads without error, and scores OOT set.
+
+        Validates:
+        - Model pickle is valid
+        - Model has correct feature count (163, matching X_xgb_v3)
+        - Model.predict_proba() returns valid probabilities (0 ≤ p ≤ 1)
+        - OOT Gini can be computed from predictions
+        """
+        from src.utils import gini_coefficient
+
+        # Load v3 model
+        project_root = Path(__file__).resolve().parents[1]
+        model_path = project_root / "models" / "xgboost_v3_calibrated.pkl"
+        if not model_path.exists():
+            pytest.skip(f"v3 model not found: {model_path}")
+
+        model = load_model(str(model_path))
+        assert model is not None, "Model load returned None"
+
+        # Load v3 store (no AGE_YEARS)
+        X_v3_path = project_root / "data" / "processed" / "X_xgb_v3.parquet"
+        X_v3 = pd.read_parquet(X_v3_path)
+        assert "AGE_YEARS" not in X_v3.columns, "AGE_YEARS should not be in v3 store"
+        assert X_v3.shape[1] == 163, f"Expected 163 cols, got {X_v3.shape[1]}"
+
+        # Load target
+        y_path = project_root / "data" / "processed" / "y_train.parquet"
+        y = pd.read_parquet(y_path).squeeze()
+
+        # Subset to OOT (last 20%, matching train_xgboost_v3.py)
+        test_start = int(len(X_v3) * 0.8)
+        X_oot = X_v3.iloc[test_start:]
+        y_oot = y.iloc[test_start:]
+
+        # Score
+        y_pred_proba = model.predict_proba(X_oot)[:, 1]
+        assert len(y_pred_proba) == len(y_oot), "Score length mismatch"
+        assert (y_pred_proba >= 0).all() and (y_pred_proba <= 1).all(), (
+            "Probabilities out of [0, 1]"
+        )
+
+        # Compute Gini
+        oot_gini = gini_coefficient(y_oot, y_pred_proba)
+        assert oot_gini >= 0.45, f"OOT Gini {oot_gini:.4f} suspiciously low"
+        print(f"✓ XGBoost v3 OOT Gini: {oot_gini:.4f}")
