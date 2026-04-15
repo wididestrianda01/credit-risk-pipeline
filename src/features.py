@@ -79,7 +79,7 @@ _IV_WEAK: float = 0.02
 _REGULATORY_DROP_COLS: list[str] = ["CODE_GENDER", "thin_file_young"]
 
 # Features exempted from VarianceThreshold and Pearson |r|>0.95 deduplication.
-# Wave 1: delinquency trajectory features added in Phase 04.2.7.
+# Wave 1: delinquency trajectory features.
 _WAVE1_PROTECTED: list[str] = [
     "inst_late_rate_12m",
     "inst_late_rate_recent_vs_historical",
@@ -1815,7 +1815,7 @@ def engineer_secondary_features(
         ).replace([np.inf, -np.inf], 0.0).clip(lower=0.0).fillna(_NAN_SENTINEL)
 
     # -----------------------------------------------------------------------
-    # Secondary & Cross-table Features (Phase 04.2.3.2, D-07 through D-19)
+    # Secondary & Cross-table Features
     # -----------------------------------------------------------------------
 
     # D-07: no_bureau_history — thin-file indicator
@@ -2714,7 +2714,7 @@ def build_tree_feature_store(
     X_eng = engineer_application_features(X) if "AMT_CREDIT" in X.columns else X.copy()
     X_eng = engineer_secondary_features(X_eng)
 
-    # Wave 1 features (Phase 04.2.7 — delinquency trajectory signals)
+    # Wave 1 features — delinquency trajectory signals
     if df_inst is not None:
         # Instalment-level features (require raw table)
         X_eng["inst_late_rate_12m"] = engineer_inst_late_rate_12m(df_inst).reindex(X_eng.index, fill_value=_NAN_SENTINEL).values
@@ -2727,7 +2727,7 @@ def build_tree_feature_store(
     X_eng["bureau_dpd_trend_3m_vs_12m"] = engineer_bureau_dpd_trend_3m_vs_12m(X_eng).values
     X_eng["bureau_debt_to_new_credit"] = engineer_bureau_debt_to_new_credit(X_eng).values
 
-    # Wave 2 features (Phase 04.2.9 — temporal trajectory signals from secondary tables)
+    # Wave 2 features — temporal trajectory signals from secondary tables
     # Alignment: sk_id.map(result) looks up by SK_ID_CURR value, index-safe.
     sk_id = X_eng["SK_ID_CURR"]
 
@@ -2877,7 +2877,7 @@ def build_tree_feature_store(
     return X_final, feature_columns
 
 
-# Backward-compatibility alias — renamed to build_tree_feature_store in Phase 04.2.1
+# Backward-compatibility alias — renamed to build_tree_feature_store
 build_raw_feature_store = build_tree_feature_store
 
 
@@ -3354,7 +3354,7 @@ def build_combined_feature_store(
 
 
 # ---------------------------------------------------------------------------
-# Feature Augmentation Utilities (Phase 04.2 Plan 03)
+# Feature Augmentation Utilities
 # ---------------------------------------------------------------------------
 
 
@@ -3610,7 +3610,7 @@ def build_dfs_feature_store(
     """
     Build merged tree feature store: raw + DFS + time features.
 
-    Memory-safe orchestration of the Phase 04.2.2 pipeline.
+    Memory-safe orchestration of the DFS pipeline.
     Uses a DFS checkpoint to allow restarts without re-running DFS,
     and sample-based cross-dedup to avoid materialising the full
     correlation matrix on 307K rows.
@@ -3657,7 +3657,7 @@ def build_dfs_feature_store(
     X_tree_raw_path = output_dir / "X_tree_raw.parquet"
     if not X_tree_raw_path.exists():
         raise FileNotFoundError(
-            f"X_tree_raw.parquet not found at {X_tree_raw_path}; run Phase 04.2.1 first"
+            f"X_tree_raw.parquet not found at {X_tree_raw_path}; ensure raw feature store is built first"
         )
 
     # -----------------------------------------------------------------------
@@ -3799,7 +3799,7 @@ def build_dfs_feature_store(
 
 
 # ============================================================================
-# Phase 04.4: Build EU AI Act Fairness-Compliant v3 Feature Stores
+# Build EU AI Act Fairness-Compliant v3 Feature Stores
 # ============================================================================
 
 
@@ -3910,7 +3910,7 @@ def build_v3_feature_stores(data_dir: str) -> None:
     # Write audit log
     audit_path = processed_dir / "feature_removal_audit.txt"
     with open(audit_path, "w") as f:
-        f.write("Feature Removal Audit — Phase 04.4 (Fairness Compliance)\n")
+        f.write("Feature Removal Audit — Fairness Compliance\n")
         f.write("=" * 70 + "\n\n")
         f.write(f"Timestamp: {pd.Timestamp.now().isoformat()}\n")
         f.write(f"Regulated columns removed: {', '.join(regulated_cols)}\n\n")

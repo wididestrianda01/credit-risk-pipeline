@@ -103,7 +103,7 @@ _XGB_REG_ALPHA_MAX: float = 5.0
 _XGB_REG_LAMBDA_MIN: float = 1.0
 _XGB_REG_LAMBDA_MAX: float = 10.0
 
-# XGBoost Optuna HPO on raw features (Phase 04.2.3)
+# XGBoost Optuna HPO on raw features
 # Fixed n_estimators with early stopping, log-scale regularisation,
 # extended hyperparameter ranges for continuous feature space
 _XGB_RAW_N_ESTIMATORS: int = 1000
@@ -276,7 +276,7 @@ _ENSEMBLE_3MODEL_WORKFLOW_WEIGHTS_PATH: Path = _PROJECT_ROOT / "reports" / "ense
 # Extended HPO (Wave 0) — Phase 4.1
 # Per-model extended hyperparameter optimization with higher trial budgets
 # and per-model feature pipelines (raw features, target encoding, DFS).
-# LightGBM HPO on Raw Features (Phase 04.2.4) — 3-store × 3-strategy ablation
+# LightGBM HPO on Raw Features — 3-store × 3-strategy ablation
 # Fixed n_estimators ceiling with early stopping; 50 trials per run
 _LGB_RAW_N_ESTIMATORS: int = 1000  # Fixed ceiling, not tuned (per D-07)
 _LGB_OPTUNA_N_TRIALS: int = 50     # Per D-10

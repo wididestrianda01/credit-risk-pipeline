@@ -134,7 +134,7 @@ def train_catboost_optuna(
     Loads feature store from disk, runs Bayesian HPO via Optuna (HyperbandPruner + TPESampler),
     applies Platt calibration, and saves artifacts. Supports 2-stage refit with early stopping.
 
-    Search space (per Phase 04.2.5 D-11):
+    Search space:
     - ``depth``               : int   [5, 10]     symmetric-tree depth (expanded for raw features)
     - ``learning_rate``       : float [0.01, 0.2] log-uniform (floor expanded)
     - ``l2_leaf_reg``         : float [0.1, 30]   log-scale expansion for raw features
@@ -378,6 +378,16 @@ def train_catboost_optuna(
     metrics["n_features"] = X.shape[1]
     oot_gini = 2 * roc_auc_score(y_oot, calibrated_model.predict_proba(X_oot)[:, 1]) - 1
     metrics["oot_gini"] = oot_gini
+    metrics["oof_gini"] = round(2 * _best_trial.value - 1, 10)
+    metrics["best_iterations"] = int(best_iterations)
+    metrics["best_params"] = best_params
+    try:
+        import subprocess as _sub
+        metrics["training_commit"] = _sub.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=str(_PROJECT_ROOT)
+        ).decode().strip()
+    except Exception:
+        metrics["training_commit"] = "unknown"
 
     # Save params JSON
     params_path = Path(_CAT_PARAMS_PATH)
@@ -385,7 +395,7 @@ def train_catboost_optuna(
     with params_path.open("w") as fh:
         _json.dump(best_params, fh, indent=2)
 
-    # Save metrics JSON (D-21)
+    # Save metrics JSON (D-21) — includes all evaluate_model fields + provenance for canonical backup
     metrics_out_path = _PROJECT_ROOT / "reports" / "catboost_raw_eval.json"
     metrics_out_path.parent.mkdir(parents=True, exist_ok=True)
     with metrics_out_path.open("w") as fh:

@@ -628,7 +628,7 @@ def train_lightgbm_optuna(
     oot_gini = 2 * roc_auc_score(y_oot, calibrated_model.predict_proba(X_oot)[:, 1]) - 1
     metrics["oot_gini"] = oot_gini
 
-    # Task 1: Persist metrics JSON for orchestrator (Phase 04.2.6)
+    # Persist metrics JSON for orchestrator
     # Determine output filename based on store_path and imbalance_strategy
     store_name = Path(feature_store_path).stem  # e.g., "X_tree_dfs"
     store_tag_map = {
