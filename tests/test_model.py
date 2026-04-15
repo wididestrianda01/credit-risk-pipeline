@@ -749,51 +749,75 @@ def test_train_xgboost_optuna_best_params_values_finite(xgb_optuna_result):
 
 # --- Artifact persistence ---
 
-def test_train_xgboost_optuna_model_saved(mock_data_parquet_path, monkeypatch):
-    """Calibrated model is saved to disk at models/xgboost_raw_calibrated.pkl."""
+def _patch_xgb_paths(monkeypatch, tmp_path):
+    """Redirect all train_xgboost_optuna writes to tmp_path.
+
+    Patches the names in src.model_xgboost's namespace — the module whose
+    __dict__ the function reads at call time.  Patching src.model instead
+    would rebind a different namespace and leave production paths intact.
+    """
+    import src.model_xgboost as xgb_module
+    monkeypatch.setattr(xgb_module, "_PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(xgb_module, "_XGB_RAW_MODEL_PATH", tmp_path / "xgboost_raw_calibrated.pkl")
+    monkeypatch.setattr(xgb_module, "_XGB_RAW_PARAMS_PATH", tmp_path / "xgboost_raw_params.json")
+    monkeypatch.setattr(xgb_module, "_XGB_RAW_EVAL_PATH", tmp_path / "xgboost_raw_eval.json")
+    monkeypatch.setattr(xgb_module, "_XGB_RAW_CAL_FIGURE_PATH", tmp_path / "xgboost_raw_calibration.png")
+
+
+def _patch_cat_paths(monkeypatch, tmp_path):
+    """Redirect all train_catboost_optuna writes to tmp_path.
+
+    Patches names in src.model_catboost's namespace — the module whose
+    __dict__ the function reads at call time.  Also pre-creates the
+    subdirectories that SQLite and artifact writers expect to find.
+    """
+    import src.model_catboost as cat_module
+    (tmp_path / "models").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "reports").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(cat_module, "_PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(cat_module, "_CAT_MODEL_PATH", tmp_path / "cat.pkl")
+    monkeypatch.setattr(cat_module, "_CAT_PARAMS_PATH", tmp_path / "cat_params.json")
+    monkeypatch.setattr(cat_module, "_CAT_FIGURE_PATH", tmp_path / "cat.png")
+    monkeypatch.setattr(cat_module, "_CAT_EVAL_PATH", tmp_path / "catboost_raw_eval.json")
+    monkeypatch.setattr(cat_module, "_OPTUNA_DB_PATH", tmp_path / "optuna_studies.db")
+
+
+def test_train_xgboost_optuna_model_saved(mock_data_parquet_path, monkeypatch, tmp_path):
+    """Calibrated model is saved to tmp_path (not production models/)."""
     import optuna as _optuna
     _orig = _optuna.create_study
     monkeypatch.setattr(_optuna, "create_study", lambda **kw: _orig(**{k: v for k, v in kw.items() if k != "storage"}))
-    from pathlib import Path
-    model_path = Path("models/xgboost_raw_calibrated.pkl")
-    # Clean up any previous run
-    if model_path.exists():
-        model_path.unlink()
+    _patch_xgb_paths(monkeypatch, tmp_path)
 
     train_xgboost_optuna(mock_data_parquet_path, n_trials=2)
-    assert model_path.exists(), "Calibrated model pickle not written"
+    assert (tmp_path / "xgboost_raw_calibrated.pkl").exists(), "Calibrated model pickle not written"
 
 
-def test_train_xgboost_optuna_params_json_valid(mock_data_parquet_path, monkeypatch):
+def test_train_xgboost_optuna_params_json_valid(mock_data_parquet_path, monkeypatch, tmp_path):
     """Params JSON is valid, deserializable, and contains expected keys."""
     import optuna as _optuna
     _orig = _optuna.create_study
     monkeypatch.setattr(_optuna, "create_study", lambda **kw: _orig(**{k: v for k, v in kw.items() if k != "storage"}))
-    from pathlib import Path
-    params_path = Path("models/xgboost_raw_params.json")
-    # Clean up any previous run
-    if params_path.exists():
-        params_path.unlink()
+    _patch_xgb_paths(monkeypatch, tmp_path)
 
     train_xgboost_optuna(mock_data_parquet_path, n_trials=2)
 
+    params_path = tmp_path / "xgboost_raw_params.json"
     assert params_path.exists(), "Params JSON not written"
     loaded = json.loads(params_path.read_text())
-    # Should have hyperparameters like max_depth, learning_rate, etc.
     assert "max_depth" in loaded, "max_depth not in params"
     assert "learning_rate" in loaded, "learning_rate not in params"
 
 
-def test_train_xgboost_optuna_model_round_trip(mock_data_parquet_path, monkeypatch):
+def test_train_xgboost_optuna_model_round_trip(mock_data_parquet_path, monkeypatch, tmp_path):
     """Save → load → predict_proba produces identical output."""
     import optuna as _optuna
     _orig = _optuna.create_study
     monkeypatch.setattr(_optuna, "create_study", lambda **kw: _orig(**{k: v for k, v in kw.items() if k != "storage"}))
-    from pathlib import Path
-    model_path = Path("models/xgboost_raw_calibrated.pkl")
+    _patch_xgb_paths(monkeypatch, tmp_path)
 
     model, _, X_test, _, _, _ = train_xgboost_optuna(mock_data_parquet_path, n_trials=2)
-    loaded = load_model(str(model_path))
+    loaded = load_model(str(tmp_path / "xgboost_raw_calibrated.pkl"))
     np.testing.assert_array_almost_equal(
         model.predict_proba(X_test),
         loaded.predict_proba(X_test),
@@ -1936,12 +1960,21 @@ from src.model import train_catboost_optuna, prepare_catboost_features  # noqa: 
 @pytest.fixture(scope="module")
 def catboost_result(tmp_path_factory):
     """Run train_catboost_optuna once per module (n_trials=2 for speed)."""
-    import src.model as model_module
+    import src.model_catboost as cat_module
     tmp = tmp_path_factory.mktemp("catboost")
     mp = pytest.MonkeyPatch()
-    mp.setattr(model_module, "_CAT_MODEL_PATH", str(tmp / "cat.pkl"))
-    mp.setattr(model_module, "_CAT_PARAMS_PATH", str(tmp / "cat.json"))
-    mp.setattr(model_module, "_CAT_FIGURE_PATH", str(tmp / "cat.png"))
+    # Patch src.model_catboost directly — that is the module whose __dict__ the
+    # function reads at call time.  Patching src.model rebinds only the re-export
+    # namespace and leaves production paths intact.
+    mp.setattr(cat_module, "_PROJECT_ROOT", tmp)
+    mp.setattr(cat_module, "_CAT_MODEL_PATH", tmp / "cat.pkl")
+    mp.setattr(cat_module, "_CAT_PARAMS_PATH", tmp / "cat.json")
+    mp.setattr(cat_module, "_CAT_FIGURE_PATH", tmp / "cat.png")
+    mp.setattr(cat_module, "_CAT_EVAL_PATH", tmp / "catboost_raw_eval.json")
+    mp.setattr(cat_module, "_OPTUNA_DB_PATH", tmp / "optuna_studies.db")
+    # SQLite needs the parent directory to exist before the DB file is created.
+    (tmp / "models").mkdir(parents=True, exist_ok=True)
+    (tmp / "reports").mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(42)
     n = 500
     y_arr = np.zeros(n, dtype=int)
@@ -1990,11 +2023,7 @@ class TestCatBoostOptuna:
 
     def test_model_artifact_saved(self, catboost_result, tmp_path, monkeypatch):
         """CatBoost model file is persisted to disk."""
-        import src.model as model_module
-        out = tmp_path / "cat.pkl"
-        monkeypatch.setattr(model_module, "_CAT_MODEL_PATH", str(out))
-        monkeypatch.setattr(model_module, "_CAT_PARAMS_PATH", str(tmp_path / "p.json"))
-        monkeypatch.setattr(model_module, "_CAT_FIGURE_PATH", str(tmp_path / "f.png"))
+        _patch_cat_paths(monkeypatch, tmp_path)
         rng = np.random.default_rng(7)
         n = 300
         y_arr = np.zeros(n, dtype=int); y_arr[:24] = 1; rng.shuffle(y_arr)
@@ -2002,15 +2031,11 @@ class TestCatBoostOptuna:
         feature_store_path = tmp_path / "X_tree_raw.parquet"
         df.to_parquet(feature_store_path)
         train_catboost_optuna(str(feature_store_path), n_trials=1)
-        assert out.exists(), "CatBoost model file not written"
+        assert (tmp_path / "cat.pkl").exists(), "CatBoost model file not written"
 
     def test_params_artifact_saved(self, catboost_result, tmp_path, monkeypatch):
         """CatBoost params JSON is persisted to disk."""
-        import src.model as model_module
-        params_path = tmp_path / "cat_p.json"
-        monkeypatch.setattr(model_module, "_CAT_MODEL_PATH", str(tmp_path / "cat.pkl"))
-        monkeypatch.setattr(model_module, "_CAT_PARAMS_PATH", str(params_path))
-        monkeypatch.setattr(model_module, "_CAT_FIGURE_PATH", str(tmp_path / "f.png"))
+        _patch_cat_paths(monkeypatch, tmp_path)
         rng = np.random.default_rng(8)
         n = 300
         y_arr = np.zeros(n, dtype=int); y_arr[:24] = 1; rng.shuffle(y_arr)
@@ -2018,18 +2043,15 @@ class TestCatBoostOptuna:
         feature_store_path = tmp_path / "X_tree_raw.parquet"
         df.to_parquet(feature_store_path)
         train_catboost_optuna(str(feature_store_path), n_trials=1)
-        assert params_path.exists(), "CatBoost params JSON not written"
+        assert (tmp_path / "cat_params.json").exists(), "CatBoost params JSON not written"
 
     def test_no_stdout(self, tmp_path, monkeypatch, capsys):
         """train_catboost_optuna must not write to stdout."""
-        import src.model as model_module
-        monkeypatch.setattr(model_module, "_CAT_MODEL_PATH", str(tmp_path / "cat.pkl"))
-        monkeypatch.setattr(model_module, "_CAT_PARAMS_PATH", str(tmp_path / "p.json"))
-        monkeypatch.setattr(model_module, "_CAT_FIGURE_PATH", str(tmp_path / "f.png"))
+        _patch_cat_paths(monkeypatch, tmp_path)
         rng = np.random.default_rng(9)
         n = 300
         y_arr = np.zeros(n, dtype=int); y_arr[:24] = 1; rng.shuffle(y_arr)
-        df = pd.DataFrame({"f1": rng.normal(0, 1, n), "f2": rng.normal(0, 1, n), "prev_days_decision_mean": np.arange(n, dtype=float), "TARGET": y_arr})
+        df = pd.DataFrame({"f1": rng.normal(0, 1, n), "f2": rng.normal(0, 1, n), "SK_ID_CURR": np.arange(1, n + 1, dtype=int), "TARGET": y_arr})
         feature_store_path = tmp_path / "X_tree_raw.parquet"
         df.to_parquet(feature_store_path)
         train_catboost_optuna(str(feature_store_path), n_trials=1)
@@ -2050,16 +2072,13 @@ class TestCatBoostOptuna:
 
     def test_catboost_scale_pos_weight_applied(self, tmp_path, monkeypatch):
         """scale_pos_weight is applied for imbalanced data (validates internal weighting)."""
-        import src.model as model_module
-        monkeypatch.setattr(model_module, "_CAT_MODEL_PATH", str(tmp_path / "cat.pkl"))
-        monkeypatch.setattr(model_module, "_CAT_PARAMS_PATH", str(tmp_path / "p.json"))
-        monkeypatch.setattr(model_module, "_CAT_FIGURE_PATH", str(tmp_path / "f.png"))
+        _patch_cat_paths(monkeypatch, tmp_path)
         rng = np.random.default_rng(0)
         n = 300
         y_arr = np.zeros(n, dtype=int)
         y_arr[:24] = 1  # 8% positive
         rng.shuffle(y_arr)
-        X = pd.DataFrame({"f1": rng.normal(0, 1, n), "f2": rng.normal(0, 1, n), "prev_days_decision_mean": np.arange(n, dtype=float)})
+        X = pd.DataFrame({"f1": rng.normal(0, 1, n), "f2": rng.normal(0, 1, n), "SK_ID_CURR": np.arange(1, n + 1, dtype=int)})
         X["TARGET"] = y_arr
         p = tmp_path / "X_imb.parquet"
         X.to_parquet(p, index=False)
@@ -2140,18 +2159,11 @@ class TestCatBoostOptuna:
     def test_catboost_artifacts_saved(self, catboost_result, tmp_path, monkeypatch):
         """pkl and json artifacts exist after running train_catboost_optuna."""
         import json as _json
-        import src.model as model_module
-        from src.model import _CAT_MODEL_PATH
-
-        # Create a separate run with monkeypatching to control artifact locations
-        monkeypatch.setattr(model_module, "_CAT_MODEL_PATH", str(tmp_path / "cat.pkl"))
-        monkeypatch.setattr(model_module, "_CAT_PARAMS_PATH", str(tmp_path / "cat_params.json"))
-        monkeypatch.setattr(model_module, "_CAT_FIGURE_PATH", str(tmp_path / "cat.png"))
-
+        _patch_cat_paths(monkeypatch, tmp_path)
         rng = np.random.default_rng(10)
         n = 300
         y_arr = np.zeros(n, dtype=int); y_arr[:24] = 1; rng.shuffle(y_arr)
-        df = pd.DataFrame({"f1": rng.normal(0, 1, n), "f2": rng.normal(0, 1, n), "prev_days_decision_mean": np.arange(n, dtype=float), "TARGET": y_arr})
+        df = pd.DataFrame({"f1": rng.normal(0, 1, n), "f2": rng.normal(0, 1, n), "SK_ID_CURR": np.arange(1, n + 1, dtype=int), "TARGET": y_arr})
         feature_store_path = tmp_path / "X_tree_raw.parquet"
         df.to_parquet(feature_store_path)
         train_catboost_optuna(str(feature_store_path), n_trials=1)

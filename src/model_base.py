@@ -120,6 +120,11 @@ _HPO_PROGRESS_LOG_PATH: Path = _PROJECT_ROOT / "reports" / "hpo_progress.jsonl"
 _XGB_OPTUNA_MODEL_PATH: Path = _PROJECT_ROOT / "models" / "xgboost_best.pkl"
 _XGB_OPTUNA_PARAMS_PATH: Path = _PROJECT_ROOT / "models" / "xgboost_params.json"
 _XGB_OPTUNA_FIGURE_PATH: Path = _PROJECT_ROOT / "reports" / "figures" / "xgboost_roc_pr.png"
+# Raw-feature XGBoost artefact paths — monkeypatchable in tests via src.model
+_XGB_RAW_MODEL_PATH: Path = _PROJECT_ROOT / "models" / "xgboost_raw_calibrated.pkl"
+_XGB_RAW_PARAMS_PATH: Path = _PROJECT_ROOT / "models" / "xgboost_raw_params.json"
+_XGB_RAW_EVAL_PATH: Path = _PROJECT_ROOT / "reports" / "xgboost_raw_eval.json"
+_XGB_RAW_CAL_FIGURE_PATH: Path = _PROJECT_ROOT / "reports" / "figures" / "xgboost_raw_calibration.png"
 
 # LightGBM Optuna HPO — search space bounds
 # num_leaves 20–300: controls model expressiveness (leaf-wise growth);
@@ -213,6 +218,7 @@ _CAT_RAW_MIN_DATA_IN_LEAF_MIN: int = 5
 _CAT_RAW_MIN_DATA_IN_LEAF_MAX: int = 50
 _CAT_PARAMS_PATH: Path = _PROJECT_ROOT / "models" / "catboost_params.json"
 _CAT_FIGURE_PATH: Path = _PROJECT_ROOT / "reports" / "figures" / "catboost_roc_pr.png"
+_CAT_EVAL_PATH: Path = _PROJECT_ROOT / "reports" / "catboost_raw_eval.json"
 # Raw categorical column names that CatBoost can consume natively.
 # These columns are WoE-encoded in X_woe; prepare_catboost_features()
 # swaps them back to raw strings when df_raw is supplied.

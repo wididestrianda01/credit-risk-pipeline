@@ -46,6 +46,7 @@ from src.model_base import (
     _XGB_RAW_GAMMA_MAX, _XGB_RAW_REG_ALPHA_MIN, _XGB_RAW_REG_LAMBDA_MIN, _XGB_RAW_REG_MAX,
     _XGB_RAW_STUDY_NAME, _HPO_PROGRESS_LOG_PATH, _XGB_OPTUNA_MODEL_PATH, _XGB_OPTUNA_PARAMS_PATH,
     _XGB_OPTUNA_FIGURE_PATH, _XGB_EXTENDED_OPTUNA_N_TRIALS,
+    _XGB_RAW_MODEL_PATH, _XGB_RAW_PARAMS_PATH, _XGB_RAW_EVAL_PATH, _XGB_RAW_CAL_FIGURE_PATH,
     _XGB_RAW_N_ESTIMATORS_MIN, _XGB_RAW_N_ESTIMATORS_MAX, _XGB_RAW_MAX_DEPTH_MIN, _XGB_RAW_MAX_DEPTH_MAX,
     _XGB_RAW_LEARNING_RATE_MIN, _XGB_RAW_LEARNING_RATE_MAX, _XGB_RAW_SUBSAMPLE_MIN, _XGB_RAW_SUBSAMPLE_MAX,
     _XGB_RAW_COLSAMPLE_BYTREE_MIN, _XGB_RAW_COLSAMPLE_BYTREE_MAX, _XGB_RAW_MIN_CHILD_WEIGHT_MIN, _XGB_RAW_GAMMA_MIN,
@@ -486,8 +487,8 @@ def train_xgboost_optuna(
     # Pass explicit paths to avoid overwriting LightGBM artifacts (default paths).
     model_calibrated, brier_uncal, brier_cal = calibrate_model(
         model_best, X_train, y_train, X_test, y_test, method="sigmoid",
-        output_model_path="models/xgboost_raw_calibrated.pkl",
-        output_figure_path="reports/figures/xgboost_raw_calibration.png",
+        output_model_path=str(_XGB_RAW_MODEL_PATH),
+        output_figure_path=str(_XGB_RAW_CAL_FIGURE_PATH),
     )
 
     # --- Evaluate calibrated model ---
@@ -501,13 +502,13 @@ def train_xgboost_optuna(
     save_model(model_best, _PROJECT_ROOT / "models" / "xgboost_raw_best.pkl")
 
     # --- Persist params ---
-    params_path = _PROJECT_ROOT / "models" / "xgboost_raw_params.json"
+    params_path = _XGB_RAW_PARAMS_PATH
     params_path.parent.mkdir(parents=True, exist_ok=True)
     with params_path.open("w") as fh:
         _json.dump(best_params, fh, indent=2)
 
     # --- Persist evaluation metrics ---
-    eval_path = _PROJECT_ROOT / "reports" / "xgboost_raw_eval.json"
+    eval_path = _XGB_RAW_EVAL_PATH
     eval_path.parent.mkdir(parents=True, exist_ok=True)
     with eval_path.open("w") as fh:
         _json.dump(metrics_dict, fh, indent=2)
