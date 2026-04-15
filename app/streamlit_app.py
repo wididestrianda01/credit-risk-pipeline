@@ -21,6 +21,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
 
@@ -30,7 +31,7 @@ from app.api import (
     ApplicantFeaturesRequest,
     _build_inference_features,
 )
-from src.explain import FEATURE_LABELS
+from src.explain import FEATURE_LABELS, get_adverse_action_factors
 from src.model_base import load_model
 
 # ---------------------------------------------------------------------------
@@ -82,6 +83,46 @@ if "result_available" not in st.session_state:
     st.session_state.risk_band = None
     st.session_state.X = None
     st.session_state.form_data = None
+
+
+# ---------------------------------------------------------------------------
+# Helper Functions
+# ---------------------------------------------------------------------------
+
+
+def get_shap_waterfall_figure(shap_explanation: Any, idx: int, X: pd.DataFrame) -> plt.Figure:
+    """
+    Render SHAP waterfall for a single sample as matplotlib Figure.
+
+    Parameters
+    ----------
+    shap_explanation : shap.Explanation
+        SHAP values from compute_shap_values()
+    idx : int
+        Row index (0-based) to visualize
+    X : pd.DataFrame
+        Feature matrix (not used in rendering, but included per signature)
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+        Figure object ready for st.pyplot()
+
+    Notes
+    -----
+    Adapted from src/explain.py::plot_shap_local() — returns Figure instead of saving.
+    Do NOT modify src/explain.py; keep source module report-compatible.
+    """
+    import shap
+
+    # Validate index
+    if idx < 0 or idx >= shap_explanation.shape[0]:
+        raise IndexError(f"idx {idx} out of range [0, {shap_explanation.shape[0]})")
+
+    # Render waterfall plot and return figure
+    shap.plots.waterfall(shap_explanation[idx], show=False)
+    fig = plt.gcf()
+    return fig
 
 # ---------------------------------------------------------------------------
 # Sidebar Form with 3 Expanders
@@ -456,54 +497,178 @@ with tab1:
             "to generate a prediction with SHAP waterfall analysis."
         )
     else:
-        # Display PD score and risk band
-        col1, col2, col3 = st.columns(3)
+        # --- Left column: Metrics | Right column: SHAP Waterfall ---
+        col1, col2 = st.columns([1, 2])
 
         with col1:
             st.metric(
                 label="Probability of Default",
                 value=f"{st.session_state.pd_score * 100:.1f}%",
-                help="Calibrated PD from CatBoost v2 model",
             )
-
-        with col2:
             st.metric(
                 label="Risk Band",
                 value=st.session_state.risk_band,
-                help="5-tier IRB risk classification",
             )
 
-        with col3:
-            st.metric(
-                label="OOT Gini",
-                value=0.5814,
-                help="Model discrimination power (Basel CRE36.54)",
-            )
+        with col2:
+            st.markdown("### Top 10 Feature Contributions to Score")
 
-        # Placeholder sections for Plan 02 (SHAP waterfall, adverse action table, etc.)
+            # Compute SHAP (cached in session_state to avoid recomputation on tab switch)
+            if "shap_vals" not in st.session_state:
+                from src.explain import compute_shap_values
+
+                st.session_state.shap_vals = compute_shap_values(model, st.session_state.X)
+
+            shap_vals = st.session_state.shap_vals
+
+            # Render waterfall
+            try:
+                fig = get_shap_waterfall_figure(shap_vals, idx=0, X=st.session_state.X)
+                st.pyplot(fig, use_container_width=True)
+                plt.close(fig)  # Free memory
+            except Exception as e:
+                st.error(f"❌ SHAP waterfall failed: {str(e)}")
+
         st.divider()
 
-        st.subheader("📊 Feature Contribution Analysis (SHAP Waterfall)")
-        st.info("⏳ SHAP waterfall plot will be added in Plan 02. Coming soon...")
+        # --- Adverse Action Factors Table ---
+        st.markdown("### Adverse Action Factors (Top 5)")
 
-        st.subheader("📋 Adverse Action Factors (Top 5)")
-        st.info("⏳ Adverse action factors table will be added in Plan 02. Coming soon...")
+        try:
+            factors = get_adverse_action_factors(
+                shap_vals, idx=0, feature_labels=FEATURE_LABELS, top_n=5
+            )
+
+            # Format for display: rank, factor (human label), direction, SHAP value
+            df_factors = pd.DataFrame(
+                [
+                    {
+                        "Rank": f["rank"],
+                        "Factor": f["human_label"],
+                        "Impact Direction": "↑ increases risk"
+                        if f["direction"] == "increases_risk"
+                        else "↓ reduces risk",
+                        "SHAP Value": f"{f['shap_value']:.4f}",
+                    }
+                    for f in factors
+                ]
+            )
+
+            st.dataframe(df_factors, use_container_width=True)
+
+            st.info("⚠️ Adverse action factors disclosed per GDPR Art. 22 — right to explanation.")
+        except Exception as e:
+            st.error(f"❌ Adverse action factors failed: {str(e)}")
 
 
 # ===== TAB 2: MODEL PERFORMANCE =====
 with tab2:
     st.header("📊 Model Performance Metrics")
-    st.info("⏳ Model performance metrics table will be added in Plan 02. Coming soon...")
-    st.info(
-        "Expected: OOT Gini, KS statistic, AUC-ROC, Brier score, calibration curve."
-    )
+
+    try:
+        # Load evaluation metrics from JSON
+        eval_path = Path(__file__).resolve().parent.parent / "reports" / "catboost_raw_eval.json"
+
+        if eval_path.exists():
+            with open(eval_path) as f:
+                eval_metrics = json.load(f)
+
+            # Display 4 key metrics in columns
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                st.metric(
+                    label="OOT Gini",
+                    value=f"{eval_metrics.get('Gini', 0):.4f}",
+                )
+            with col2:
+                st.metric(
+                    label="KS Statistic",
+                    value=f"{eval_metrics.get('KS', 0):.4f}",
+                )
+            with col3:
+                st.metric(
+                    label="AUC-ROC",
+                    value=f"{eval_metrics.get('AUC-ROC', 0):.4f}",
+                )
+            with col4:
+                st.metric(
+                    label="Brier Score",
+                    value=f"{eval_metrics.get('Brier', 0):.4f}",
+                )
+
+            st.divider()
+
+            # Basel CRE36.54 attribution (D-14 — exact text per UI-SPEC)
+            st.info(
+                "📋 **Basel CRE36.54 Compliance:** OOT Gini evaluated on held-out 20% test set "
+                "(temporal validation, SK_ID_CURR sort). Gini ≥ 0.60 indicates strong rank-ordering "
+                "power on unseen applicants. OOT Gini of 0.5814 is the regulatory discrimination metric."
+            )
+        else:
+            st.error(f"⚠️ Model metrics file not found: {eval_path}")
+            st.info("Expected: `reports/catboost_raw_eval.json`")
+
+    except Exception as e:
+        st.error(f"❌ Failed to load metrics: {str(e)}")
 
 
 # ===== TAB 3: FAIRNESS METRICS =====
 with tab3:
     st.header("⚖️ Fairness Analysis")
-    st.info("⏳ Fairness metrics and demographic parity analysis will be added in Plan 02. Coming soon...")
-    st.info(
-        "Expected: Gender disparate impact ratio (gate: ≥ 0.80), "
-        "Age DIR (monitored only), equalised odds by group."
-    )
+
+    try:
+        # Load fairness metrics from CSV
+        fairness_path = Path(__file__).resolve().parent.parent / "reports" / "fairness_metrics.csv"
+
+        if fairness_path.exists():
+            df_fair = pd.read_csv(fairness_path)
+
+            # Verify required columns exist
+            required_cols = ["group_name", "demographic_parity", "tpr", "fpr"]
+            missing_cols = [col for col in required_cols if col not in df_fair.columns]
+
+            if missing_cols:
+                st.error(f"❌ CSV is missing columns: {missing_cols}")
+                st.info(f"Expected columns: {required_cols}")
+            else:
+                # Display full fairness table
+                st.dataframe(df_fair, use_container_width=True)
+
+                st.divider()
+
+                # Extract Gender DIR (disparate impact ratio) from CSV
+                # Format: "Gender: M", "Gender: F" rows; compute DIR = min(F,M) / max(F,M)
+                gender_rows = df_fair[df_fair["group_name"].str.contains("Gender", case=False)]
+
+                if len(gender_rows) >= 2:
+                    gender_dir_values = gender_rows["demographic_parity"].values
+                    gender_dir = min(gender_dir_values) / max(gender_dir_values)
+
+                    # Gate decision (per CONTEXT.md D-16, D-17)
+                    if gender_dir >= 0.80:
+                        st.success(
+                            f"✅ **Gender Disparate Impact Ratio: {gender_dir:.3f}** — Gate PASSED (≥0.80)"
+                        )
+                    else:
+                        st.warning(
+                            f"⚠️ **Gender Disparate Impact Ratio: {gender_dir:.3f}** — Gate FAILED (<0.80)"
+                        )
+                else:
+                    st.warning("⚠️ Gender DIR could not be calculated (insufficient gender rows in CSV)")
+
+                st.divider()
+
+                # EU AI Act & GDPR note (D-17 — exact text per UI-SPEC)
+                st.info(
+                    "📜 **EU AI Act Art. 6 High-Risk AI:** Gender Disparate Impact Ratio gate "
+                    "is ≥0.80 (fairness measure for automated decision systems). Age DIR is monitored "
+                    "only — AGE_YEARS is excluded from all model training features per GDPR Art. 22 "
+                    "(age is a protected attribute)."
+                )
+        else:
+            st.error(f"⚠️ Fairness metrics file not found: {fairness_path}")
+            st.info("Expected: `reports/fairness_metrics.csv`")
+
+    except Exception as e:
+        st.error(f"❌ Failed to load fairness metrics: {str(e)}")
