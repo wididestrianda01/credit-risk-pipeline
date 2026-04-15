@@ -18,8 +18,15 @@ Features:
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any
+
+# Streamlit adds app/ to sys.path, not the project root.
+# Insert project root so `from app.api import ...` and `from src.* import ...` resolve.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -130,52 +137,70 @@ def get_shap_waterfall_figure(shap_explanation: Any, idx: int, X: pd.DataFrame) 
 
 st.sidebar.header("📋 Applicant Input Form")
 
-# Store form values in a dict for later submission
+# Store form values in a dict for later submission.
+# Age/employment years are collected in human units and converted to
+# the model's internal representation (negative day counts) before scoring.
 form_data: dict[str, Any] = {}
 
 # ===== Expander 1: Loan Terms =====
 with st.sidebar.expander("🏦 Loan Terms", expanded=True):
     amt_credit = st.number_input(
-        label=FEATURE_LABELS.get("AMT_CREDIT", "AMT_CREDIT"),
+        label="Loan Amount Requested",
         value=int(_TRAINING_MEDIANS["AMT_CREDIT"]),
-        min_value=10000,
-        max_value=1000000,
-        step=10000,
-        help="Requested credit amount in currency units",
+        min_value=10_000,
+        max_value=1_000_000,
+        step=10_000,
+        help=(
+            "Total loan amount the applicant is requesting (in currency units). "
+            "Example: enter 500000 for a 500,000 loan. "
+            "Typical range: 45,000–1,000,000."
+        ),
     )
     form_data["AMT_CREDIT"] = amt_credit
 
     amt_annuity = st.number_input(
-        label=FEATURE_LABELS.get("AMT_ANNUITY", "AMT_ANNUITY"),
+        label="Monthly Repayment Amount",
         value=int(_TRAINING_MEDIANS["AMT_ANNUITY"]),
         min_value=100,
-        max_value=500000,
+        max_value=500_000,
         step=500,
-        help="Monthly annuity/repayment amount",
+        help=(
+            "Fixed monthly instalment the applicant will pay to repay the loan. "
+            "Roughly: Loan Amount ÷ Loan Term in months. "
+            "Example: a 500,000 loan over 24 months ≈ 20,833/month."
+        ),
     )
     form_data["AMT_ANNUITY"] = amt_annuity
 
     amt_goods_price = st.number_input(
-        label=FEATURE_LABELS.get("AMT_GOODS_PRICE", "AMT_GOODS_PRICE"),
-        value=int(_TRAINING_MEDIANS.get("AMT_GOODS_PRICE", 450000)),
-        min_value=1000,
-        max_value=1000000,
-        step=10000,
-        help="Goods price (for consumer loans)",
+        label="Purchase Price of Goods",
+        value=int(_TRAINING_MEDIANS.get("AMT_GOODS_PRICE", 450_000)),
+        min_value=1_000,
+        max_value=1_000_000,
+        step=10_000,
+        help=(
+            "For consumer/POS loans: the market price of the item being financed "
+            "(e.g. a car worth 400,000 or a refrigerator worth 30,000). "
+            "For cash loans with no specific purchase, enter an amount close to the loan amount."
+        ),
     )
     form_data["AMT_GOODS_PRICE"] = amt_goods_price
 
     credit_term = st.number_input(
-        label=FEATURE_LABELS.get("CREDIT_TERM", "CREDIT_TERM"),
+        label="Loan Term (months)",
         value=int(_TRAINING_MEDIANS["CREDIT_TERM"]),
         min_value=6,
         max_value=72,
         step=1,
-        help="Loan term in months",
+        help=(
+            "Number of months to repay the loan. "
+            "Example: 24 = 2-year loan, 60 = 5-year loan. "
+            "Longer terms lower monthly payments but increase total interest paid."
+        ),
     )
     form_data["CREDIT_TERM"] = credit_term
 
-    # ORGANIZATION_TYPE selectbox with hardcoded options
+    # ORGANIZATION_TYPE — internal dataset codes; keep values as-is for model compatibility
     organization_options = [
         "Business Entity Type 3",
         "Business Entity Type 2",
@@ -222,10 +247,16 @@ with st.sidebar.expander("🏦 Loan Terms", expanded=True):
         "Agriculture",
     ]
     organization_type = st.selectbox(
-        label=FEATURE_LABELS.get("ORGANIZATION_TYPE", "ORGANIZATION_TYPE"),
+        label="Employer Type / Sector",
         options=organization_options,
         index=0,
-        help="Employer organization type",
+        help=(
+            "The general sector or type of the applicant's current employer. "
+            "'Business Entity Type 1/2/3' = private companies of different sizes "
+            "(Type 3 is the most common). "
+            "Select the closest match. Examples: a hospital → Medicine; "
+            "a supermarket → Trade; a factory → Industry."
+        ),
     )
     form_data["ORGANIZATION_TYPE"] = organization_type
 
@@ -233,56 +264,79 @@ with st.sidebar.expander("🏦 Loan Terms", expanded=True):
 # ===== Expander 2: Applicant Profile =====
 with st.sidebar.expander("👤 Applicant Profile", expanded=False):
     amt_income = st.number_input(
-        label=FEATURE_LABELS.get("AMT_INCOME_TOTAL", "AMT_INCOME_TOTAL"),
+        label="Annual Income",
         value=int(_TRAINING_MEDIANS["AMT_INCOME_TOTAL"]),
         min_value=0,
-        max_value=10000000,
-        step=10000,
-        help="Annual total income in currency units",
+        max_value=10_000_000,
+        step=10_000,
+        help=(
+            "Total gross annual income from all sources (salary, pension, business, etc.). "
+            "Enter the yearly total, not monthly. "
+            "Example: if monthly salary is 15,000, enter 180,000."
+        ),
     )
     form_data["AMT_INCOME_TOTAL"] = amt_income
 
-    days_birth = st.number_input(
-        label=FEATURE_LABELS.get("DAYS_BIRTH", "DAYS_BIRTH"),
-        value=int(_TRAINING_MEDIANS.get("DAYS_BIRTH", -14235)),
-        min_value=-100 * 365,
-        max_value=-16 * 365,
+    # Age in years — converted to DAYS_BIRTH internally (negative day count)
+    _median_age_years = int(abs(_TRAINING_MEDIANS.get("DAYS_BIRTH", -14235)) // 365)
+    age_years = st.slider(
+        label="Age (years)",
+        value=_median_age_years,
+        min_value=18,
+        max_value=75,
         step=1,
-        help="Days since birth (negative integer; e.g., -14235 ≈ 39 years old)",
+        help=(
+            "Applicant's current age in whole years. "
+            "The model uses this to assess credit maturity. "
+            "Converted internally to days since birth."
+        ),
     )
-    form_data["DAYS_BIRTH"] = days_birth
+    # Convert years → negative day count (model internal representation)
+    form_data["DAYS_BIRTH"] = -int(age_years * 365.25)
 
-    days_employed = st.number_input(
-        label=FEATURE_LABELS.get("DAYS_EMPLOYED", "DAYS_EMPLOYED"),
-        value=int(_TRAINING_MEDIANS["DAYS_EMPLOYED"]),
-        min_value=-100 * 365,
-        max_value=0,
+    # Years employed — converted to DAYS_EMPLOYED internally
+    _median_years_employed = int(abs(_TRAINING_MEDIANS.get("DAYS_EMPLOYED", -1213)) // 365)
+    years_employed = st.slider(
+        label="Years at Current Employer",
+        value=_median_years_employed,
+        min_value=0,
+        max_value=50,
         step=1,
-        help="Days employed (negative = duration; 365243 = unemployed sentinel, converted to 0)",
+        help=(
+            "How many complete years the applicant has been with their current employer. "
+            "Enter 0 if currently unemployed, a student, or a pensioner with no active employment. "
+            "Converted internally to days."
+        ),
     )
-    form_data["DAYS_EMPLOYED"] = days_employed
+    # 0 years → treated as not currently employed; otherwise convert to negative days
+    form_data["DAYS_EMPLOYED"] = 0 if years_employed == 0 else -int(years_employed * 365)
 
     cnt_children = st.number_input(
-        label=FEATURE_LABELS.get("CNT_CHILDREN", "CNT_CHILDREN"),
+        label="Number of Children",
         value=int(_TRAINING_MEDIANS["CNT_CHILDREN"]),
         min_value=0,
         max_value=20,
         step=1,
-        help="Number of children",
+        help=(
+            "Number of children the applicant is financially responsible for. "
+            "Does not include adult dependants."
+        ),
     )
     form_data["CNT_CHILDREN"] = cnt_children
 
     cnt_fam_members = st.number_input(
-        label=FEATURE_LABELS.get("CNT_FAM_MEMBERS", "CNT_FAM_MEMBERS"),
+        label="Total Family Members",
         value=int(_TRAINING_MEDIANS["CNT_FAM_MEMBERS"]),
         min_value=1,
         max_value=20,
         step=1,
-        help="Number of family members",
+        help=(
+            "Total number of people in the applicant's household, including the applicant. "
+            "Example: applicant + spouse + 2 children = 4."
+        ),
     )
     form_data["CNT_FAM_MEMBERS"] = cnt_fam_members
 
-    # NAME_EDUCATION_TYPE selectbox
     education_options = [
         "Academic degree",
         "Higher education",
@@ -291,14 +345,18 @@ with st.sidebar.expander("👤 Applicant Profile", expanded=False):
         "Secondary / secondary special",
     ]
     education_type = st.selectbox(
-        label=FEATURE_LABELS.get("NAME_EDUCATION_TYPE", "NAME_EDUCATION_TYPE"),
+        label="Highest Education Level",
         options=education_options,
         index=4,
-        help="Applicant's education level",
+        help=(
+            "Applicant's highest completed level of formal education. "
+            "'Secondary / secondary special' = high school or vocational qualification. "
+            "'Higher education' = university bachelor's or equivalent. "
+            "'Academic degree' = master's, PhD, or equivalent postgraduate."
+        ),
     )
     form_data["NAME_EDUCATION_TYPE"] = education_type
 
-    # NAME_INCOME_TYPE selectbox
     income_type_options = [
         "Working",
         "Commercial associate",
@@ -310,14 +368,20 @@ with st.sidebar.expander("👤 Applicant Profile", expanded=False):
         "Unemployed",
     ]
     income_type = st.selectbox(
-        label=FEATURE_LABELS.get("NAME_INCOME_TYPE", "NAME_INCOME_TYPE"),
+        label="Employment / Income Type",
         options=income_type_options,
         index=0,
-        help="Applicant's income source type",
+        help=(
+            "Primary source of the applicant's income. "
+            "'Working' = regular employee. "
+            "'Commercial associate' = works for a commercial company. "
+            "'State servant' = civil servant / public sector employee. "
+            "'Pensioner' = retired and receiving a pension. "
+            "'Self-employed' = runs their own business without formal employees."
+        ),
     )
     form_data["NAME_INCOME_TYPE"] = income_type
 
-    # OCCUPATION_TYPE selectbox
     occupation_options = [
         "Unknown",
         "Laborers",
@@ -337,19 +401,32 @@ with st.sidebar.expander("👤 Applicant Profile", expanded=False):
         "IT staff",
     ]
     occupation_type = st.selectbox(
-        label=FEATURE_LABELS.get("OCCUPATION_TYPE", "OCCUPATION_TYPE"),
+        label="Occupation",
         options=occupation_options,
         index=0,
-        help="Applicant's occupation type",
+        help=(
+            "Applicant's current job role or occupation category. "
+            "Select 'Unknown' if the applicant is unemployed, retired, or the occupation does not fit. "
+            "'Core staff' = essential/frontline staff (e.g. bank tellers, receptionists). "
+            "'Laborers' = manual/physical workers. "
+            "'High skill tech staff' = engineers, technicians with specialised training."
+        ),
     )
     form_data["OCCUPATION_TYPE"] = occupation_type
 
     region_rating = st.slider(
-        label=FEATURE_LABELS.get("REGION_RATING_CLIENT", "REGION_RATING_CLIENT"),
+        label="Home Region Credit Risk Rating",
         value=int(_TRAINING_MEDIANS["REGION_RATING_CLIENT"]),
         min_value=1,
         max_value=3,
-        help="Region credit risk rating (1=low risk, 3=high risk)",
+        step=1,
+        help=(
+            "The lender's internal risk rating of the applicant's home region. "
+            "1 = low-risk region (urban, stable economy). "
+            "2 = medium-risk region. "
+            "3 = high-risk region (rural, higher historical default rates). "
+            "If unknown, leave at 2 (the average)."
+        ),
     )
     form_data["REGION_RATING_CLIENT"] = region_rating
 
@@ -357,82 +434,115 @@ with st.sidebar.expander("👤 Applicant Profile", expanded=False):
 # ===== Expander 3: Credit History =====
 with st.sidebar.expander("📊 Credit History", expanded=False):
     ext_source_1 = st.slider(
-        label=FEATURE_LABELS.get("EXT_SOURCE_1", "EXT_SOURCE_1"),
-        value=_TRAINING_MEDIANS.get("EXT_SOURCE_1", 0.5),
-        min_value=-999.0,
+        label="External Credit Score 1",
+        value=float(_TRAINING_MEDIANS.get("EXT_SOURCE_1", 0.5)),
+        min_value=0.0,
         max_value=1.0,
         step=0.01,
-        help="External credit score 1 (0–1 scale; ~45% missing)",
+        help=(
+            "A normalised creditworthiness score from an external credit bureau (scale: 0–1). "
+            "Higher = better credit history. "
+            "This score is often missing (~45% of applicants); leave at 0.50 if unavailable. "
+            "It reflects past repayment behaviour across all lenders."
+        ),
     )
     form_data["EXT_SOURCE_1"] = ext_source_1
 
     ext_source_2 = st.slider(
-        label=FEATURE_LABELS.get("EXT_SOURCE_2", "EXT_SOURCE_2"),
-        value=_TRAINING_MEDIANS["EXT_SOURCE_2"],
+        label="External Credit Score 2",
+        value=float(_TRAINING_MEDIANS["EXT_SOURCE_2"]),
         min_value=0.0,
         max_value=1.0,
         step=0.01,
-        help="External credit score 2 (0–1 scale; strongest predictor)",
+        help=(
+            "A normalised creditworthiness score from a second external bureau (scale: 0–1). "
+            "Higher = better credit history. "
+            "This is the single strongest predictor in the model — provide it if possible. "
+            "It summarises the applicant's overall credit track record."
+        ),
     )
     form_data["EXT_SOURCE_2"] = ext_source_2
 
     ext_source_3 = st.slider(
-        label=FEATURE_LABELS.get("EXT_SOURCE_3", "EXT_SOURCE_3"),
-        value=_TRAINING_MEDIANS["EXT_SOURCE_3"],
+        label="External Credit Score 3",
+        value=float(_TRAINING_MEDIANS["EXT_SOURCE_3"]),
         min_value=0.0,
         max_value=1.0,
         step=0.01,
-        help="External credit score 3 (0–1 scale)",
+        help=(
+            "A normalised creditworthiness score from a third external source (scale: 0–1). "
+            "Higher = better credit history. "
+            "Often derived from alternative data (e.g. utility payment records). "
+            "Leave at 0.46 (median) if unavailable."
+        ),
     )
     form_data["EXT_SOURCE_3"] = ext_source_3
 
     bureau_cnt = st.number_input(
-        label=FEATURE_LABELS.get("bureau_cnt", "bureau_cnt"),
+        label="Number of Credit Bureau Records",
         value=int(_TRAINING_MEDIANS["bureau_cnt"]),
         min_value=0,
         max_value=50,
         step=1,
-        help="Count of bureau records",
+        help=(
+            "Total number of past loans or credit lines recorded at external credit bureaus. "
+            "Includes mortgages, car loans, personal loans at any lender — not just this one. "
+            "0 means the applicant has no credit history on record."
+        ),
     )
     form_data["bureau_cnt"] = bureau_cnt
 
     prev_cnt = st.number_input(
-        label=FEATURE_LABELS.get("prev_cnt", "prev_cnt"),
+        label="Previous Applications at This Lender",
         value=int(_TRAINING_MEDIANS["prev_cnt"]),
         min_value=0,
         max_value=50,
         step=1,
-        help="Count of previous applications",
+        help=(
+            "Number of previous loan applications the applicant has made specifically "
+            "to this lender (Home Credit). Includes approved, rejected, and cancelled applications."
+        ),
     )
     form_data["prev_cnt"] = prev_cnt
 
     pos_cnt = st.number_input(
-        label=FEATURE_LABELS.get("pos_cnt", "pos_cnt"),
+        label="Point-of-Sale / Cash Loan Accounts",
         value=int(_TRAINING_MEDIANS["pos_cnt"]),
         min_value=0,
         max_value=100,
         step=1,
-        help="Count of POS cash accounts",
+        help=(
+            "Number of POS (point-of-sale) or cash loan accounts previously held with this lender. "
+            "POS loans are short-term consumer loans taken at a retail store checkout. "
+            "Enter 0 if the applicant is a first-time borrower here."
+        ),
     )
     form_data["pos_cnt"] = pos_cnt
 
     inst_cnt = st.number_input(
-        label=FEATURE_LABELS.get("inst_cnt", "inst_cnt"),
+        label="Instalment Payment Records",
         value=int(_TRAINING_MEDIANS["inst_cnt"]),
         min_value=0,
         max_value=100,
         step=1,
-        help="Count of installment payment records",
+        help=(
+            "Total number of instalment payment records across all previous loans. "
+            "Each monthly payment on a previous loan counts as one record. "
+            "Higher counts indicate a longer repayment history."
+        ),
     )
     form_data["inst_cnt"] = inst_cnt
 
     cc_cnt = st.number_input(
-        label=FEATURE_LABELS.get("cc_cnt", "cc_cnt"),
+        label="Credit Card Accounts",
         value=int(_TRAINING_MEDIANS["cc_cnt"]),
         min_value=0,
         max_value=50,
         step=1,
-        help="Count of credit card accounts",
+        help=(
+            "Number of active or past credit card accounts held with this lender. "
+            "Enter 0 if the applicant has never had a credit card here."
+        ),
     )
     form_data["cc_cnt"] = cc_cnt
 
