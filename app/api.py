@@ -11,8 +11,8 @@ GET  /health    – liveness check, returns model version + uptime (no auth requ
 
 Usage
 -----
-1. Set API_KEY environment variable:
-   export API_KEY=your-api-key
+1. Set CREDIT_RISK_API_KEY environment variable:
+   export CREDIT_RISK_API_KEY=your-api-key
 
 2. Or copy .env.example to .env and update:
    cp .env.example .env
@@ -589,14 +589,14 @@ def _build_inference_features(request: ApplicantFeaturesRequest) -> pd.DataFrame
 
 
 def verify_api_key(api_key: str | None = Depends(_api_key_header)) -> str:
-    """Verify X-API-Key header against the API_KEY environment variable.
+    """Verify X-API-Key header against the CREDIT_RISK_API_KEY environment variable.
 
     Uses secrets.compare_digest() to prevent timing attacks (ASVS 2.7.1 / T-05.1-01).
 
     Raises
     ------
     HTTPException
-        401 if key is missing or does not match API_KEY env var.
+        401 if key is missing or does not match CREDIT_RISK_API_KEY env var.
     """
     if api_key is None:
         raise HTTPException(
@@ -604,7 +604,7 @@ def verify_api_key(api_key: str | None = Depends(_api_key_header)) -> str:
             detail="Missing API key",
         )
 
-    expected_key = os.environ.get("API_KEY", "")
+    expected_key = os.environ.get("CREDIT_RISK_API_KEY", "")
     if not secrets.compare_digest(api_key, expected_key):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

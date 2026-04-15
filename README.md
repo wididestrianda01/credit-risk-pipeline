@@ -98,7 +98,7 @@ Source: [Home Credit Default Risk — Kaggle Competition](https://www.kaggle.com
 5. **Set up API key (optional, for /predict endpoint):**
    ```bash
    cp .env.example .env
-   # Edit .env and add your API_KEY=your-secret-key
+   # Edit .env and set CREDIT_RISK_API_KEY=your-secret-key
    ```
 
 ---
@@ -496,12 +496,12 @@ python scripts/train_catboost_raw.py
 
 ### "API key missing" on /predict
 
-Set API_KEY environment variable:
+Set CREDIT_RISK_API_KEY environment variable:
 
 ```bash
-export API_KEY=your-secret-key
+export CREDIT_RISK_API_KEY=your-secret-key
 # OR
-echo "API_KEY=your-secret-key" > .env
+echo "CREDIT_RISK_API_KEY=your-secret-key" > .env
 ```
 
 ### Slow feature engineering
