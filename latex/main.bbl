@@ -1,0 +1,526 @@
+% $ biblatex auxiliary file $
+% $ biblatex bbl format version 3.3 $
+% Do not modify the above lines!
+%
+% This is an auxiliary file used by the 'biblatex' package.
+% This file may safely be deleted. It will be recreated by
+% biber as required.
+%
+\begingroup
+\makeatletter
+\@ifundefined{ver@biblatex.sty}
+  {\@latex@error
+     {Missing 'biblatex' package}
+     {The bibliography requires the 'biblatex' package.}
+      \aftergroup\endinput}
+  {}
+\endgroup
+
+
+\refsection{0}
+  \datalist[entry]{nyt/global//global/global/global}
+    \entry{aldaoud2019}{article}{}{}
+      \name{author}{1}{}{%
+        {{un=0,uniquepart=base,hash=f2e964fb6ade52015b53d3252f55acb7}{%
+           family={Al\bibnamedelima Daoud},
+           familyi={A\bibinitperiod\bibinitdelim D\bibinitperiod},
+           given={Essam},
+           giveni={E\bibinitperiod},
+           givenun=0}}%
+      }
+      \strng{namehash}{f2e964fb6ade52015b53d3252f55acb7}
+      \strng{fullhash}{f2e964fb6ade52015b53d3252f55acb7}
+      \strng{fullhashraw}{f2e964fb6ade52015b53d3252f55acb7}
+      \strng{bibnamehash}{f2e964fb6ade52015b53d3252f55acb7}
+      \strng{authorbibnamehash}{f2e964fb6ade52015b53d3252f55acb7}
+      \strng{authornamehash}{f2e964fb6ade52015b53d3252f55acb7}
+      \strng{authorfullhash}{f2e964fb6ade52015b53d3252f55acb7}
+      \strng{authorfullhashraw}{f2e964fb6ade52015b53d3252f55acb7}
+      \field{sortinit}{A}
+      \field{sortinithash}{2f401846e2029bad6b3ecc16d50031e2}
+      \field{extradatescope}{labelyear}
+      \field{labeldatesource}{}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{International Journal of Computer and Information Engineering}
+      \field{note}{Direct comparison of the three boosting frameworks on the exact Home Credit Default Risk dataset used in this work; CatBoost achieved the highest AUC in that study.}
+      \field{number}{1}
+      \field{title}{Comparison Between {XGBoost}, {LightGBM} and {CatBoost} Using a Home Credit Dataset}
+      \field{volume}{13}
+      \field{year}{2019}
+      \field{pages}{6\bibrangedash 10}
+      \range{pages}{5}
+    \endentry
+    \entry{bcbs_basel_framework_2024}{report}{}{}
+      \name{author}{1}{}{%
+        {{un=0,uniquepart=base,hash=d0ffe6cbb4fa63b7d49592758a445e8c}{%
+           family={{Basel Committee on Banking Supervision}},
+           familyi={B\bibinitperiod}}}%
+      }
+      \list{institution}{1}{%
+        {Bank for International Settlements}%
+      }
+      \strng{namehash}{d0ffe6cbb4fa63b7d49592758a445e8c}
+      \strng{fullhash}{d0ffe6cbb4fa63b7d49592758a445e8c}
+      \strng{fullhashraw}{d0ffe6cbb4fa63b7d49592758a445e8c}
+      \strng{bibnamehash}{d0ffe6cbb4fa63b7d49592758a445e8c}
+      \strng{authorbibnamehash}{d0ffe6cbb4fa63b7d49592758a445e8c}
+      \strng{authornamehash}{d0ffe6cbb4fa63b7d49592758a445e8c}
+      \strng{authorfullhash}{d0ffe6cbb4fa63b7d49592758a445e8c}
+      \strng{authorfullhashraw}{d0ffe6cbb4fa63b7d49592758a445e8c}
+      \field{sortinit}{B}
+      \field{sortinithash}{d7095fff47cda75ca2589920aae98399}
+      \field{extradatescope}{labelyear}
+      \field{labeldatesource}{}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{month}{11}
+      \field{note}{Effective November 2024. CRE36.54 mandates temporal out-of-time validation for IRB models.}
+      \field{title}{Basel Framework: Credit Risk — Internal Ratings-Based Approach ({CRE36})}
+      \field{type}{techreport}
+      \field{year}{2024}
+      \verb{urlraw}
+      \verb https://www.bis.org/basel_framework/chapter/CRE/36.htm
+      \endverb
+      \verb{url}
+      \verb https://www.bis.org/basel_framework/chapter/CRE/36.htm
+      \endverb
+    \endentry
+    \entry{buolamwini2018}{inproceedings}{}{}
+      \name{author}{2}{}{%
+        {{un=0,uniquepart=base,hash=694238e772e190a6c1c2e0c1e68ee000}{%
+           family={Buolamwini},
+           familyi={B\bibinitperiod},
+           given={Joy},
+           giveni={J\bibinitperiod},
+           givenun=0}}%
+        {{un=0,uniquepart=base,hash=f2b0ffb56c5d1e4220c16c0258e02eae}{%
+           family={Gebru},
+           familyi={G\bibinitperiod},
+           given={Timnit},
+           giveni={T\bibinitperiod},
+           givenun=0}}%
+      }
+      \strng{namehash}{1d3df5a4e120235c82cc5c5428e6a913}
+      \strng{fullhash}{1d3df5a4e120235c82cc5c5428e6a913}
+      \strng{fullhashraw}{1d3df5a4e120235c82cc5c5428e6a913}
+      \strng{bibnamehash}{1d3df5a4e120235c82cc5c5428e6a913}
+      \strng{authorbibnamehash}{1d3df5a4e120235c82cc5c5428e6a913}
+      \strng{authornamehash}{1d3df5a4e120235c82cc5c5428e6a913}
+      \strng{authorfullhash}{1d3df5a4e120235c82cc5c5428e6a913}
+      \strng{authorfullhashraw}{1d3df5a4e120235c82cc5c5428e6a913}
+      \field{sortinit}{B}
+      \field{sortinithash}{d7095fff47cda75ca2589920aae98399}
+      \field{extradatescope}{labelyear}
+      \field{labeldatesource}{}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{booktitle}{Proceedings of the 1st Conference on Fairness, Accountability and Transparency (FAccT)}
+      \field{note}{Seminal fairness audit paper; motivates demographic parity and disparate impact analysis for AI systems.}
+      \field{title}{Gender Shades: Intersectional Accuracy Disparities in Commercial Gender Classification}
+      \field{year}{2018}
+      \field{pages}{77\bibrangedash 91}
+      \range{pages}{15}
+    \endentry
+    \entry{chawla2002smote}{article}{}{}
+      \name{author}{4}{}{%
+        {{un=0,uniquepart=base,hash=07f6b2699d3cab07b3a5b04353899cba}{%
+           family={Chawla},
+           familyi={C\bibinitperiod},
+           given={Nitesh\bibnamedelima V.},
+           giveni={N\bibinitperiod\bibinitdelim V\bibinitperiod},
+           givenun=0}}%
+        {{un=0,uniquepart=base,hash=07156c210eaf004bb9d8ec5b07f02d55}{%
+           family={Bowyer},
+           familyi={B\bibinitperiod},
+           given={Kevin\bibnamedelima W.},
+           giveni={K\bibinitperiod\bibinitdelim W\bibinitperiod},
+           givenun=0}}%
+        {{un=0,uniquepart=base,hash=3f083c041520d8fa6be3faa597476d15}{%
+           family={Hall},
+           familyi={H\bibinitperiod},
+           given={Lawrence\bibnamedelima O.},
+           giveni={L\bibinitperiod\bibinitdelim O\bibinitperiod},
+           givenun=0}}%
+        {{un=0,uniquepart=base,hash=7cf2422c92b85e461acc6dd47fdb3ba8}{%
+           family={Kegelmeyer},
+           familyi={K\bibinitperiod},
+           given={W.\bibnamedelimi Philip},
+           giveni={W\bibinitperiod\bibinitdelim P\bibinitperiod},
+           givenun=0}}%
+      }
+      \strng{namehash}{6bcc313fb25bc61f74b62ca709ae4b05}
+      \strng{fullhash}{c8dfb87590a41f2f9294282b456dede4}
+      \strng{fullhashraw}{c8dfb87590a41f2f9294282b456dede4}
+      \strng{bibnamehash}{6bcc313fb25bc61f74b62ca709ae4b05}
+      \strng{authorbibnamehash}{6bcc313fb25bc61f74b62ca709ae4b05}
+      \strng{authornamehash}{6bcc313fb25bc61f74b62ca709ae4b05}
+      \strng{authorfullhash}{c8dfb87590a41f2f9294282b456dede4}
+      \strng{authorfullhashraw}{c8dfb87590a41f2f9294282b456dede4}
+      \field{sortinit}{C}
+      \field{sortinithash}{4d103a86280481745c9c897c925753c0}
+      \field{extradatescope}{labelyear}
+      \field{labeldatesource}{}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{Journal of Artificial Intelligence Research}
+      \field{title}{{SMOTE}: Synthetic Minority Over-sampling Technique}
+      \field{volume}{16}
+      \field{year}{2002}
+      \field{pages}{321\bibrangedash 357}
+      \range{pages}{37}
+      \verb{doi}
+      \verb 10.1613/jair.953
+      \endverb
+    \endentry
+    \entry{engelmann2006}{book}{}{}
+      \name{author}{3}{}{%
+        {{un=0,uniquepart=base,hash=1542fe7172e88a483cd6405714787166}{%
+           family={Engelmann},
+           familyi={E\bibinitperiod},
+           given={Bernd},
+           giveni={B\bibinitperiod},
+           givenun=0}}%
+        {{un=0,uniquepart=base,hash=cf64047b0aaf90d20824354ea84c0b97}{%
+           family={Hayden},
+           familyi={H\bibinitperiod},
+           given={Evelyn},
+           giveni={E\bibinitperiod},
+           givenun=0}}%
+        {{un=0,uniquepart=base,hash=877cf235d81d4d8f4443c1648be39600}{%
+           family={Tasche},
+           familyi={T\bibinitperiod},
+           given={Dirk},
+           giveni={D\bibinitperiod},
+           givenun=0}}%
+      }
+      \list{publisher}{1}{%
+        {Deutsche Bundesbank}%
+      }
+      \strng{namehash}{27035734999e5910fb4c21086072a86c}
+      \strng{fullhash}{27035734999e5910fb4c21086072a86c}
+      \strng{fullhashraw}{27035734999e5910fb4c21086072a86c}
+      \strng{bibnamehash}{27035734999e5910fb4c21086072a86c}
+      \strng{authorbibnamehash}{27035734999e5910fb4c21086072a86c}
+      \strng{authornamehash}{27035734999e5910fb4c21086072a86c}
+      \strng{authorfullhash}{27035734999e5910fb4c21086072a86c}
+      \strng{authorfullhashraw}{27035734999e5910fb4c21086072a86c}
+      \field{sortinit}{E}
+      \field{sortinithash}{8da8a182d344d5b9047633dfc0cc9131}
+      \field{extradatescope}{labelyear}
+      \field{labeldatesource}{}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{note}{Discussion Paper No. 01/2003. Defines the Gini coefficient (= 2×AUC−1) as the standard credit model discriminative power metric; ROC curve interpretation for PD models.}
+      \field{title}{Measuring the Discriminative Power of Rating Systems}
+      \field{year}{2006}
+    \endentry
+    \entry{gdpr_2016_679}{legislation}{}{}
+      \name{author}{1}{}{%
+        {{un=0,uniquepart=base,hash=d0baa957acb6522d22e3251a428fe067}{%
+           family={{European Parliament and Council of the European Union}},
+           familyi={E\bibinitperiod}}}%
+      }
+      \strng{namehash}{d0baa957acb6522d22e3251a428fe067}
+      \strng{fullhash}{d0baa957acb6522d22e3251a428fe067}
+      \strng{fullhashraw}{d0baa957acb6522d22e3251a428fe067}
+      \strng{bibnamehash}{d0baa957acb6522d22e3251a428fe067}
+      \strng{authorbibnamehash}{d0baa957acb6522d22e3251a428fe067}
+      \strng{authornamehash}{d0baa957acb6522d22e3251a428fe067}
+      \strng{authorfullhash}{d0baa957acb6522d22e3251a428fe067}
+      \strng{authorfullhashraw}{d0baa957acb6522d22e3251a428fe067}
+      \field{extraname}{1}
+      \field{sortinit}{E}
+      \field{sortinithash}{8da8a182d344d5b9047633dfc0cc9131}
+      \field{extradatescope}{labelyear}
+      \field{labeldatesource}{}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{Official Journal of the European Union}
+      \field{note}{GDPR. Article 22: automated individual decision-making including profiling; adverse action notice obligation for algorithmic credit decisions.}
+      \field{title}{Regulation ({EU}) 2016/679 of the European Parliament and of the Council on the Protection of Natural Persons with Regard to the Processing of Personal Data}
+      \field{volume}{L 119}
+      \field{year}{2016}
+      \field{pages}{1\bibrangedash 88}
+      \range{pages}{88}
+    \endentry
+    \entry{eu_ai_act_2024_1689}{legislation}{}{}
+      \name{author}{1}{}{%
+        {{un=0,uniquepart=base,hash=d0baa957acb6522d22e3251a428fe067}{%
+           family={{European Parliament and Council of the European Union}},
+           familyi={E\bibinitperiod}}}%
+      }
+      \strng{namehash}{d0baa957acb6522d22e3251a428fe067}
+      \strng{fullhash}{d0baa957acb6522d22e3251a428fe067}
+      \strng{fullhashraw}{d0baa957acb6522d22e3251a428fe067}
+      \strng{bibnamehash}{d0baa957acb6522d22e3251a428fe067}
+      \strng{authorbibnamehash}{d0baa957acb6522d22e3251a428fe067}
+      \strng{authornamehash}{d0baa957acb6522d22e3251a428fe067}
+      \strng{authorfullhash}{d0baa957acb6522d22e3251a428fe067}
+      \strng{authorfullhashraw}{d0baa957acb6522d22e3251a428fe067}
+      \field{extraname}{2}
+      \field{sortinit}{E}
+      \field{sortinithash}{8da8a182d344d5b9047633dfc0cc9131}
+      \field{extradatescope}{labelyear}
+      \field{labeldatesource}{}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{Official Journal of the European Union}
+      \field{note}{EU AI Act. Article 6 and Annex III Point 6(d): credit scoring classified as high-risk AI system; mandatory bias testing, human oversight, transparency; enforcement from August 2026.}
+      \field{title}{Regulation ({EU}) 2024/1689 Laying Down Harmonised Rules on Artificial Intelligence (Artificial Intelligence Act)}
+      \field{volume}{L}
+      \field{year}{2024}
+    \endentry
+    \entry{feldman2015}{inproceedings}{}{}
+      \name{author}{5}{}{%
+        {{un=0,uniquepart=base,hash=244c96635798701847a1e6c990863733}{%
+           family={Feldman},
+           familyi={F\bibinitperiod},
+           given={Michael},
+           giveni={M\bibinitperiod},
+           givenun=0}}%
+        {{un=0,uniquepart=base,hash=b2b40e7a0fdfbdbcf9af2da7c8e59417}{%
+           family={Friedler},
+           familyi={F\bibinitperiod},
+           given={Sorelle\bibnamedelima A.},
+           giveni={S\bibinitperiod\bibinitdelim A\bibinitperiod},
+           givenun=0}}%
+        {{un=0,uniquepart=base,hash=2dfff61dbc9e69984218b6fa859febd5}{%
+           family={Moeller},
+           familyi={M\bibinitperiod},
+           given={John},
+           giveni={J\bibinitperiod},
+           givenun=0}}%
+        {{un=0,uniquepart=base,hash=de216a4cef9daa2d1fce563e8b498941}{%
+           family={Scheidegger},
+           familyi={S\bibinitperiod},
+           given={Carlos},
+           giveni={C\bibinitperiod},
+           givenun=0}}%
+        {{un=0,uniquepart=base,hash=aaeb9142f2e1590450061f637edb6845}{%
+           family={Venkatasubramanian},
+           familyi={V\bibinitperiod},
+           given={Suresh},
+           giveni={S\bibinitperiod},
+           givenun=0}}%
+      }
+      \strng{namehash}{3b1cce86496aaf13c09dd79ffe2475b2}
+      \strng{fullhash}{1ece2bf8f6d5dee69a99b249fc47c0ce}
+      \strng{fullhashraw}{1ece2bf8f6d5dee69a99b249fc47c0ce}
+      \strng{bibnamehash}{3b1cce86496aaf13c09dd79ffe2475b2}
+      \strng{authorbibnamehash}{3b1cce86496aaf13c09dd79ffe2475b2}
+      \strng{authornamehash}{3b1cce86496aaf13c09dd79ffe2475b2}
+      \strng{authorfullhash}{1ece2bf8f6d5dee69a99b249fc47c0ce}
+      \strng{authorfullhashraw}{1ece2bf8f6d5dee69a99b249fc47c0ce}
+      \field{sortinit}{F}
+      \field{sortinithash}{2638baaa20439f1b5a8f80c6c08a13b4}
+      \field{extradatescope}{labelyear}
+      \field{labeldatesource}{}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{booktitle}{Proceedings of the 21st ACM SIGKDD International Conference on Knowledge Discovery and Data Mining}
+      \field{note}{Defines Disparate Impact Ratio (DIR = P(\hat{Y}=1|group=protected) / P(\hat{Y}=1|group=privileged)); 80\% rule threshold (DIR ≥ 0.80) from US EEOC guidelines.}
+      \field{title}{Certifying and Removing Disparate Impact}
+      \field{year}{2015}
+      \field{pages}{259\bibrangedash 268}
+      \range{pages}{10}
+      \verb{doi}
+      \verb 10.1145/2783258.2783311
+      \endverb
+    \endentry
+    \entry{kolmogorov1933}{article}{}{}
+      \name{author}{1}{}{%
+        {{un=0,uniquepart=base,hash=9447190e9dab1963bdc4b3a497cabd45}{%
+           family={Kolmogorov},
+           familyi={K\bibinitperiod},
+           given={Andrei\bibnamedelima Nikolaevich},
+           giveni={A\bibinitperiod\bibinitdelim N\bibinitperiod},
+           givenun=0}}%
+      }
+      \strng{namehash}{9447190e9dab1963bdc4b3a497cabd45}
+      \strng{fullhash}{9447190e9dab1963bdc4b3a497cabd45}
+      \strng{fullhashraw}{9447190e9dab1963bdc4b3a497cabd45}
+      \strng{bibnamehash}{9447190e9dab1963bdc4b3a497cabd45}
+      \strng{authorbibnamehash}{9447190e9dab1963bdc4b3a497cabd45}
+      \strng{authornamehash}{9447190e9dab1963bdc4b3a497cabd45}
+      \strng{authorfullhash}{9447190e9dab1963bdc4b3a497cabd45}
+      \strng{authorfullhashraw}{9447190e9dab1963bdc4b3a497cabd45}
+      \field{sortinit}{K}
+      \field{sortinithash}{c02bf6bff1c488450c352b40f5d853ab}
+      \field{extradatescope}{labelyear}
+      \field{labeldatesource}{}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{Giornale dell'Istituto Italiano degli Attuari}
+      \field{note}{Original paper establishing the Kolmogorov-Smirnov test; KS statistic measures maximum separation between cumulative distributions — applied in credit risk as separation between default/non-default score distributions.}
+      \field{title}{Sulla Determinazione Empirica di una Legge di Distribuzione}
+      \field{volume}{4}
+      \field{year}{1933}
+      \field{pages}{83\bibrangedash 91}
+      \range{pages}{9}
+    \endentry
+    \entry{liu2023}{article}{}{}
+      \name{author}{3}{}{%
+        {{un=1,uniquepart=given,hash=c0e0d23e2d09e45e6f51cc2bcea6d9f9}{%
+           family={Liu},
+           familyi={L\bibinitperiod},
+           given={Wei},
+           giveni={W\bibinitperiod},
+           givenun=1}}%
+        {{un=0,uniquepart=base,hash=e7495660d4aa0144711fb6c205bf7ac5}{%
+           family={Fan},
+           familyi={F\bibinitperiod},
+           given={Hong},
+           giveni={H\bibinitperiod},
+           givenun=0}}%
+        {{un=1,uniquepart=given,hash=b565382a8f822e328b0dd40e527872dc}{%
+           family={Xia},
+           familyi={X\bibinitperiod},
+           given={Meng},
+           giveni={M\bibinitperiod},
+           givenun=1}}%
+      }
+      \strng{namehash}{9452992aa4bbb5cc1e87d228e93c037f}
+      \strng{fullhash}{9452992aa4bbb5cc1e87d228e93c037f}
+      \strng{fullhashraw}{9452992aa4bbb5cc1e87d228e93c037f}
+      \strng{bibnamehash}{9452992aa4bbb5cc1e87d228e93c037f}
+      \strng{authorbibnamehash}{9452992aa4bbb5cc1e87d228e93c037f}
+      \strng{authornamehash}{9452992aa4bbb5cc1e87d228e93c037f}
+      \strng{authorfullhash}{9452992aa4bbb5cc1e87d228e93c037f}
+      \strng{authorfullhashraw}{9452992aa4bbb5cc1e87d228e93c037f}
+      \field{sortinit}{L}
+      \field{sortinithash}{7c47d417cecb1f4bd38d1825c427a61a}
+      \field{extradatescope}{labelyear}
+      \field{labeldatesource}{}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{Expert Systems with Applications}
+      \field{note}{Gradient boosting for credit risk; ensemble stacking with SHAP-based feature selection.}
+      \field{title}{Credit Scoring Based on Tree-Enhanced Gradient Boosting Methods}
+      \field{volume}{215}
+      \field{year}{2023}
+      \field{pages}{119446}
+      \range{pages}{1}
+      \verb{doi}
+      \verb 10.1016/j.eswa.2022.119446
+      \endverb
+    \endentry
+    \entry{niculescu2005predicting}{inproceedings}{}{}
+      \name{author}{2}{}{%
+        {{un=0,uniquepart=base,hash=b35fbebaaa62ff79aee38093ae22a581}{%
+           family={Niculescu-Mizil},
+           familyi={N\bibinithyphendelim M\bibinitperiod},
+           given={Alexandru},
+           giveni={A\bibinitperiod},
+           givenun=0}}%
+        {{un=0,uniquepart=base,hash=599c5251d489b92dc7856277d56cb1a9}{%
+           family={Caruana},
+           familyi={C\bibinitperiod},
+           given={Rich},
+           giveni={R\bibinitperiod},
+           givenun=0}}%
+      }
+      \strng{namehash}{daa42a219e7d77fc10d94cb9ba3608f1}
+      \strng{fullhash}{daa42a219e7d77fc10d94cb9ba3608f1}
+      \strng{fullhashraw}{daa42a219e7d77fc10d94cb9ba3608f1}
+      \strng{bibnamehash}{daa42a219e7d77fc10d94cb9ba3608f1}
+      \strng{authorbibnamehash}{daa42a219e7d77fc10d94cb9ba3608f1}
+      \strng{authornamehash}{daa42a219e7d77fc10d94cb9ba3608f1}
+      \strng{authorfullhash}{daa42a219e7d77fc10d94cb9ba3608f1}
+      \strng{authorfullhashraw}{daa42a219e7d77fc10d94cb9ba3608f1}
+      \field{sortinit}{N}
+      \field{sortinithash}{22369a73d5f88983a108b63f07f37084}
+      \field{extradatescope}{labelyear}
+      \field{labeldatesource}{}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{booktitle}{Proceedings of the 22nd International Conference on Machine Learning (ICML)}
+      \field{title}{Predicting Good Probabilities with Supervised Learning}
+      \field{year}{2005}
+      \field{pages}{625\bibrangedash 632}
+      \range{pages}{8}
+      \verb{doi}
+      \verb 10.1145/1102351.1102430
+      \endverb
+    \endentry
+    \entry{siddiqi2006}{book}{}{}
+      \name{author}{1}{}{%
+        {{un=0,uniquepart=base,hash=e30f4e7de17a7317de908f6afd12fc74}{%
+           family={Siddiqi},
+           familyi={S\bibinitperiod},
+           given={Naeem},
+           giveni={N\bibinitperiod},
+           givenun=0}}%
+      }
+      \list{publisher}{1}{%
+        {John Wiley \& Sons}%
+      }
+      \strng{namehash}{e30f4e7de17a7317de908f6afd12fc74}
+      \strng{fullhash}{e30f4e7de17a7317de908f6afd12fc74}
+      \strng{fullhashraw}{e30f4e7de17a7317de908f6afd12fc74}
+      \strng{bibnamehash}{e30f4e7de17a7317de908f6afd12fc74}
+      \strng{authorbibnamehash}{e30f4e7de17a7317de908f6afd12fc74}
+      \strng{authornamehash}{e30f4e7de17a7317de908f6afd12fc74}
+      \strng{authorfullhash}{e30f4e7de17a7317de908f6afd12fc74}
+      \strng{authorfullhashraw}{e30f4e7de17a7317de908f6afd12fc74}
+      \field{sortinit}{S}
+      \field{sortinithash}{b164b07b29984b41daf1e85279fbc5ab}
+      \field{extradatescope}{labelyear}
+      \field{labeldatesource}{}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{isbn}{978-0471754510}
+      \field{note}{Industry reference for Weight of Evidence (WoE) encoding, Information Value (IV) feature selection, and scorecard development methodology.}
+      \field{title}{Credit Risk Scorecards: Developing and Implementing Intelligent Credit Scoring}
+      \field{year}{2006}
+    \endentry
+    \entry{xia2020}{article}{}{}
+      \name{author}{3}{}{%
+        {{un=1,uniquepart=given,hash=c3517f2e3b74dde828c37e7c8e33ba6d}{%
+           family={Xia},
+           familyi={X\bibinitperiod},
+           given={Yufei},
+           giveni={Y\bibinitperiod},
+           givenun=1}}%
+        {{un=1,uniquepart=given,hash=1d50a9fbda53acea92f3b9a6b5b2eeba}{%
+           family={Liu},
+           familyi={L\bibinitperiod},
+           given={Chuanzhe},
+           giveni={C\bibinitperiod},
+           givenun=1}}%
+        {{un=1,uniquepart=given,hash=2fa3168625e968c7364ef34c75e9aad2}{%
+           family={Liu},
+           familyi={L\bibinitperiod},
+           given={Nana},
+           giveni={N\bibinitperiod},
+           givenun=1}}%
+      }
+      \strng{namehash}{9653962756ea779d159bf6e7b4bba776}
+      \strng{fullhash}{9653962756ea779d159bf6e7b4bba776}
+      \strng{fullhashraw}{9653962756ea779d159bf6e7b4bba776}
+      \strng{bibnamehash}{9653962756ea779d159bf6e7b4bba776}
+      \strng{authorbibnamehash}{9653962756ea779d159bf6e7b4bba776}
+      \strng{authornamehash}{9653962756ea779d159bf6e7b4bba776}
+      \strng{authorfullhash}{9653962756ea779d159bf6e7b4bba776}
+      \strng{authorfullhashraw}{9653962756ea779d159bf6e7b4bba776}
+      \field{sortinit}{X}
+      \field{sortinithash}{1965c258adceecf23ce3d67b05113442}
+      \field{extradatescope}{labelyear}
+      \field{labeldatesource}{}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{Expert Systems with Applications}
+      \field{note}{LightGBM with feature selection for credit scoring; Gini as primary metric.}
+      \field{title}{Feature Selection and Ensemble Models for {LightGBM} on Credit Scoring}
+      \field{volume}{149}
+      \field{year}{2020}
+      \field{pages}{113306}
+      \range{pages}{1}
+      \verb{doi}
+      \verb 10.1016/j.eswa.2020.113306
+      \endverb
+    \endentry
+  \enddatalist
+\endrefsection
+\endinput
+
