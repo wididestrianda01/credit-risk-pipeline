@@ -5,13 +5,15 @@ Loads production data and builds the raw feature matrix.
 """
 import pandas as pd
 import sys
+from pathlib import Path
 
 # Import from credit_engine alias
 try:
     from credit_engine.features import build_tree_feature_store
 except ImportError:
-    # Fallback: add src to path manually
-    sys.path.insert(0, '/home/wd/Working Folder/Development/credit-risk-pipeline')
+    # Fallback: add src to path manually using portable path construction
+    project_root = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(project_root))
     from src.features import build_tree_feature_store
 
 print("Loading input data...")

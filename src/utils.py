@@ -8,12 +8,11 @@ Metrics
 - gini_coefficient   (= 2 * AUC - 1)
 - ks_statistic       (max CDF separation between default / non-default)
 - evaluate_model     (full metric suite including Brier Skill Score)
+- adversarial_validation_report (train/test distribution shift detection)
 
 Plots
 -----
 - plot_roc_and_pr    (ROC + Precision-Recall two-panel figure)
-- roc_curve_plot     (stub — reserved for future task)
-- calibration_plot   (stub — reserved for future task)
 
 Industry benchmarks (Basel III IRB credit scoring)
 ---------------------------------------------------
@@ -509,19 +508,3 @@ def adversarial_validation_report(
             json.dump(result, f, indent=2)
 
     return result
-
-
-# ---------------------------------------------------------------------------
-# Stubs (reserved for future tasks)
-# ---------------------------------------------------------------------------
-
-def roc_curve_plot(y_true: np.ndarray, y_score: np.ndarray, ax=None) -> plt.Axes:
-    """Plot ROC curve with Gini annotation. TODO: implement in future task."""
-    raise NotImplementedError
-
-
-def calibration_plot(
-    y_true: np.ndarray, y_score: np.ndarray, n_bins: int = 10, ax=None
-) -> plt.Axes:
-    """Reliability diagram. TODO: implement in future task."""
-    raise NotImplementedError
