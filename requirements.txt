@@ -1,35 +1,36 @@
+# Requires Python 3.10+
 # Data
-numpy>=1.26
-pandas>=2.2
-kaggle>=1.6                  # dataset download via Kaggle API
+numpy==2.4.4
+pandas==2.3.3
+kaggle==2.0.1
 
 # Feature engineering
-scikit-learn>=1.4
-imbalanced-learn>=0.12       # SMOTE, RandomUnderSampler, ImbPipeline
-featuretools>=1.31            # Deep Feature Synthesis (DFS) automated feature engineering
+scikit-learn==1.7.2
+imbalanced-learn==0.14.1
+featuretools==1.31.0
 
 # Models
-lightgbm>=4.3
-xgboost>=2.0
-catboost>=1.2
+lightgbm==4.6.0
+xgboost==3.2.0
+catboost==1.2.10
 
 # Hyperparameter optimisation
-optuna>=3.6
+optuna==4.8.0
 
 # Explainability
-shap>=0.45
+shap==0.51.0
 
 # Deployment
-fastapi>=0.111
-uvicorn[standard]>=0.29
-pydantic>=2.7
+fastapi==0.135.3
+uvicorn[standard]==0.42.0
+pydantic==2.12.5
 
 # Dashboard
-streamlit>=1.35
+streamlit==1.55.0
 
 # Visualisation
-matplotlib>=3.8
-seaborn>=0.13
+matplotlib==3.10.8
+seaborn==0.13.2
 
 # Testing
-pytest>=8.2
+pytest==9.0.3
