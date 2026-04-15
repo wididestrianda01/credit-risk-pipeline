@@ -77,3 +77,6 @@ kaggle.json
 .vscode/
 .idea/
 .planning/
+
+# Private AI assistant context
+CLAUDE.md
