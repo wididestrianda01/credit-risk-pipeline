@@ -264,10 +264,15 @@ with st.sidebar.expander("🏦 Loan Terms", expanded=True):
         format_func=lambda x: _ORG_TYPE_LABELS.get(x, x),
         help=(
             "The industry sector of the applicant's current employer. "
-            "'Private Company Type 1/2/3' are private-sector companies of increasing size — "
-            "Type 3 is the largest and most common category in this dataset. "
-            "Select the closest match: e.g. a hospital → Healthcare / Medical Facility; "
-            "a supermarket chain → Retail & Trade; a car factory → Manufacturing / Industry."
+            "\n\n**Private Company Type 1 / 2 / 3:** All are private-sector businesses. "
+            "Type 3 is the largest and most common group; Type 1 is smaller/less common. "
+            "If the employer is a private company and you are unsure which type, select Type 3."
+            "\n\n**Numbered sub-types** (Manufacturing Type 1–13, Trade Type 1–3, Transport Type 1–4) "
+            "represent different sub-industries within that sector. "
+            "The exact distinction is not documented — select the lowest number if unsure. "
+            "\n\nExamples: hospital → Healthcare / Medical Facility; "
+            "supermarket → Retail & Trade; factory → Manufacturing / Industry; "
+            "bus company → Transport & Logistics."
         ),
     )
     form_data["ORGANIZATION_TYPE"] = organization_type
@@ -445,47 +450,53 @@ with st.sidebar.expander("👤 Applicant Profile", expanded=False):
 
 # ===== Expander 3: Credit History =====
 with st.sidebar.expander("📊 Credit History", expanded=False):
+    # EXT_SOURCE_1 median can be the -999 sentinel in raw training data — clamp to [0, 1]
+    _ext1_raw = float(_TRAINING_MEDIANS.get("EXT_SOURCE_1", 0.5))
+    _ext1_default = _ext1_raw if 0.0 <= _ext1_raw <= 1.0 else 0.5
+
     ext_source_1 = st.slider(
-        label="External Credit Score 1",
-        value=float(_TRAINING_MEDIANS.get("EXT_SOURCE_1", 0.5)),
+        label="Bureau Credit Score A  (0 = worst → 1 = best)",
+        value=_ext1_default,
         min_value=0.0,
         max_value=1.0,
         step=0.01,
         help=(
-            "A normalised creditworthiness score from an external credit bureau (scale: 0–1). "
-            "Higher = better credit history. "
-            "This score is often missing (~45% of applicants); leave at 0.50 if unavailable. "
-            "It reflects past repayment behaviour across all lenders."
+            "A normalised creditworthiness score from an external credit bureau. "
+            "0.0 = severe negative history (many defaults/delinquencies), "
+            "0.5 = average borrower, "
+            "1.0 = excellent repayment record with no delinquencies. "
+            "This score is often not available (~45% of applicants) — "
+            "leave at 0.50 if the bureau has no record for this applicant."
         ),
     )
     form_data["EXT_SOURCE_1"] = ext_source_1
 
     ext_source_2 = st.slider(
-        label="External Credit Score 2",
+        label="Bureau Credit Score B  (0 = worst → 1 = best)",
         value=float(_TRAINING_MEDIANS["EXT_SOURCE_2"]),
         min_value=0.0,
         max_value=1.0,
         step=0.01,
         help=(
-            "A normalised creditworthiness score from a second external bureau (scale: 0–1). "
-            "Higher = better credit history. "
-            "This is the single strongest predictor in the model — provide it if possible. "
-            "It summarises the applicant's overall credit track record."
+            "A normalised creditworthiness score from a second credit bureau. "
+            "0.0 = severe negative history, 0.5 = average, 1.0 = excellent. "
+            "This is the single strongest predictor in the model — provide it if at all possible. "
+            "It summarises the applicant's overall repayment track record across all lenders."
         ),
     )
     form_data["EXT_SOURCE_2"] = ext_source_2
 
     ext_source_3 = st.slider(
-        label="External Credit Score 3",
+        label="Bureau Credit Score C  (0 = worst → 1 = best)",
         value=float(_TRAINING_MEDIANS["EXT_SOURCE_3"]),
         min_value=0.0,
         max_value=1.0,
         step=0.01,
         help=(
-            "A normalised creditworthiness score from a third external source (scale: 0–1). "
-            "Higher = better credit history. "
-            "Often derived from alternative data (e.g. utility payment records). "
-            "Leave at 0.46 (median) if unavailable."
+            "A normalised creditworthiness score from a third data source "
+            "(often derived from alternative data such as utility or telco payment records). "
+            "0.0 = poor, 0.5 = average, 1.0 = excellent. "
+            "Leave at the pre-filled median if this score is unavailable."
         ),
     )
     form_data["EXT_SOURCE_3"] = ext_source_3
@@ -598,7 +609,9 @@ with tab1:
             pd_score: float = float(model.predict_proba(X)[0, 1])
             risk_band = _get_risk_band(pd_score)
 
-            # Store in session_state for persistence across tab switches
+            # Store in session_state for persistence across tab switches.
+            # Clear stale SHAP values so waterfall rerenders with the new X.
+            st.session_state.pop("shap_vals", None)
             st.session_state.pd_score = pd_score
             st.session_state.risk_band = risk_band
             st.session_state.X = X
@@ -645,18 +658,24 @@ with tab1:
 
             shap_vals = st.session_state.shap_vals
 
-            # Build a display copy of the SHAP Explanation with human-readable feature names.
-            # The original shap_vals (raw names) is kept for adverse action factor lookup.
-            import copy
+            # Build a display Explanation with human-readable feature names for the waterfall.
+            # We construct a fresh shap.Explanation (sharing underlying arrays) rather than
+            # shallow-copying, because shap.Explanation[idx] reconstructs feature_names from
+            # the stored backing data and ignores a shallow-copied attribute override.
+            # The original shap_vals (raw column names) is kept for adverse action lookup.
+            import shap as _shap
 
-            shap_display = copy.copy(shap_vals)
-            if (
-                hasattr(shap_display, "feature_names")
-                and shap_display.feature_names is not None
-            ):
-                shap_display.feature_names = [
-                    FEATURE_LABELS.get(n, n) for n in shap_display.feature_names
-                ]
+            _raw_names = (
+                list(shap_vals.feature_names)
+                if shap_vals.feature_names is not None
+                else list(st.session_state.X.columns)
+            )
+            shap_display = _shap.Explanation(
+                values=shap_vals.values,
+                base_values=shap_vals.base_values,
+                data=shap_vals.data,
+                feature_names=[FEATURE_LABELS.get(n, n) for n in _raw_names],
+            )
 
             # Render waterfall
             try:
