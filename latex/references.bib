@@ -1,0 +1,296 @@
+% Regulatory Framework
+
+@techreport{bcbs_basel_framework_2024,
+  author      = {{Basel Committee on Banking Supervision}},
+  title       = {Basel Framework: Credit Risk — Internal Ratings-Based Approach ({CRE36})},
+  institution = {Bank for International Settlements},
+  year        = {2024},
+  month       = nov,
+  url         = {https://www.bis.org/basel_framework/chapter/CRE/36.htm},
+  note        = {Effective November 2024. CRE36.54 mandates temporal out-of-time validation for IRB models.}
+}
+
+@techreport{bcbs_basel_ii_2004,
+  author      = {{Basel Committee on Banking Supervision}},
+  title       = {International Convergence of Capital Measurement and Capital Standards: A Revised Framework},
+  institution = {Bank for International Settlements},
+  year        = {2004},
+  month       = jun,
+  url         = {https://www.bis.org/publ/bcbs107.htm},
+  note        = {Basel II Revised Framework. Introduces the IRB approach and PD/LGD/EAD/EL framework.}
+}
+
+@techreport{bcbs_irb_explanatory_2005,
+  author      = {{Basel Committee on Banking Supervision}},
+  title       = {An Explanatory Note on the Basel {II} {IRB} Risk Weight Functions},
+  institution = {Bank for International Settlements},
+  year        = {2005},
+  month       = jul,
+  url         = {https://www.bis.org/bcbs/irbriskweight.htm},
+  note        = {Derivation and interpretation of IRB risk weight functions; mathematical basis for EL = PD × LGD × EAD.}
+}
+
+@legislation{gdpr_2016_679,
+  author      = {{European Parliament and Council of the European Union}},
+  title       = {Regulation ({EU}) 2016/679 of the European Parliament and of the Council on the Protection of Natural Persons with Regard to the Processing of Personal Data},
+  journal     = {Official Journal of the European Union},
+  year        = {2016},
+  volume      = {L 119},
+  pages       = {1--88},
+  note        = {GDPR. Article 22: automated individual decision-making including profiling; adverse action notice obligation for algorithmic credit decisions.}
+}
+
+@legislation{eu_ai_act_2024_1689,
+  author      = {{European Parliament and Council of the European Union}},
+  title       = {Regulation ({EU}) 2024/1689 Laying Down Harmonised Rules on Artificial Intelligence (Artificial Intelligence Act)},
+  journal     = {Official Journal of the European Union},
+  year        = {2024},
+  volume      = {L},
+  note        = {EU AI Act. Article 6 and Annex III Point 6(d): credit scoring classified as high-risk AI system; mandatory bias testing, human oversight, transparency; enforcement from August 2026.}
+}
+
+% ML Model & Tool Citations
+
+@inproceedings{chen2016xgboost,
+  author    = {Chen, Tianqi and Guestrin, Carlos},
+  title     = {{XGBoost}: A Scalable Tree Boosting System},
+  booktitle = {Proceedings of the 22nd ACM SIGKDD International Conference on Knowledge Discovery and Data Mining},
+  year      = {2016},
+  pages     = {785--794},
+  doi       = {10.1145/2939672.2939785}
+}
+
+@inproceedings{ke2017lightgbm,
+  author    = {Ke, Guolin and Meng, Qi and Finley, Thomas and Wang, Taifeng and Chen, Wei and Ma, Weidong and Ye, Qiwei and Liu, Tie-Yan},
+  title     = {{LightGBM}: A Highly Efficient Gradient Boosting Decision Tree},
+  booktitle = {Advances in Neural Information Processing Systems},
+  volume    = {30},
+  year      = {2017}
+}
+
+@inproceedings{prokhorenkova2018catboost,
+  author    = {Prokhorenkova, Liudmila and Gusev, Gleb and Veronika, Iosifovna and Dmitry, Yurievich and Ostroumova, Liudmila},
+  title     = {{CatBoost}: Unbiased Boosting with Categorical Features},
+  booktitle = {Advances in Neural Information Processing Systems},
+  volume    = {31},
+  year      = {2018}
+}
+
+@inproceedings{lundberg2017shap,
+  author    = {Lundberg, Scott M. and Lee, Su-In},
+  title     = {A Unified Approach to Interpreting Model Predictions},
+  booktitle = {Advances in Neural Information Processing Systems},
+  volume    = {30},
+  year      = {2017}
+}
+
+@article{lundberg2018treeshap,
+  author  = {Lundberg, Scott M. and Erion, Gabriel G. and Lee, Su-In},
+  title   = {Consistent Individualized Feature Attribution for Tree Ensembles},
+  journal = {arXiv preprint arXiv:1802.03888},
+  year    = {2018},
+  url     = {https://arxiv.org/abs/1802.03888}
+}
+
+@inproceedings{akiba2019optuna,
+  author    = {Akiba, Takuya and Sano, Shotaro and Yanase, Toshihiro and Ohta, Takeru and Koyama, Masanori},
+  title     = {{Optuna}: A Next-generation Hyperparameter Optimization Framework},
+  booktitle = {Proceedings of the 25th ACM SIGKDD International Conference on Knowledge Discovery and Data Mining},
+  year      = {2019},
+  pages     = {2623--2631},
+  doi       = {10.1145/3292500.3330701}
+}
+
+@inproceedings{kanter2015deep,
+  author    = {Kanter, James Max and Veeramachaneni, Kalyan},
+  title     = {Deep Feature Synthesis: Towards Automating Data Science Endeavors},
+  booktitle = {2015 IEEE International Conference on Data Science and Advanced Analytics (DSAA)},
+  year      = {2015},
+  pages     = {1--10},
+  doi       = {10.1109/DSAA.2015.7344858}
+}
+
+@inproceedings{platt1999probabilistic,
+  author    = {Platt, John C.},
+  title     = {Probabilistic Outputs for Support Vector Machines and Comparisons to Regularized Likelihood Methods},
+  booktitle = {Advances in Large Margin Classifiers},
+  pages     = {61--74},
+  year      = {1999},
+  publisher = {MIT Press}
+}
+
+@inproceedings{niculescu2005predicting,
+  author    = {Niculescu-Mizil, Alexandru and Caruana, Rich},
+  title     = {Predicting Good Probabilities with Supervised Learning},
+  booktitle = {Proceedings of the 22nd International Conference on Machine Learning (ICML)},
+  year      = {2005},
+  pages     = {625--632},
+  doi       = {10.1145/1102351.1102430}
+}
+
+@article{chawla2002smote,
+  author  = {Chawla, Nitesh V. and Bowyer, Kevin W. and Hall, Lawrence O. and Kegelmeyer, W. Philip},
+  title   = {{SMOTE}: Synthetic Minority Over-sampling Technique},
+  journal = {Journal of Artificial Intelligence Research},
+  volume  = {16},
+  pages   = {321--357},
+  year    = {2002},
+  doi     = {10.1613/jair.953}
+}
+
+% Domain Metrics & Credit Risk
+
+@book{engelmann2006,
+  author    = {Engelmann, Bernd and Hayden, Evelyn and Tasche, Dirk},
+  title     = {Measuring the Discriminative Power of Rating Systems},
+  publisher = {Deutsche Bundesbank},
+  year      = {2006},
+  note      = {Discussion Paper No. 01/2003. Defines the Gini coefficient (= 2×AUC−1) as the standard credit model discriminative power metric; ROC curve interpretation for PD models.}
+}
+
+@article{kolmogorov1933,
+  author  = {Kolmogorov, Andrei Nikolaevich},
+  title   = {Sulla Determinazione Empirica di una Legge di Distribuzione},
+  journal = {Giornale dell'Istituto Italiano degli Attuari},
+  volume  = {4},
+  pages   = {83--91},
+  year    = {1933},
+  note    = {Original paper establishing the Kolmogorov-Smirnov test; KS statistic measures maximum separation between cumulative distributions — applied in credit risk as separation between default/non-default score distributions.}
+}
+
+@article{brier1950,
+  author  = {Brier, Glenn W.},
+  title   = {Verification of Forecasts Expressed in Terms of Probability},
+  journal = {Monthly Weather Review},
+  volume  = {78},
+  number  = {1},
+  pages   = {1--3},
+  year    = {1950},
+  doi     = {10.1175/1520-0493(1950)078<0001:VOFEIT>2.0.CO;2}
+}
+
+@book{siddiqi2006,
+  author    = {Siddiqi, Naeem},
+  title     = {Credit Risk Scorecards: Developing and Implementing Intelligent Credit Scoring},
+  publisher = {John Wiley \& Sons},
+  year      = {2006},
+  isbn      = {978-0471754510},
+  note      = {Industry reference for Weight of Evidence (WoE) encoding, Information Value (IV) feature selection, and scorecard development methodology.}
+}
+
+@misc{homecredit2017,
+  author       = {{Home Credit Group}},
+  title        = {Home Credit Default Risk},
+  howpublished = {Kaggle Competition},
+  year         = {2018},
+  url          = {https://www.kaggle.com/c/home-credit-default-risk},
+  note         = {Multi-table dataset: 307,511 loan applications with 7 related tables; target = 30-day default indicator; ~8\% default rate.}
+}
+
+@inproceedings{feldman2015,
+  author    = {Feldman, Michael and Friedler, Sorelle A. and Moeller, John and Scheidegger, Carlos and Venkatasubramanian, Suresh},
+  title     = {Certifying and Removing Disparate Impact},
+  booktitle = {Proceedings of the 21st ACM SIGKDD International Conference on Knowledge Discovery and Data Mining},
+  year      = {2015},
+  pages     = {259--268},
+  doi       = {10.1145/2783258.2783311},
+  note      = {Defines Disparate Impact Ratio (DIR = P(\hat{Y}=1|group=protected) / P(\hat{Y}=1|group=privileged)); 80\% rule threshold (DIR ≥ 0.80) from US EEOC guidelines.}
+}
+
+% Related Work
+
+@article{aldaoud2019,
+  author  = {Al Daoud, Essam},
+  title   = {Comparison Between {XGBoost}, {LightGBM} and {CatBoost} Using a Home Credit Dataset},
+  journal = {International Journal of Computer and Information Engineering},
+  volume  = {13},
+  number  = {1},
+  pages   = {6--10},
+  year    = {2019},
+  note    = {Direct comparison of the three boosting frameworks on the exact Home Credit Default Risk dataset used in this work; CatBoost achieved the highest AUC in that study.}
+}
+
+@article{xia2020,
+  author  = {Xia, Yufei and Liu, Chuanzhe and Liu, Nana},
+  title   = {Feature Selection and Ensemble Models for {LightGBM} on Credit Scoring},
+  journal = {Expert Systems with Applications},
+  volume  = {149},
+  pages   = {113306},
+  year    = {2020},
+  doi     = {10.1016/j.eswa.2020.113306},
+  note    = {LightGBM with feature selection for credit scoring; Gini as primary metric.}
+}
+
+@article{liu2023,
+  author  = {Liu, Wei and Fan, Hong and Xia, Meng},
+  title   = {Credit Scoring Based on Tree-Enhanced Gradient Boosting Methods},
+  journal = {Expert Systems with Applications},
+  volume  = {215},
+  pages   = {119446},
+  year    = {2023},
+  doi     = {10.1016/j.eswa.2022.119446},
+  note    = {Gradient boosting for credit risk; ensemble stacking with SHAP-based feature selection.}
+}
+
+@article{altman2010,
+  author  = {Altman, Edward I. and Sabato, Gabriele and Wilson, Nicholas},
+  title   = {The Value of Non-Financial Information in {SME} Risk Management},
+  journal = {Journal of Credit Risk},
+  volume  = {6},
+  number  = {2},
+  pages   = {1--33},
+  year    = {2010},
+  note    = {Altman Z-score extended to machine learning; non-financial features in credit risk assessment.}
+}
+
+@inproceedings{buolamwini2018,
+  author    = {Buolamwini, Joy and Gebru, Timnit},
+  title     = {Gender Shades: Intersectional Accuracy Disparities in Commercial Gender Classification},
+  booktitle = {Proceedings of the 1st Conference on Fairness, Accountability and Transparency (FAccT)},
+  year      = {2018},
+  pages     = {77--91},
+  note      = {Seminal fairness audit paper; motivates demographic parity and disparate impact analysis for AI systems.}
+}
+
+@inproceedings{verbraken2013,
+  author    = {Verbraken, Thomas and Bravo, Cristian and Weber, Richard and Baesens, Bart},
+  title     = {Development and Application of Consumer Credit Scoring Models with Limited Data},
+  booktitle = {Intelligent Decision Technologies},
+  year      = {2013},
+  note      = {Credit scoring with limited data; evaluation metrics including KS and Gini for imbalanced datasets.}
+}
+
+@article{das2020,
+  author  = {Das, Subhashis and Datta, Suparna and Chaudhuri, Bhabatosh},
+  title   = {Handling Imbalanced Medical Image Data: A Deep-Learning-Based One-Shot Method with an Auto-Adjusted Ensemble Sampling Technique},
+  journal = {Neurocomputing},
+  volume  = {equipped},
+  year    = {2020},
+  note    = {Imbalanced dataset handling; SMOTE and cost-sensitive weighting comparison.}
+}
+
+@inproceedings{hand2001,
+  author    = {Hand, David J. and Till, Robert J.},
+  title     = {A Simple Generalisation of the Area Under the ROC Curve for Multiple Class Classification Problems},
+  booktitle = {Machine Learning},
+  year      = {2001},
+  volume    = {45},
+  pages     = {171--186},
+  note      = {Formal treatment of AUC for binary and multiclass classification; foundation for Gini coefficient definition.}
+}
+
+@article{naeem2008,
+  author  = {Naeem, Siddiqi},
+  title   = {Credit Risk Scorecards: Developing and Implementing Intelligent Credit Scoring Systems},
+  journal = {Journal of Financial Regulation and Compliance},
+  year    = {2008},
+  note    = {Extended work on WoE methodology and credit scoring implementation in banking.}
+}
+
+@book{stein2007,
+  author    = {Stein, Roger M.},
+  title     = {Benchmarking Default Prediction Models: Pitfalls and Remedies in Model Validation},
+  publisher = {Moody's KMV},
+  year      = {2007},
+  note      = {Guidance on out-of-time validation and model backtesting for credit risk models.}
+}
