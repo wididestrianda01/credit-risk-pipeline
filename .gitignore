@@ -27,9 +27,9 @@ env/
 .ipynb_checkpoints/
 
 # Data (large files — download via Kaggle API or generated during runs)
-dataset/*.csv
-data/processed/*.parquet
-data/*.csv
+data/
+!data/processed/feature_removal_audit.txt
+dataset/
 
 # Generated figures (produced by executing notebooks)
 reports/figures/
@@ -71,6 +71,7 @@ context/
 # Environment
 .env
 *.env
+kaggle.json
 
 # IDE
 .vscode/
