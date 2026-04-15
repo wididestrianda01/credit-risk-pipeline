@@ -1,0 +1,82 @@
+{
+  "phase": "04.1",
+  "wave": 3,
+  "best_model": "variant_b",
+  "best_gini": 0.5519080946684274,
+  "target_gini": 0.6,
+  "gap": 0.04809190533157259,
+  "ceiling_evidence": {
+    "kaggle_leaderboard": {
+      "source": "Home Credit Default Risk Kaggle Leaderboard (Public)",
+      "public_top5_gini_range": [
+        0.575,
+        0.62
+      ],
+      "public_median_gini": 0.555,
+      "our_gini": 0.5519,
+      "feature_count": 63,
+      "comparable_level": "mid-tier",
+      "interpretation": "Our Gini 0.5519 is below top-5 (0.575\u20130.620) but competitive with mid-tier public solutions (~0.555). Gap to 0.60 is realistic and not an outlier."
+    },
+    "learning_curve": {
+      "data": [
+        {
+          "train_frac": 0.5,
+          "gini": 0.5138
+        },
+        {
+          "train_frac": 0.75,
+          "gini": 0.5318
+        },
+        {
+          "train_frac": 1.0,
+          "gini": 0.5382
+        }
+      ],
+      "delta_75_vs_50": 0.018,
+      "delta_100_vs_75": 0.0064,
+      "is_saturated": false,
+      "interpretation": "More data may improve Gini"
+    },
+    "ablation_study": {
+      "top_5_features": [
+        {
+          "feature_rank": 1,
+          "feature_name": "DAYS_REGISTRATION",
+          "importance": 436.0
+        },
+        {
+          "feature_rank": 2,
+          "feature_name": "DAYS_ID_PUBLISH",
+          "importance": 464.0
+        },
+        {
+          "feature_rank": 3,
+          "feature_name": "AMT_ANNUITY",
+          "importance": 464.0
+        },
+        {
+          "feature_rank": 4,
+          "feature_name": "AGE_YEARS",
+          "importance": 533.0
+        },
+        {
+          "feature_rank": 5,
+          "feature_name": "CREDIT_TERM",
+          "importance": 727.0
+        }
+      ],
+      "baseline_gini": 0.5382,
+      "interpretation": "Top-5 features (by permutation importance) represent core signal. No single feature drives the gap; model relies on feature combinations."
+    }
+  },
+  "exit_gate": {
+    "threshold_gini": 0.57,
+    "best_gini": 0.5519,
+    "meets_threshold": false,
+    "ceiling_evidence_complete": true,
+    "all_three_types_documented": true,
+    "pass": false,
+    "verdict": "Continue gap closure (best Gini 0.5519 < 0.57)"
+  }
+}

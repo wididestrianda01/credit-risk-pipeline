@@ -1,0 +1,36 @@
+{
+  "phase": "04.2",
+  "plan": "02",
+  "hpo_type": "xgboost_100_trial_optuna",
+  "total_trials": 99,
+  "best_trial_number": 65,
+  "best_oof_auc": 0.7648242037748083,
+  "best_oof_gini": 0.5296484075496166,
+  "best_test_gini": 0.555319797213627,
+  "best_test_auc": 0.7776598986068135,
+  "best_params": {
+    "n_estimators": 972,
+    "max_depth": 3,
+    "learning_rate": 0.030561582197053343,
+    "subsample": 0.6984393769376698,
+    "colsample_bytree": 0.744757389328118,
+    "min_child_weight": 4,
+    "gamma": 1.0675942522425461,
+    "max_delta_step": 0,
+    "reg_alpha": 3.540144922650167,
+    "reg_lambda": 6.802800085821854
+  },
+  "improvement_vs_phase_04_1_baseline": -0.027051592450383355,
+  "convergence": {
+    "median_best_at_trial_50": 0.7641016743480469,
+    "median_best_at_trial_75": 0.7648242037748083,
+    "final_best_at_trial_100": 0.7648242037748083
+  },
+  "model_file": "models/xgboost_hpo_best.pkl",
+  "non_regression_check": {
+    "seed_trial_value": 0.5567,
+    "best_trial_value": 0.5296484075496166,
+    "passed": false,
+    "tolerance": 0.001
+  }
+}

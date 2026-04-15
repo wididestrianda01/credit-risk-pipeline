@@ -1,0 +1,35 @@
+{
+  "phase": "04.2",
+  "diagnosis_task": "xgb_oof_degradation",
+  "degradation_delta": 0.0328,
+  "hypotheses_tested": [
+    {
+      "name": "feature_store_mismatch",
+      "status": "PASS",
+      "evidence": "XGB shape (246008, 63), LGB shape (246008, 67)"
+    },
+    {
+      "name": "cv_split_inconsistency",
+      "status": "PASS",
+      "evidence": "Temporal sort col: prev_days_decision_mean"
+    },
+    {
+      "name": "target_encoding_leakage",
+      "status": "PASS",
+      "evidence": "4 TE cols in LGB"
+    },
+    {
+      "name": "calibration_side_effects",
+      "status": "PASS",
+      "evidence": "Platt scaling is monotone"
+    },
+    {
+      "name": "preprocessing_order",
+      "status": "PASS",
+      "evidence": "XGB scale-invariant"
+    }
+  ],
+  "root_cause": "likely_cv_split_inconsistency",
+  "confidence": 0.7,
+  "recommended_action": "retrain_with_verified_cv"
+}

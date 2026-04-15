@@ -1,0 +1,15 @@
+{
+  "phase": "04.2.10",
+  "gate_verdict": "FAIL",
+  "gate_reason": "OOT Gini 0.5681 < minimum 0.58",
+  "best_combo": 4,
+  "best_strategy": "rank_avg",
+  "n_models": 2,
+  "feature_stores": "LGB + CatBoost-DFS",
+  "oot_gini": 0.5681094202394472,
+  "oot_ks": 0.43616639789744227,
+  "baseline_lgb_gini": 0.5695,
+  "baseline_xgb_gini": 0.5636,
+  "baseline_cat_gini": 0.5814,
+  "ensemble_saved": false
+}

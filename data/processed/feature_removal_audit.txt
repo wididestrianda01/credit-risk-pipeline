@@ -1,0 +1,18 @@
+Feature Removal Audit — Fairness Compliance
+======================================================================
+
+Timestamp: 2026-04-15T13:46:19.817879
+Regulated columns removed: AGE_YEARS, EMPLOYED_TO_AGE_RATIO, CNT_CHILDREN, CNT_FAM_MEMBERS
+
+  X_lgb_v2.parquet → X_lgb_v3.parquet
+    v2 shape: (307511, 167)  |  v3 shape: (307511, 163)
+    Cols dropped: 4
+
+  X_xgb_v2.parquet → X_xgb_v3.parquet
+    v2 shape: (307511, 167)  |  v3 shape: (307511, 163)
+    Cols dropped: 4
+
+  X_cat_v2.parquet → X_cat_v3.parquet
+    v2 shape: (307511, 171)  |  v3 shape: (307511, 167)
+    Cols dropped: 4
+

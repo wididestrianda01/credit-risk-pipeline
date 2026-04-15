@@ -1,0 +1,41 @@
+{
+  "lightgbm_extended_study": {
+    "trial_count": 690,
+    "best_auc": 0.9505,
+    "best_gini": 0.9011,
+    "best_params": {
+      "colsample_bytree": 0.7816314890483527,
+      "learning_rate": 0.010539617308258703,
+      "max_depth": 5.0,
+      "min_child_samples": 96.0,
+      "n_estimators": 156.0,
+      "num_leaves": 42.0,
+      "reg_alpha": 3.5866602742978047,
+      "reg_lambda": 1.1075706160600702,
+      "subsample": 0.8979719756823474
+    },
+    "model_file": "lightgbm_extended.pkl",
+    "model_size_mb": 0.11
+  },
+  "catboost_extended_study": {
+    "trial_count": 150,
+    "best_auc": 0.9603,
+    "best_gini": 0.9207,
+    "best_params": {
+      "bagging_temperature": 0.8047824822763193,
+      "depth": 4.0,
+      "iterations": 1340.0,
+      "l2_leaf_reg": 0.18442152742439727,
+      "learning_rate": 0.11016993905941432,
+      "random_strength": 0.0393339998650496
+    },
+    "model_file": "catboost_extended.pkl",
+    "model_size_mb": 0.43
+  },
+  "xgboost_extended_study": {
+    "trial_count": 0,
+    "best_auc": 0.0,
+    "best_gini": -1.0,
+    "best_params": {}
+  }
+}

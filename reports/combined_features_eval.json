@@ -1,0 +1,20 @@
+{
+  "gini_raw": 0.555071659599438,
+  "gini_combined": 0.5566826036883392,
+  "gini_delta": 0.0016109440889011672,
+  "n_raw_features": 62,
+  "n_combined_features": 63,
+  "phase_2_gate_passed": true,
+  "validation_notes": {
+    "delta_requirement": "gini_delta >= 0 (combined must not regress vs raw)",
+    "delta_value": 0.0016109440889011672,
+    "delta_valid": true,
+    "adversarial_auc": 0.5012,
+    "adversarial_verdict": "safe",
+    "explanation": "Corrected imputer (trained on 59 features, best_corr=0.9994) rebuilt combined store. Gini delta = +0.001611. Phase 2 gate PASSED (threshold: >= 0). Adversarial AUC = 0.5012 < 0.55 (PASSED, from Plan 02-05)."
+  },
+  "training_minutes": {
+    "raw_baseline": 19.5,
+    "combined_store": 12.75
+  }
+}

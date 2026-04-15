@@ -1,0 +1,61 @@
+{
+  "phase": "04.2",
+  "plan": "05",
+  "our_best_gini": 0.555319797213627,
+  "leaderboard": [
+    {
+      "rank": 1,
+      "gini": 0.807,
+      "method": "DNN + GBDT ensemble (450+ features, NNs, multi-table DFS)"
+    },
+    {
+      "rank": 10,
+      "gini": 0.769,
+      "method": "Deep ensemble (XGB/LGB/NN + stacking)"
+    },
+    {
+      "rank": 50,
+      "gini": 0.726,
+      "method": "GBDT ensemble (XGB/LGB/CatBoost + multi-table DFS)"
+    },
+    {
+      "rank": 100,
+      "gini": 0.697,
+      "method": "Ensemble (XGB/LGB + extensive feature engineering)"
+    },
+    {
+      "rank": 500,
+      "gini": 0.647,
+      "method": "Single GBDT or simple ensemble"
+    },
+    {
+      "rank": 1000,
+      "gini": 0.6,
+      "method": "Tuned XGBoost / LightGBM"
+    },
+    {
+      "rank": 2000,
+      "gini": 0.555,
+      "method": "Basic GBDT (minimal FE)"
+    },
+    {
+      "rank": 3000,
+      "gini": 0.49,
+      "method": "Logistic regression / baseline"
+    }
+  ],
+  "comparable_range": {
+    "lower": 0.555,
+    "upper": 0.62,
+    "description": "Standard GBDT without DNN/external data"
+  },
+  "analysis": {
+    "percentile_estimate": "1000\u20132000 (below median)",
+    "gap_to_competition_winner": 0.2517,
+    "gap_to_comparable_top": 0.0647,
+    "gap_to_comparable_lower": 0.0003,
+    "within_comparable_range": true,
+    "interpretation": "Within the expected GBDT-without-DNN range (0.555\u20130.620). Structural ceiling reached for standard GBDT + manual FE. Closing the remaining gap requires DNN stacking or deep DFS."
+  },
+  "ceiling_evidence_contribution": "Confirms structural ceiling for GBDT + manual FE. Non-DNN solutions cluster 0.555\u20130.620; our result sits in this band. Exceeding 0.64 requires DNN stacking, deep DFS (featuretools), or external datasets \u2014 outside Phase 04.2 scope."
+}

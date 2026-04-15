@@ -1,0 +1,27 @@
+{
+  "phase": "04.2.6",
+  "timestamp": "2026-04-11T18:29:17.529229",
+  "base_model_gini": {
+    "lgb": 0.5733754010077705,
+    "xgb": 0.5679749058988239,
+    "cat": 0.5720935792864044
+  },
+  "ensemble_gini": 0.5749035382792809,
+  "ensemble_ks": 0.43021717695176853,
+  "improvement": 0.0015281372715103547,
+  "method": "logistic",
+  "meta_learner_weights": {
+    "lgb_coef": 3.082453,
+    "xgb_coef": -1.449656,
+    "cat_coef": 1.529136,
+    "intercept": -3.729445
+  },
+  "n_oof_folds": 5,
+  "gate_result": "investigate",
+  "gate_thresholds": {
+    "full_pass_gini_min": 0.65,
+    "accept_available_gini_min": 0.58,
+    "min_improvement_for_accept": 0.005
+  },
+  "notes": "Logistic regression meta-learner trained on out-of-fold predictions from LGB, XGB, CatBoost base models. Coefficients show relative contribution of each base model to ensemble prediction. Gate result applied per D-12 revised thresholds (Basel CRE36.54 compliant temporal validation)."
+}

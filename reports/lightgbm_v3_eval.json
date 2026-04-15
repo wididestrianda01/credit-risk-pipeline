@@ -1,0 +1,36 @@
+{
+  "model": "lightgbm_v3",
+  "feature_store": "X_lgb_v3.parquet",
+  "feature_count": 161,
+  "regulated_cols_removed": [
+    "AGE_YEARS",
+    "EMPLOYED_TO_AGE_RATIO",
+    "CNT_CHILDREN",
+    "CNT_FAM_MEMBERS"
+  ],
+  "oot_gini": 0.5609931400743673,
+  "oot_ks": 0.42535474521645233,
+  "oot_brier": 0.06670559889721824,
+  "oot_auc": 0.7804965700371836,
+  "best_params": {
+    "learning_rate": 0.0211035346361329,
+    "num_leaves": 49,
+    "max_depth": 8,
+    "min_child_samples": 372,
+    "min_child_weight": 0.0013442267377792995,
+    "subsample": 0.855847351759121,
+    "colsample_bytree": 0.7233394009311871,
+    "reg_alpha": 5.173906490535256,
+    "reg_lambda": 9.838443900320089,
+    "path_smooth": 8.152537176771556
+  },
+  "params_source": "lgb_raw_X_lgb_v2_is_unbalance Optuna study (trial 26, OOF Gini=0.5676, 51 trials)",
+  "best_iteration": 843,
+  "n_estimators": 844,
+  "is_unbalance": true,
+  "temporal_sort_col": "SK_ID_CURR",
+  "oot_fraction": 0.2,
+  "train_rows": 246008,
+  "oot_rows": 61503,
+  "timestamp": "2026-04-14T13:46:28.839411"
+}

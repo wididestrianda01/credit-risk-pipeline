@@ -1,0 +1,14 @@
+{
+  "phase": "04.1",
+  "wave": 3,
+  "best_model": "variant_b",
+  "best_gini": 0.5519,
+  "test_gini": 0.5382,
+  "test_ks": 0.404,
+  "test_ks_threshold": 0.4279,
+  "phase_04_1_complete": true,
+  "gap_to_target": 0.0481,
+  "exit_gate_pass": false,
+  "next_phase": "Phase 04.1 Extended",
+  "recommendation": "Continue gap closure (best Gini 0.5519 < 0.57)"
+}

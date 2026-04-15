@@ -1,0 +1,18 @@
+{
+  "trial_count": 5,
+  "oof_gini": 0.517279743215185,
+  "oot_gini": 0.5666108281783782,
+  "Gini": 0.5338198803799716,
+  "oof_oot_gap": -0.04933108496319316,
+  "best_params": {
+    "max_depth": 4,
+    "learning_rate": 0.011202764693866375,
+    "subsample": 0.8238384351992375,
+    "colsample_bytree": 0.7494805465555474,
+    "min_child_weight": 3.7259921349675644,
+    "gamma": 1.338944462454472,
+    "reg_alpha": 4.936553831366166,
+    "reg_lambda": 1.043378679353705e-08
+  },
+  "message": "Sanity check passed: no leakage detected. Ready for full HPO."
+}
