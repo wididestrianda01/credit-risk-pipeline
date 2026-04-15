@@ -578,7 +578,7 @@ All contributions must maintain 80%+ test coverage and pass linting checks.
 For questions or issues:
 
 - Open an issue on GitHub
-- Check [CLAUDE.md](./CLAUDE.md) for architecture and domain details
+- Review the source code in `src/` for architecture details
 - Review notebooks for usage examples
 
 ---
