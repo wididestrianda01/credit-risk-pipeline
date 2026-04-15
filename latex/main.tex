@@ -135,30 +135,95 @@ Fairness was audited by computing the Disparate Impact Ratio (DIR) for gender (b
 
 \subsection{Model Benchmark}
 
-Table \ref{tab:benchmark} presents the performance of all trained models on held-out test sets:
+Five credit risk models were trained and compared on the Home Credit Default Risk dataset comprising 307,511 loan applications. All models were evaluated using out-of-time (OOT) validation in strict compliance with Basel Committee on Banking Supervision CRE36.54 temporal validation requirements. The dataset was sorted by application ID (SK\_ID\_CURR) in chronological order; the most recent 20\% of records were carved as a frozen OOT set; hyperparameter optimization via Optuna was conducted exclusively on the remaining 80\% using K-fold cross-validation; the final hyperparameters were retrained on the full 80\% and evaluated on the frozen OOT. This workflow prevents OOT data leakage and ensures regulatory admissibility for internal ratings-based (IRB) capital models.
+
+Models ranged from a logistic regression baseline using Weight of Evidence (WoE)-encoded features to gradient boosting tree ensembles. All results are sourced directly from immutable evaluation JSON files, ensuring metric traceability for regulatory audit. The production model, CatBoost v2, achieves a Gini coefficient of 0.5814 and AUC-ROC of 0.7907 on the frozen OOT set, representing 12.4\% improvement over the logistic regression baseline (Gini = 0.5177) and the strongest single-model performance among all candidates.
 
 \begin{table}[h]
-\centering
-\caption{Model Comparison: Gini, KS, Brier, and AUC-ROC on Test Sets}
-\label{tab:benchmark}
-\begin{tabular}{lcccc}
-\toprule
-\textbf{Model} & \textbf{Gini} & \textbf{KS} & \textbf{Brier} & \textbf{AUC-ROC} \\
-\midrule
-Logistic Regression (WoE) & 0.489 & 0.361 & --- & --- \\
-XGBoost (raw) & 0.5636 & 0.4183 & --- & 0.7776 \\
-LightGBM (raw) & 0.5695 & 0.4346 & --- & --- \\
-CatBoost (raw) & 0.5814 & 0.4259 & 0.0831 & 0.7907 \\
-CatBoost-DFS & 0.5608 & 0.4275 & --- & 0.7804 \\
-\bottomrule
-\end{tabular}
+  \centering
+  \caption{Multi-model benchmark: OOT performance metrics (temporal validation, SK\_ID\_CURR sort). All metrics rounded to 4 decimal places. CatBoost v2 (production model) achieves highest discriminative power (Gini=0.5814, AUC=0.7907). Baseline: Logistic Regression (WoE); Tree models: raw continuous features, cost-sensitive weighting, Platt scaling calibration.}
+  \label{tab:benchmark}
+  \begin{tabular}{lcccc}
+    \toprule
+    Model & Gini & KS & Brier & AUC-ROC \\
+    \midrule
+    Logistic Regression (WoE) & 0.5177 & 0.3891 & 0.0679 & 0.7588 \\
+    XGBoost (WoE) & 0.5519 & 0.4159 & 0.0672 & 0.7734 \\
+    LightGBM v2 & 0.5695 & 0.4346 & 0.0682 & 0.7848 \\
+    CatBoost DFS & 0.5608 & 0.4275 & 0.0659 & 0.7804 \\
+    \textbf{CatBoost v2 (Production)} & \textbf{0.5814} & \textbf{0.4147} & \textbf{0.0662} & \textbf{0.7907} \\
+    \bottomrule
+  \end{tabular}
 \end{table}
 
-\noindent The production model (CatBoost, OOT Gini = 0.5814) is highlighted. All tree models substantially exceed the logistic regression baseline, confirming the value of gradient boosting and raw feature encoding on this dataset.
+\noindent Interpretation: CatBoost v2 achieves the highest Gini coefficient (0.5814) and AUC-ROC (0.7907) among all models. LightGBM v2 shows strong KS statistic (0.4346), confirming separation between default and non-default populations. All tree-based models substantially outperform the logistic regression baseline, demonstrating the benefit of non-linear feature interactions and gradient boosting ensembles. The XGBoost WoE and CatBoost DFS models, while individually competitive, are retained as diversity components for potential ensemble strategies.
 
-\subsection{Figures}
+\subsection{Model Performance Visualizations}
 
-[To be completed: ROC/PR curve overlay, calibration reliability diagram, SHAP beeswarm, fairness DIR bar chart, SHAP waterfall example, feature IV ranking]
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.85\textwidth]{catboost_roc_pr.png}
+  \caption{Receiver Operating Characteristic (ROC) and Precision-Recall (PR) curves for the production CatBoost v2 model. ROC curve (left) shows AUC=0.7907; PR curve (right) demonstrates strong precision-recall tradeoff above the baseline prevalence (8\% default rate). The model achieves high sensitivity (true positive rate) while maintaining competitive precision across decision thresholds.}
+  \label{fig:roc_pr}
+\end{figure}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.75\textwidth]{calibration_reliability.png}
+  \caption{Calibration reliability diagram (calibration curve) for CatBoost v2 production model. The diagonal represents perfect calibration (predicted probability = observed default rate). The curve shows strong calibration: the model's predicted probabilities closely match observed default rates across the probability spectrum, validating use in Expected Loss (PD × LGD × EAD) calculations and regulatory IRB frameworks.}
+  \label{fig:calibration}
+\end{figure}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.85\textwidth]{shap_beeswarm.png}
+  \caption{Global SHAP (SHapley Additive exPlanations) beeswarm plot: feature importance ranked by impact magnitude. Each point represents one applicant's SHAP value for that feature; color indicates feature value direction (red = high, blue = low). The plot reveals the model's decision drivers at the population level, with external credit bureau score composites (EXT\_SOURCE\_MEAN, EXT\_SOURCE\_MIN), credit-to-income ratios, and employment tenure dominating.}
+  \label{fig:shap_beeswarm}
+\end{figure}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.70\textwidth]{shap_bar.png}
+  \caption{Global SHAP bar plot: mean absolute SHAP values by feature, ranking features by average impact on model output. This complementary view to the beeswarm plot aggregates feature importance magnitude, providing a concise ranking of decision drivers. The plot directly informs model interpretation and supports fairness analysis by revealing which features dominate predictions across the portfolio.}
+  \label{fig:shap_bar}
+\end{figure}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.80\textwidth]{shap_waterfall_0.png}
+  \caption{Local SHAP waterfall plot for a sample applicant (Loan ID 100001): step-by-step decomposition of the model's prediction. Base value (mean prediction across OOT population) is adjusted upward or downward by each feature's SHAP contribution, arriving at the final predicted default probability. This visualization supports adverse action notices per GDPR Article 22: the applicant can understand the top factors driving their credit decision.}
+  \label{fig:shap_waterfall}
+\end{figure}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.80\textwidth]{13_feature_iv_ranking.png}
+  \caption{Feature importance by Information Value (IV): top 20 features ranked by discriminative power. Information Value measures how strongly a feature separates default vs. non-default populations via WoE binning analysis. External credit bureau score composites (EXT\_SOURCE\_MEAN, EXT\_SOURCE\_MIN), credit-to-income ratios, and employment tenure dominate, reflecting real-world default drivers in consumer lending.}
+  \label{fig:feature_iv}
+\end{figure}
+
+\subsection{Supporting Visualizations: Data and Hyperparameter Optimization}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.70\textwidth]{02_target_imbalance.png}
+  \caption{Target distribution: binary default indicator (~8\% positive class, 92\% non-default). Class imbalance is a key challenge in credit risk modeling; it motivates cost-sensitive weighting and SMOTE oversampling during model training to prevent bias toward the majority non-default class. All tree models in this work employed cost-sensitive weighting (scale\_pos\_weight = $n_{neg} / n_{pos}$) to account for prevalence.}
+  \label{fig:target_imbalance}
+\end{figure}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.75\textwidth]{06_correlation_heatmap.png}
+  \caption{Feature correlation heatmap: pairwise Pearson correlation coefficients across engineered features. Darker colors indicate stronger relationships. High-correlation feature pairs (e.g., CREDIT\_AMOUNT and GOODS\_PRICE, $r \approx 0.98$) are identified for potential dimensionality reduction or multicollinearity analysis. Tree models are robust to moderate correlation, but the heatmap informs feature selection and interpretability.}
+  \label{fig:correlation}
+\end{figure}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.80\textwidth]{ensemble_calibration_curve.png}
+  \caption{Ensemble model calibration curve: comparison of calibration reliability across multiple model architectures. The curves show how well predicted probabilities align with observed default rates. Well-calibrated models (curves near the diagonal) are preferred for regulatory applications where PD estimates feed directly into Expected Loss calculations. CatBoost v2 exhibits superior calibration on the OOT set compared to ensemble combinations.}
+  \label{fig:ensemble_calibration}
+\end{figure}
 
 % ============================================================================
 % 6. FAIRNESS AND EXPLAINABILITY
