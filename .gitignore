@@ -55,6 +55,8 @@ optuna_study.db
 rebuild_output.log
 reports/*.log
 reports/*.csv
+!reports/fairness_metrics.csv
+!reports/fairness_metrics_v3.csv
 reports/feature_store_comparison.json
 reports/lgb_feature_store_selection.json
 reports/lgb_raw_*.json

@@ -796,7 +796,7 @@ with tab2:
 
     try:
         # Load evaluation metrics from JSON
-        eval_path = Path(__file__).resolve().parent.parent / "reports" / "catboost_raw_eval.json"
+        eval_path = Path(__file__).resolve().parent.parent / "reports" / "catboost_v2_best_metrics.json"
 
         if eval_path.exists():
             with open(eval_path) as f:
@@ -857,7 +857,7 @@ with tab2:
             )
         else:
             st.error(f"⚠️ Model metrics file not found: {eval_path}")
-            st.info("Expected: `reports/catboost_raw_eval.json`")
+            st.info("Expected: `reports/catboost_v2_best_metrics.json`")
 
     except Exception as e:
         st.error(f"❌ Failed to load metrics: {str(e)}")
