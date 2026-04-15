@@ -290,6 +290,134 @@ Opens interactive web interface at http://localhost:8501
 
 ---
 
+## Deployment — Streamlit Community Cloud
+
+Deploy the interactive dashboard to Streamlit Community Cloud for free, production-grade hosting.
+
+### Prerequisites
+
+1. **GitHub account** — Push your repository to GitHub (public or private)
+2. **Hugging Face Hub account** — Host trained model artifacts (free tier available)
+3. **Streamlit Community Cloud account** — Sign up at [share.streamlit.io](https://share.streamlit.io)
+
+### Step-by-Step Deployment
+
+#### 1. Prepare the Repository
+
+Ensure these files are committed to GitHub:
+- `app/streamlit_app.py` — main dashboard application
+- `.streamlit/config.toml` — theme and logger configuration
+- `requirements.txt` — Python dependencies (pinned versions)
+- `models/catboost_raw_calibrated_v2.pkl` — **model file** (check Hugging Face option below if size > 100 MB)
+
+#### 2. Host Model on Hugging Face Hub (Optional but Recommended)
+
+If your model pickle is large (>100 MB), upload to Hugging Face to avoid GitHub LFS:
+
+```bash
+# Install Hugging Face CLI
+pip install huggingface-hub
+
+# Login
+huggingface-cli login
+
+# Create a repo (on huggingface.co/new)
+# Example: https://huggingface.co/your-username/credit-risk-models
+
+# Push model file
+huggingface-cli repo create credit-risk-models --private
+git clone https://huggingface.co/your-username/credit-risk-models
+cp models/catboost_raw_calibrated_v2.pkl credit-risk-models/
+cd credit-risk-models && git add . && git commit -m "Add model" && git push
+```
+
+Streamlit will fetch the model at runtime using `HF_REPO_ID` and optional `HF_TOKEN`.
+
+#### 3. Connect Repository to Streamlit Community Cloud
+
+1. Go to [share.streamlit.io](https://share.streamlit.io) and sign in with GitHub
+2. Click **"New app"** → select your repository
+3. Set **Main file path** to `app/streamlit_app.py`
+4. Select **Python version:** 3.10 or 3.11
+5. Click **"Deploy"** — Streamlit will install dependencies from `requirements.txt`
+
+#### 4. Set secrets in the Community Cloud UI
+
+After deployment, add secrets to Streamlit's encrypted secret store:
+
+1. Go to your app's settings (gear icon in top-right corner)
+2. Select **"Secrets"** from the left sidebar
+3. Add the following key-value pairs (exact format):
+
+```toml
+CREDIT_RISK_API_KEY = "your-production-api-key"
+HF_REPO_ID = "your-hf-username/credit-risk-models"
+HF_TOKEN = "hf_your_api_token_here"  # Optional if repo is public
+```
+
+**Notes:**
+- `CREDIT_RISK_API_KEY` — used by the dashboard to authenticate API calls (if using FastAPI backend)
+- `HF_REPO_ID` — repository ID on Hugging Face (format: `username/repo-name`)
+- `HF_TOKEN` — Hugging Face API token (optional if model repo is public; generate at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens))
+
+#### 5. Local Development with `.streamlit/secrets.toml`
+
+For local testing before deployment:
+
+1. Create `.streamlit/secrets.toml` (gitignored):
+   ```toml
+   CREDIT_RISK_API_KEY = "your-test-key-here"
+   HF_REPO_ID = "your-hf-username/credit-risk-models"
+   # HF_TOKEN = "hf_your_api_token_here"
+   ```
+
+2. Streamlit reads from this file when running locally:
+   ```bash
+   streamlit run app/streamlit_app.py
+   ```
+
+3. Never commit `.streamlit/secrets.toml` — it's in `.gitignore`
+
+### Troubleshooting
+
+#### "Model file not found" during app startup
+
+**Solution:** Ensure `HF_REPO_ID` is set correctly and the model exists on Hugging Face. If model is in your local repo:
+
+```python
+# In app/streamlit_app.py, model loading logic:
+import os
+from huggingface_hub import hf_hub_download
+
+hf_repo_id = os.environ.get("HF_REPO_ID")
+if hf_repo_id:
+    model_path = hf_hub_download(repo_id=hf_repo_id, filename="catboost_raw_calibrated_v2.pkl")
+else:
+    model_path = "models/catboost_raw_calibrated_v2.pkl"
+```
+
+#### "API key missing" or "Unauthorized"
+
+**Solution:** Verify `CREDIT_RISK_API_KEY` is set in **Settings → Secrets** (not in code). Restart the app:
+
+1. Go to your app settings (gear icon)
+2. Click the restart button or redeploy from GitHub
+
+#### Slow startup time
+
+**Solution:** Hugging Face download on first load (~1–5 min for large models). Consider:
+- Caching the downloaded model in Streamlit's cache: `@st.cache_resource`
+- Monitoring logs: click **"Manage app"** → **"Logs"** to see download progress
+
+#### App crashes after deployment
+
+**Solution:** Check the logs (**Manage app** → **Logs**) for:
+- Missing dependencies (ensure all imports are in `requirements.txt`)
+- Model loading errors (verify Hugging Face repo ID and token)
+- Environment variable typos (check **Settings → Secrets** for exact key names)
+
+---
+
 ## Model Performance
 
 ### Primary Model: CatBoost v2

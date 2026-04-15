@@ -72,6 +72,7 @@ context/
 .env
 *.env
 kaggle.json
+.streamlit/secrets.toml
 
 # IDE
 .vscode/
