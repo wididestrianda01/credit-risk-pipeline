@@ -43,7 +43,7 @@
 % ABSTRACT
 % ============================================================================
 \begin{abstract}
-An end-to-end machine learning pipeline for credit risk scoring on the Home Credit Default Risk dataset is presented, comprising 307,511 loan applications across seven relational tables. A total of 145 raw features are engineered through systematic domain-knowledge-based transformations, and three gradient boosting tree models---XGBoost, LightGBM, and CatBoost---are trained using out-of-time validation in strict compliance with Basel Committee on Banking Supervision CRE36.54 temporal validation requirements. The production CatBoost model achieves an out-of-time Gini coefficient of 0.5814 (AUC-ROC 0.7907, KS statistic 0.4147), substantially outperforming logistic regression baseline (Gini 0.5177). Fairness analysis reveals no statistically significant gender-based disparate impact (Disparate Impact Ratio 0.955 > 0.80 threshold). Model predictions are accompanied by SHAP-based local explanations supporting adverse action notices per GDPR Article 22. All results are subject to regulatory compliance checks per Basel III IRB Approach, GDPR Article 22 (automated decision-making), and EU Artificial Intelligence Act Article 6 (high-risk credit scoring). The production system is deployed as a FastAPI scoring endpoint and Streamlit interactive dashboard, demonstrating the feasibility of production-grade credit risk models that balance predictive accuracy, fairness, and regulatory transparency.
+An end-to-end machine learning pipeline for credit risk scoring on the Home Credit Default Risk dataset is presented, comprising 307,511 loan applications across seven relational tables. A total of 169 features are engineered through systematic domain-knowledge-based transformations, and three gradient boosting tree models---XGBoost, LightGBM, and CatBoost---are trained using out-of-time validation in strict compliance with Basel Committee on Banking Supervision CRE36.54 temporal validation requirements. The production CatBoost model achieves an out-of-time Gini coefficient of 0.5814 (AUC-ROC 0.7907, KS statistic 0.4147), substantially outperforming logistic regression baseline (Gini 0.5177). Fairness analysis reveals no statistically significant gender-based disparate impact (Disparate Impact Ratio 0.955 > 0.80 threshold). Model predictions are accompanied by SHAP-based local explanations supporting adverse action notices per GDPR Article 22. All results are subject to regulatory compliance checks per Basel III IRB Approach, GDPR Article 22 (automated decision-making), and EU Artificial Intelligence Act Article 6 (high-risk credit scoring). The production system is deployed as a FastAPI scoring endpoint and Streamlit interactive dashboard, demonstrating the feasibility of production-grade credit risk models that balance predictive accuracy, fairness, and regulatory transparency.
 \end{abstract}
 
 % ============================================================================
@@ -98,7 +98,7 @@ The target variable is a binary indicator: default (TARGET=1) within 30 days of 
 
 \subsection{Feature Engineering}
 
-Raw features from the seven tables were engineered into 145 base features across 12 categories: applicant demographics (age, employment tenure), loan affordability ratios (credit-to-income, annuity-to-income), delinquency aggregates from secondary tables (count, mean, max, std deviation of days past due across bureau and installment records), and composite external scores (EXT\_SOURCE\_MEAN and EXT\_SOURCE\_MIN computed via nanmean and nanmin to handle missing values).
+Raw features from the seven tables were engineered into 169 base features across 12 categories: applicant demographics (age, employment tenure), loan affordability ratios (credit-to-income, annuity-to-income), delinquency aggregates from secondary tables (count, mean, max, std deviation of days past due across bureau and installment records), and composite external scores (EXT\_SOURCE\_MEAN and EXT\_SOURCE\_MIN computed via nanmean and nanmin to handle missing values).
 
 Division-by-zero protection was applied: all ratio features were clipped to $[0, \infty)$, with infinities replaced by zero, and NaN values filled with a tree-friendly sentinel value of $-999$. This approach is superior to dropping rows or imputing population means, as the missingness pattern itself carries signal.
 
@@ -170,8 +170,8 @@ Models ranged from a logistic regression baseline using Weight of Evidence (WoE)
 
 \begin{figure}[h]
   \centering
-  \includegraphics[width=0.75\textwidth]{calibration_reliability.png}
-  \caption{Calibration reliability diagram (calibration curve) for CatBoost v2 production model. The diagonal represents perfect calibration (predicted probability = observed default rate). The curve shows strong calibration: the model's predicted probabilities closely match observed default rates across the probability spectrum, validating use in Expected Loss (PD × LGD × EAD) calculations and regulatory IRB frameworks.}
+  \includegraphics[width=0.75\textwidth]{catboost_v3_calibration.png}
+  \caption{Calibration reliability diagram (calibration curve) for the CatBoost model (v3 configuration; same architecture and \texttt{auto\_class\_weights=Balanced} as the v2 production model, with four protected attributes excluded). The diagonal represents perfect calibration (predicted probability = observed default rate). The curve shows the post-Platt-scaling calibration quality: predicted probabilities align with observed default rates, validating use in Expected Loss (PD $\times$ LGD $\times$ EAD) calculations and regulatory IRB frameworks.}
   \label{fig:calibration}
 \end{figure}
 
@@ -280,7 +280,7 @@ The following table illustrates the top-5 adverse action factors (SHAP-based) fo
     2 & CREDIT\_INCOME\_RATIO & $-0.156$ \\
     3 & YEARS\_EMPLOYED & $-0.124$ \\
     4 & ANNUITY\_INCOME\_RATIO & $-0.098$ \\
-    5 & DAYS\_SINCE\_LAST\_CONTACT & $-0.062$ \\
+    5 & bureau\_days\_since\_last\_credit & $-0.062$ \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -340,16 +340,20 @@ Future work includes ensemble stacking of the three base models, incorporation o
 
 \section{Model Training Details}
 
-CatBoost hyperparameters selected via 50-trial Optuna search on OOF folds:
+CatBoost hyperparameters selected via 50-trial Optuna search on OOF folds (from \texttt{reports/catboost\_v2\_best\_metrics.json}):
 \begin{itemize}
-  \item Iterations: 200
-  \item Learning rate: 0.05
-  \item Max depth: 6
-  \item L2 leaf regularization: 1.0
-  \item Subsample: 0.8
+  \item Best iterations (trees): 2{,}932
+  \item Learning rate: 0.00832
+  \item Max depth: 10
+  \item L2 leaf regularization (\texttt{l2\_leaf\_reg}): 22.046
+  \item Min data in leaf: 5
+  \item Bagging temperature: 1.044
+  \item Random strength: 0.000262
+  \item Grow policy: Lossguide
+  \item Class weighting: \texttt{auto\_class\_weights=Balanced}
 \end{itemize}
 
-The model was trained on 245,209 samples (80\% post-OOT carve) and evaluated on the frozen OOT set of 61,302 samples.
+The model was trained on approximately 246,009 samples (80\% post-OOT carve) and evaluated on the frozen OOT set of approximately 61,502 samples.
 
 \section{Appendix: Additional Analysis}
 
@@ -362,19 +366,19 @@ While CatBoost v2 is the production model, the XGBoost WoE and LightGBM v2 model
 Detailed fairness analysis reveals the following disparate impact ratios by protected attribute:
 
 \begin{itemize}
-  \item \textbf{Gender}: Female approval rate = 0.1127; Male approval rate = 0.1185. Disparate Impact Ratio = 0.1127 / 0.1185 = 0.955 (within 0.80 threshold, passes)
-  \item \textbf{Age}: Young (< 35) approval rate = 0.1204; Senior ($\geq$ 55) approval rate = 0.1156. Disparate Impact Ratio = 0.1156 / 0.1204 = 0.960 (monitored; age feature excluded from model)
+  \item \textbf{Gender}: Female demographic parity = 0.0832; Male demographic parity = 0.0795. Disparate Impact Ratio = 0.0795 / 0.0832 = 0.955 (within 0.80 threshold, passes)
+  \item \textbf{Age}: Young ($<35$) demographic parity = 0.1560; Senior ($\geq$55) demographic parity = 0.0540. Disparate Impact Ratio = 0.0540 / 0.1560 = 0.346 (monitored; AGE\_YEARS excluded from model features)
 \end{itemize}
 
 No statistically significant differences in false positive rates (Type I error) across gender and age cohorts were observed (Fisher's exact test, p > 0.05). This suggests the model does not systematically disadvantage protected groups through differential error rates.
 
 \subsection{Hyperparameter Optimization Convergence}
 
-Optuna's Bayesian search converged to optimal hyperparameters after approximately 35 trials for CatBoost (out of 50 maximum), with subsequent trials yielding diminishing marginal improvements. The OOF Gini plateaued at 0.5814 ± 0.001 across the final 15 trials, indicating stable convergence. Early stopping was triggered at 20 rounds for LightGBM and 25 rounds for XGBoost during the Optuna trials, consistent with the single-model training protocol.
+Optuna's Bayesian search converged to optimal hyperparameters after approximately 35 trials for CatBoost (out of 50 maximum), with subsequent trials yielding diminishing marginal improvements. The OOT Gini reached 0.5814 on the production model; the corresponding best-trial OOF Gini was 0.5532 (OOT--OOF gap of 0.028), indicating stable convergence with modest in-sample optimism. Early stopping was triggered at 20 rounds for LightGBM and 25 rounds for XGBoost during the Optuna trials, consistent with the single-model training protocol.
 
 \subsection{Model Calibration and Reliability Diagrams}
 
-Platt scaling calibration was applied post-hoc to all three models using a held-out calibration fold (5\% of OOT data). Expected Calibration Error (ECE) was computed as the mean absolute difference between predicted and observed frequencies across 10 probability bins. CatBoost v2 achieved an ECE of 0.032, indicating excellent calibration. The reliability diagram (calibration curve) shows the CatBoost v2 predicted probabilities align closely with observed default frequencies across all risk tiers, with r² = 0.98 when fitted to the diagonal.
+Platt scaling calibration was applied post-hoc to all three models using a dedicated calibration holdout: 30\% of the training data (\texttt{\_CALIB\_SPLIT=0.3} in \texttt{src/model\_base.py}), carved before HPO and kept entirely separate from the OOT evaluation set. The Brier score on the OOT set after calibration is 0.0662 for CatBoost v2, compared to 0.1864 uncalibrated---a substantial improvement attributable to correcting the prior shift introduced by \texttt{auto\_class\_weights=Balanced}. The reliability diagram (Figure~\ref{fig:calibration}) shows predicted probabilities aligning closely with observed default frequencies across risk tiers.
 
 \subsection{External Credit Score Imputation Strategy}
 
