@@ -113,7 +113,7 @@ def mock_data() -> tuple[pd.DataFrame, pd.Series]:
     X = pd.DataFrame({
         "f1": np.where(y == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
         "f2": np.where(y == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
-        "prev_days_decision_mean": np.arange(n, dtype=float),
+        "SK_ID_CURR": np.arange(1, n + 1, dtype=int),
     })
     return X, pd.Series(y, name="TARGET")
 
@@ -906,7 +906,7 @@ def lgb_optuna_result(tmp_path_factory):
     X = pd.DataFrame({
         "f1": np.where(y_arr == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
         "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
-        "prev_days_decision_mean": np.arange(n, dtype=float),
+        "SK_ID_CURR": np.arange(1, n + 1, dtype=int),
     })
     y = pd.Series(y_arr, name="TARGET")
 
@@ -1224,7 +1224,7 @@ def calibration_inputs(lgb_optuna_result) -> tuple:
     X_all = pd.DataFrame({
         "f1": np.where(y_arr == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
         "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
-        "prev_days_decision_mean": np.arange(n, dtype=float),
+        "SK_ID_CURR": np.arange(1, n + 1, dtype=int),
     })
     from sklearn.model_selection import train_test_split as tts
     X_train, _, y_train, _ = tts(
@@ -1589,12 +1589,12 @@ class TestXGBoostExtendedSearchSpace:
         y_arr = np.zeros(n, dtype=int)
         y_arr[:40] = 1
         rng.shuffle(y_arr)
-        temporal_vals = np.arange(n, dtype=float)
+        temporal_vals = np.arange(1, n + 1, dtype=float)
         temporal_vals[:50] = np.nan  # first-time applicants with no prior decision
         X = pd.DataFrame({
             "f1": np.where(y_arr == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
             "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
-            "prev_days_decision_mean": temporal_vals,
+            "SK_ID_CURR": temporal_vals,
             "TARGET": y_arr,
         })
         # Save to temporary parquet file
@@ -1640,7 +1640,7 @@ class TestXGBoostExtendedSearchSpace:
 # ---------------------------------------------------------------------------
 
 def _make_ensemble_mock(with_sort_col: bool, n: int = 200) -> tuple[pd.DataFrame, pd.Series]:
-    """200-row mock with or without prev_days_decision_mean column."""
+    """200-row mock with or without SK_ID_CURR column."""
     rng = np.random.default_rng(99)
     y_arr = np.zeros(n, dtype=int)
     y_arr[:16] = 1
@@ -1650,9 +1650,7 @@ def _make_ensemble_mock(with_sort_col: bool, n: int = 200) -> tuple[pd.DataFrame
         "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
     }
     if with_sort_col:
-        data["prev_days_decision_mean"] = np.sort(
-            rng.integers(-7000, 0, n)
-        ).astype(float)
+        data["SK_ID_CURR"] = np.arange(1, n + 1, dtype=int)
     return pd.DataFrame(data), pd.Series(y_arr, name="TARGET")
 
 
@@ -1664,7 +1662,7 @@ class TestEnsembleTemporalCV:
     """
 
     def test_ensemble_uses_temporal_cv_when_sort_col_present(self, monkeypatch):
-        """_make_cv must receive non-None groups_train when prev_days_decision_mean is in X."""
+        """_make_cv must receive non-None groups_train when SK_ID_CURR is in X."""
         import src.model as model_module
         import src.model_ensemble as model_ensemble_module
 
@@ -1952,7 +1950,7 @@ def catboost_result(tmp_path_factory):
     df = pd.DataFrame({
         "f1": np.where(y_arr == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
         "f2": np.where(y_arr == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
-        "prev_days_decision_mean": np.arange(n, dtype=float),
+        "SK_ID_CURR": np.arange(1, n + 1, dtype=int),
         "TARGET": y_arr,
     })
     feature_store_path = tmp / "X_tree_raw.parquet"
@@ -2000,7 +1998,7 @@ class TestCatBoostOptuna:
         rng = np.random.default_rng(7)
         n = 300
         y_arr = np.zeros(n, dtype=int); y_arr[:24] = 1; rng.shuffle(y_arr)
-        df = pd.DataFrame({"f1": rng.normal(0, 1, n), "f2": rng.normal(0, 1, n), "prev_days_decision_mean": np.arange(n, dtype=float), "TARGET": y_arr})
+        df = pd.DataFrame({"f1": rng.normal(0, 1, n), "f2": rng.normal(0, 1, n), "SK_ID_CURR": np.arange(1, n + 1, dtype=int), "TARGET": y_arr})
         feature_store_path = tmp_path / "X_tree_raw.parquet"
         df.to_parquet(feature_store_path)
         train_catboost_optuna(str(feature_store_path), n_trials=1)
@@ -2016,7 +2014,7 @@ class TestCatBoostOptuna:
         rng = np.random.default_rng(8)
         n = 300
         y_arr = np.zeros(n, dtype=int); y_arr[:24] = 1; rng.shuffle(y_arr)
-        df = pd.DataFrame({"f1": rng.normal(0, 1, n), "f2": rng.normal(0, 1, n), "prev_days_decision_mean": np.arange(n, dtype=float), "TARGET": y_arr})
+        df = pd.DataFrame({"f1": rng.normal(0, 1, n), "f2": rng.normal(0, 1, n), "SK_ID_CURR": np.arange(1, n + 1, dtype=int), "TARGET": y_arr})
         feature_store_path = tmp_path / "X_tree_raw.parquet"
         df.to_parquet(feature_store_path)
         train_catboost_optuna(str(feature_store_path), n_trials=1)
@@ -2366,7 +2364,7 @@ class TestLGBApiExtensions:
             "f1": np.where(y == 1, rng.normal(2.0, 1.0, n), rng.normal(0.0, 1.0, n)),
             "f2": np.where(y == 1, rng.normal(1.5, 1.0, n), rng.normal(0.0, 1.0, n)),
             "f3": rng.normal(0.0, 1.0, n),
-            "prev_days_decision_mean": np.arange(n, dtype=float),
+            "SK_ID_CURR": np.arange(1, n + 1, dtype=int),
         })
         return X, pd.Series(y, name="TARGET")
 
@@ -2455,6 +2453,7 @@ class TestLGBApiExtensions:
     ):
         """Valid monotone_constraints dict trains successfully."""
         import src.model as model_module
+        import src.model_base as model_base_module
         monkeypatch.setattr(model_base_module, "_PROJECT_ROOT", tmp_path)
         parquet_path = self._write_parquet(mock_raw_data, tmp_path, stem="X_tree_mc")
         model, metrics, X_test, y_test, _ = train_lightgbm_optuna(
@@ -3437,6 +3436,7 @@ class TestLightGBMOptuna:
         """
         # Arrange
         import src.model as model_module
+        import src.model_lightgbm as model_lightgbm_module
         X, y = mock_data
         X_with_target = X.copy()
         X_with_target["TARGET"] = y
@@ -3446,6 +3446,7 @@ class TestLightGBMOptuna:
         # Mock paths to temp directory (Optuna DB path constant)
         optuna_db_path = tmp_path / "optuna_studies.db"
         monkeypatch.setattr(model_module, "_OPTUNA_DB_PATH", optuna_db_path)
+        monkeypatch.setattr(model_lightgbm_module, "_OPTUNA_DB_PATH", optuna_db_path)
 
         # Act - Run 1
         model1, _, _, _, _ = train_lightgbm_optuna(

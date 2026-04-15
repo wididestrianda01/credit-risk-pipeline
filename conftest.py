@@ -227,7 +227,8 @@ def make_mock_parquet(tmp_path: Path):
         )
 
         # Add temporal sort column (required for OOT split in train_xgboost_optuna)
-        X["prev_days_decision_mean"] = np.arange(n_rows, dtype=float)
+        # SK_ID_CURR is the application ID and is monotonically increasing
+        X["SK_ID_CURR"] = np.arange(1, n_rows + 1, dtype=int)
 
         # Add TARGET column
         X["TARGET"] = y_arr
