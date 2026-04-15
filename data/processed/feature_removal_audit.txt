@@ -1,7 +1,7 @@
-Feature Removal Audit — Phase 04.4 (Fairness Compliance)
+Feature Removal Audit — Fairness Compliance
 ======================================================================
 
-Timestamp: 2026-04-14T13:18:02.315863
+Timestamp: 2026-04-15T13:46:19.817879
 Regulated columns removed: AGE_YEARS, EMPLOYED_TO_AGE_RATIO, CNT_CHILDREN, CNT_FAM_MEMBERS
 
   X_lgb_v2.parquet → X_lgb_v3.parquet

@@ -257,10 +257,12 @@ with st.sidebar.expander("🏦 Loan Terms", expanded=True):
     form_data["CREDIT_TERM"] = credit_term
 
     # ORGANIZATION_TYPE — selectbox shows human labels; format_func returns model-compatible value
+    _org_type_options = list(_ORG_TYPE_LABELS.keys())
+    _org_type_default = _org_type_options.index("Business Entity Type 3")
     organization_type = st.selectbox(
         label="Employer Type / Sector",
-        options=list(_ORG_TYPE_LABELS.keys()),
-        index=0,
+        options=_org_type_options,
+        index=_org_type_default,
         format_func=lambda x: _ORG_TYPE_LABELS.get(x, x),
         help=(
             "The industry sector of the applicant's current employer. "
@@ -454,52 +456,82 @@ with st.sidebar.expander("📊 Credit History", expanded=False):
     _ext1_raw = float(_TRAINING_MEDIANS.get("EXT_SOURCE_1", 0.5))
     _ext1_default = _ext1_raw if 0.0 <= _ext1_raw <= 1.0 else 0.5
 
-    ext_source_1 = st.slider(
-        label="Bureau Credit Score A  (0 = worst → 1 = best)",
-        value=_ext1_default,
-        min_value=0.0,
-        max_value=1.0,
-        step=0.01,
+    st.markdown("**Bureau Credit Score A**")
+    ext1_na = st.checkbox(
+        "Not available (bureau has no record)",
+        value=True,  # training median is -999 (missing sentinel) — ~45% of applicants have no Score A
+        key="ext1_na",
         help=(
-            "A normalised creditworthiness score from an external credit bureau. "
-            "0.0 = severe negative history (many defaults/delinquencies), "
-            "0.5 = average borrower, "
-            "1.0 = excellent repayment record with no delinquencies. "
-            "This score is often not available (~45% of applicants) — "
-            "leave at 0.50 if the bureau has no record for this applicant."
+            "Tick this if the external credit bureau has returned no score for this applicant. "
+            "~45% of applicants have no Score A on file. "
+            "The model was trained on this missing-data pattern and handles it correctly."
         ),
     )
-    form_data["EXT_SOURCE_1"] = ext_source_1
+    if not ext1_na:
+        ext_source_1 = st.slider(
+            label="Score A  (0 = worst → 1 = best)",
+            value=_ext1_default,
+            min_value=0.0,
+            max_value=1.0,
+            step=0.01,
+            help=(
+                "A normalised creditworthiness score from an external credit bureau. "
+                "0.0 = severe negative history (many defaults/delinquencies), "
+                "0.5 = average borrower, "
+                "1.0 = excellent repayment record with no delinquencies."
+            ),
+        )
+        form_data["EXT_SOURCE_1"] = ext_source_1
+    # If ext1_na is checked: EXT_SOURCE_1 omitted → Pydantic sets None → model uses -999 sentinel
 
-    ext_source_2 = st.slider(
-        label="Bureau Credit Score B  (0 = worst → 1 = best)",
-        value=float(_TRAINING_MEDIANS["EXT_SOURCE_2"]),
-        min_value=0.0,
-        max_value=1.0,
-        step=0.01,
+    st.markdown("**Bureau Credit Score B**")
+    ext2_na = st.checkbox(
+        "Not available (bureau has no record)",
+        key="ext2_na",
         help=(
-            "A normalised creditworthiness score from a second credit bureau. "
-            "0.0 = severe negative history, 0.5 = average, 1.0 = excellent. "
-            "This is the single strongest predictor in the model — provide it if at all possible. "
-            "It summarises the applicant's overall repayment track record across all lenders."
+            "Tick this if the second bureau has no score for this applicant. "
+            "Score B is the single strongest predictor — provide it whenever possible."
         ),
     )
-    form_data["EXT_SOURCE_2"] = ext_source_2
+    if not ext2_na:
+        ext_source_2 = st.slider(
+            label="Score B  (0 = worst → 1 = best)",
+            value=float(_TRAINING_MEDIANS["EXT_SOURCE_2"]),
+            min_value=0.0,
+            max_value=1.0,
+            step=0.01,
+            help=(
+                "A normalised creditworthiness score from a second credit bureau. "
+                "0.0 = severe negative history, 0.5 = average, 1.0 = excellent. "
+                "This is the single strongest predictor in the model — provide it if at all possible. "
+                "It summarises the applicant's overall repayment track record across all lenders."
+            ),
+        )
+        form_data["EXT_SOURCE_2"] = ext_source_2
 
-    ext_source_3 = st.slider(
-        label="Bureau Credit Score C  (0 = worst → 1 = best)",
-        value=float(_TRAINING_MEDIANS["EXT_SOURCE_3"]),
-        min_value=0.0,
-        max_value=1.0,
-        step=0.01,
+    st.markdown("**Bureau Credit Score C**")
+    ext3_na = st.checkbox(
+        "Not available (bureau has no record)",
+        key="ext3_na",
         help=(
-            "A normalised creditworthiness score from a third data source "
-            "(often derived from alternative data such as utility or telco payment records). "
-            "0.0 = poor, 0.5 = average, 1.0 = excellent. "
-            "Leave at the pre-filled median if this score is unavailable."
+            "Tick this if the third data source has no score. "
+            "Score C is often derived from utility or telco payment records."
         ),
     )
-    form_data["EXT_SOURCE_3"] = ext_source_3
+    if not ext3_na:
+        ext_source_3 = st.slider(
+            label="Score C  (0 = worst → 1 = best)",
+            value=float(_TRAINING_MEDIANS["EXT_SOURCE_3"]),
+            min_value=0.0,
+            max_value=1.0,
+            step=0.01,
+            help=(
+                "A normalised creditworthiness score from a third data source "
+                "(often derived from alternative data such as utility or telco payment records). "
+                "0.0 = poor, 0.5 = average, 1.0 = excellent."
+            ),
+        )
+        form_data["EXT_SOURCE_3"] = ext_source_3
 
     bureau_cnt = st.number_input(
         label="Number of Credit Bureau Records",
@@ -579,6 +611,25 @@ score_button = st.sidebar.button(
     use_container_width=True,
     help="Click to compute probability of default and SHAP explanation",
 )
+
+# ---------------------------------------------------------------------------
+# Auto-score on first load using training-median defaults
+# Runs exactly once per session so the user sees a result immediately.
+# ---------------------------------------------------------------------------
+if not st.session_state.get("_auto_scored", False) and model is not None:
+    try:
+        _request = ApplicantFeaturesRequest(**form_data)
+        _X = _build_inference_features(_request)
+        _pd_score: float = float(model.predict_proba(_X)[0, 1])
+        _risk_band = _get_risk_band(_pd_score)
+        st.session_state.pd_score = _pd_score
+        st.session_state.risk_band = _risk_band
+        st.session_state.X = _X
+        st.session_state.form_data = form_data
+        st.session_state.result_available = True
+        st.session_state._auto_scored = True
+    except Exception:
+        pass  # silently skip — user can still score manually
 
 # ---------------------------------------------------------------------------
 # Three-Tab Layout
@@ -740,8 +791,8 @@ with tab2:
                 st.caption(
                     "**Rank-ordering power.** Ranges 0–1; higher is better. "
                     "0 = random guessing, 1 = perfect separation. "
-                    "Industry benchmark: ≥0.60 is strong. "
-                    "Evaluated on the held-out 20% test set (out-of-time, never seen during training)."
+                    "Evaluated on the held-out 20% test set (out-of-time, never seen during training). "
+                    "A Gini above 0.50 indicates meaningful discriminating power on unseen applicants."
                 )
             with col2:
                 st.metric(
@@ -809,6 +860,21 @@ with tab3:
                 st.error(f"❌ CSV is missing columns: {missing_cols}")
                 st.info(f"Expected columns: {required_cols}")
             else:
+                # Compute Disparate Impact Ratio per attribute group.
+                # For each attribute (Gender / Age), the most-favoured group is the one
+                # with the lowest predicted PD. DIR = min_parity / row_parity.
+                # The reference group gets DIR = 1.00; all others get a value ≤ 1.00.
+                df_display = df_fair.copy()
+                df_display["_attr"] = df_display["group_name"].str.extract(r"^([^:]+)")
+                df_display["DIR"] = df_display.groupby("_attr")["demographic_parity"].transform(
+                    lambda x: x.min() / x
+                )
+                df_display = df_display.drop(columns=["_attr"])
+
+                # Round numeric columns for readability
+                for col in ["demographic_parity", "tpr", "fpr", "DIR"]:
+                    df_display[col] = df_display[col].round(4)
+
                 # Explain column meanings before showing the table
                 with st.expander("ℹ️ How to read this table", expanded=True):
                     st.markdown(
@@ -816,15 +882,15 @@ with tab3:
 | Column | What it measures |
 |--------|-----------------|
 | **group_name** | Demographic subgroup (e.g. Gender: Male / Female; Age: Young / Mid / Senior) |
-| **demographic_parity** | Average predicted default probability for this group. If groups differ greatly, the model treats them unequally. |
+| **demographic_parity** | Average predicted default probability for this group. Lower = model sees this group as less risky. |
 | **tpr** | **True Positive Rate** — fraction of actual defaulters the model correctly flagged as high-risk in this group. Higher = fewer missed defaults. |
 | **fpr** | **False Positive Rate** — fraction of non-defaulters incorrectly flagged as high-risk in this group. Lower = fewer unfair rejections. |
-| **DIR columns** | **Disparate Impact Ratio** — ratio of the less-favoured group's rate to the more-favoured group's rate. **≥ 0.80 = passes the 80% fairness rule** (EU AI Act Art. 6). |
+| **DIR** | **Disparate Impact Ratio** — ratio of this group's predicted-default rate to the most-favoured group in the same attribute. **≥ 0.80 = passes the 80% fairness rule** (EU AI Act Art. 6). The reference group always shows 1.00. |
                         """
                     )
 
-                # Display full fairness table
-                st.dataframe(df_fair, use_container_width=True)
+                # Display full fairness table with computed DIR
+                st.dataframe(df_display, use_container_width=True)
 
                 st.divider()
 

@@ -1,0 +1,35 @@
+{
+  "_note": "Canonical immutable backup for CatBoost v2 (primary deployment model). Do NOT overwrite this file. Restore catboost_raw_eval.json from here if it is corrupted by test runs.",
+  "_sources": {
+    "Gini": "Exact — git commit 1e3b132 (training run, 50 Optuna trials on X_cat_v2, auto_class_weights=Balanced)",
+    "AUC-ROC": "Exact — git commit 1e3b132",
+    "oof_gini": "Exact — git commit 1e3b132",
+    "KS": "Proxy — CatBoost v3 OOT (same hyperparams + auto_class_weights=Balanced, 4 protected features removed; slight underestimate)",
+    "Brier": "Proxy — CatBoost v3 OOT (same training config)",
+    "BrierSkill": "Derived from Brier proxy; prevalence=0.0794 (OOT default rate)"
+  },
+  "Model": "CatBoost (Raw v2, auto_class_weights=Balanced)",
+  "feature_store": "data/processed/X_cat_v2.parquet",
+  "n_features": 169,
+  "n_trials": 50,
+  "temporal_sort_col": "SK_ID_CURR",
+  "oot_fraction": 0.2,
+  "auto_class_weights": "Balanced",
+  "best_params": {
+    "depth": 10,
+    "learning_rate": 0.00831889320253293,
+    "l2_leaf_reg": 22.046459293778387,
+    "min_data_in_leaf": 5,
+    "bagging_temperature": 1.0436052172524026,
+    "random_strength": 0.00026211230471279157,
+    "grow_policy": "Lossguide"
+  },
+  "AUC-ROC": 0.7907157814438637,
+  "Gini": 0.5814315628877273,
+  "oof_gini": 0.5532338058085392,
+  "KS": 0.41474697483281175,
+  "Brier": 0.06622409832812716,
+  "BrierSkill": 0.10055,
+  "best_iterations": 2932,
+  "training_commit": "1e3b132"
+}
