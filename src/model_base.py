@@ -1105,6 +1105,7 @@ def calibrate_model(
     method: str = "sigmoid",
     output_model_path: str | None = None,
     output_figure_path: str | None = None,
+    model_name: str = "Model",
 ) -> tuple[object, float, float]:
     """
     Calibrate probability predictions using Platt scaling or isotonic regression.
@@ -1212,7 +1213,7 @@ def calibrate_model(
 
     ax.set_xlabel("Mean predicted probability")
     ax.set_ylabel("Fraction of positives")
-    ax.set_title("Reliability Diagram — LightGBM Probability Calibration")
+    ax.set_title(f"Reliability Diagram — {model_name} Probability Calibration")
     ax.legend(loc="upper left")
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)

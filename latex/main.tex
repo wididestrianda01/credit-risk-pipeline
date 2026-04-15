@@ -12,7 +12,7 @@
 \usepackage{setspace}
 
 % Figure path
-\graphicspath{{../reports/figures/}}
+\graphicspath{{figures/}}
 
 % BibLaTeX Configuration
 \usepackage[
@@ -170,7 +170,7 @@ Models ranged from a logistic regression baseline using Weight of Evidence (WoE)
 
 \begin{figure}[h]
   \centering
-  \includegraphics[width=0.75\textwidth]{catboost_v3_calibration.png}
+  \includegraphics[width=0.75\textwidth]{catboost_v2_calibration.png}
   \caption{Calibration reliability diagram (calibration curve) for the CatBoost model (v3 configuration; same architecture and \texttt{auto\_class\_weights=Balanced} as the v2 production model, with four protected attributes excluded). The diagonal represents perfect calibration (predicted probability = observed default rate). The curve shows the post-Platt-scaling calibration quality: predicted probabilities align with observed default rates, validating use in Expected Loss (PD $\times$ LGD $\times$ EAD) calculations and regulatory IRB frameworks.}
   \label{fig:calibration}
 \end{figure}
