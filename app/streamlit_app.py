@@ -46,12 +46,12 @@ from src.model_base import load_model
 # ---------------------------------------------------------------------------
 
 st.set_page_config(
-    page_title="Credit Risk Scorer",
+    page_title="Credit Risk Scoring",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-st.title("💳 Credit Risk Scoring — CatBoost v2 (Gini 0.5814)")
+st.title("💳 Credit Risk Scoring")
 
 # ---------------------------------------------------------------------------
 # Model Loading with Caching
@@ -95,6 +95,62 @@ if "result_available" not in st.session_state:
 # ---------------------------------------------------------------------------
 # Helper Functions
 # ---------------------------------------------------------------------------
+
+
+_RISK_BAND_DISPLAY = {
+    "VERY_LOW": "🟢 Very Low Risk",
+    "LOW": "🟡 Low Risk",
+    "MEDIUM": "🟠 Medium Risk",
+    "HIGH": "🔴 High Risk",
+    "VERY_HIGH": "⛔ Very High Risk",
+}
+
+# Human-readable labels for ORGANIZATION_TYPE (model receives original value via format_func)
+_ORG_TYPE_LABELS: dict[str, str] = {
+    "Business Entity Type 1": "Private Company — Small (Type 1)",
+    "Business Entity Type 2": "Private Company — Medium (Type 2)",
+    "Business Entity Type 3": "Private Company — Large (Type 3, most common)",
+    "Government": "Government / Public Sector",
+    "School": "School / Educational Institution",
+    "Military": "Military / Defence",
+    "Medicine": "Healthcare / Medical Facility",
+    "Police": "Police / Law Enforcement",
+    "Trade: type 1": "Retail & Trade — Specialty (Type 1)",
+    "Trade: type 2": "Retail & Trade — Type 2",
+    "Trade: type 3": "Retail & Trade — General (Type 3)",
+    "Transport: type 1": "Transport & Logistics — Type 1",
+    "Transport: type 2": "Transport & Logistics — Type 2",
+    "Transport: type 3": "Transport & Logistics — Type 3",
+    "Transport: type 4": "Transport & Logistics — Type 4",
+    "Electricity": "Electricity / Utilities",
+    "Religion": "Religious Organisation",
+    "Industry: type 1": "Manufacturing / Industry — Type 1",
+    "Industry: type 2": "Manufacturing / Industry — Type 2",
+    "Industry: type 3": "Manufacturing / Industry — Type 3",
+    "Industry: type 4": "Manufacturing / Industry — Type 4",
+    "Industry: type 5": "Manufacturing / Industry — Type 5",
+    "Industry: type 6": "Manufacturing / Industry — Type 6",
+    "Industry: type 7": "Manufacturing / Industry — Type 7",
+    "Industry: type 8": "Manufacturing / Industry — Type 8",
+    "Industry: type 9": "Manufacturing / Industry — Type 9",
+    "Industry: type 10": "Manufacturing / Industry — Type 10",
+    "Industry: type 11": "Manufacturing / Industry — Type 11",
+    "Industry: type 12": "Manufacturing / Industry — Type 12",
+    "Industry: type 13": "Manufacturing / Industry — Type 13",
+    "Security Agencies": "Security / Guard Services",
+    "Hotel": "Hotel / Hospitality",
+    "Legal Services": "Legal Services / Law Firm",
+    "Advertising": "Advertising / Marketing",
+    "Cleaning": "Cleaning / Facilities Services",
+    "Insurance": "Insurance",
+    "Telecommunications": "Telecommunications / Telecom",
+    "Restaurant": "Restaurant / Food Service",
+    "Realtor": "Real Estate / Property Agency",
+    "Housing": "Housing / Social Housing",
+    "Bank": "Bank / Financial Institution",
+    "Postal": "Postal / Courier Service",
+    "Agriculture": "Agriculture / Farming",
+}
 
 
 def get_shap_waterfall_figure(shap_explanation: Any, idx: int, X: pd.DataFrame) -> plt.Figure:
@@ -200,62 +256,18 @@ with st.sidebar.expander("🏦 Loan Terms", expanded=True):
     )
     form_data["CREDIT_TERM"] = credit_term
 
-    # ORGANIZATION_TYPE — internal dataset codes; keep values as-is for model compatibility
-    organization_options = [
-        "Business Entity Type 3",
-        "Business Entity Type 2",
-        "Business Entity Type 1",
-        "Government",
-        "School",
-        "Military",
-        "Medicine",
-        "Police",
-        "Trade: type 1",
-        "Trade: type 2",
-        "Trade: type 3",
-        "Transport: type 1",
-        "Transport: type 2",
-        "Transport: type 3",
-        "Transport: type 4",
-        "Electricity",
-        "Religion",
-        "Industry: type 1",
-        "Industry: type 2",
-        "Industry: type 3",
-        "Industry: type 4",
-        "Industry: type 5",
-        "Industry: type 6",
-        "Industry: type 7",
-        "Industry: type 8",
-        "Industry: type 9",
-        "Industry: type 10",
-        "Industry: type 11",
-        "Industry: type 12",
-        "Industry: type 13",
-        "Security Agencies",
-        "Hotel",
-        "Legal Services",
-        "Advertising",
-        "Cleaning",
-        "Insurance",
-        "Telecommunications",
-        "Restaurant",
-        "Realtor",
-        "Housing",
-        "Bank",
-        "Postal",
-        "Agriculture",
-    ]
+    # ORGANIZATION_TYPE — selectbox shows human labels; format_func returns model-compatible value
     organization_type = st.selectbox(
         label="Employer Type / Sector",
-        options=organization_options,
+        options=list(_ORG_TYPE_LABELS.keys()),
         index=0,
+        format_func=lambda x: _ORG_TYPE_LABELS.get(x, x),
         help=(
-            "The general sector or type of the applicant's current employer. "
-            "'Business Entity Type 1/2/3' = private companies of different sizes "
-            "(Type 3 is the most common). "
-            "Select the closest match. Examples: a hospital → Medicine; "
-            "a supermarket → Trade; a factory → Industry."
+            "The industry sector of the applicant's current employer. "
+            "'Private Company Type 1/2/3' are private-sector companies of increasing size — "
+            "Type 3 is the largest and most common category in this dataset. "
+            "Select the closest match: e.g. a hospital → Healthcare / Medical Facility; "
+            "a supermarket chain → Retail & Trade; a car factory → Manufacturing / Industry."
         ),
     )
     form_data["ORGANIZATION_TYPE"] = organization_type
@@ -562,14 +574,14 @@ score_button = st.sidebar.button(
 # ---------------------------------------------------------------------------
 
 tab1, tab2, tab3 = st.tabs([
-    "🎯 Score Applicant",
+    "📋 Applicant Score",
     "📊 Model Performance",
     "⚖️ Fairness Metrics",
 ])
 
-# ===== TAB 1: SCORE APPLICANT =====
+# ===== TAB 1: APPLICANT SCORE =====
 with tab1:
-    st.header("🎯 Score Applicant")
+    st.header("📋 Applicant Score")
 
     # Scoring logic: only runs when button is clicked
     if score_button:
@@ -602,9 +614,9 @@ with tab1:
     # Display results if available, else show welcome message
     if not st.session_state.get("result_available", False):
         st.info(
-            "👋 Welcome to the Credit Risk Scorer. "
-            "Fill the form on the left and click '🎯 Score Applicant' "
-            "to generate a prediction with SHAP waterfall analysis."
+            "👋 Welcome to the Credit Risk Scoring dashboard. "
+            "Fill in the applicant details on the left and click 'Score Applicant' "
+            "to generate a Probability of Default with SHAP explanation."
         )
     else:
         # --- Left column: Metrics | Right column: SHAP Waterfall ---
@@ -617,7 +629,9 @@ with tab1:
             )
             st.metric(
                 label="Risk Band",
-                value=st.session_state.risk_band,
+                value=_RISK_BAND_DISPLAY.get(
+                    st.session_state.risk_band, st.session_state.risk_band
+                ),
             )
 
         with col2:
@@ -631,9 +645,22 @@ with tab1:
 
             shap_vals = st.session_state.shap_vals
 
+            # Build a display copy of the SHAP Explanation with human-readable feature names.
+            # The original shap_vals (raw names) is kept for adverse action factor lookup.
+            import copy
+
+            shap_display = copy.copy(shap_vals)
+            if (
+                hasattr(shap_display, "feature_names")
+                and shap_display.feature_names is not None
+            ):
+                shap_display.feature_names = [
+                    FEATURE_LABELS.get(n, n) for n in shap_display.feature_names
+                ]
+
             # Render waterfall
             try:
-                fig = get_shap_waterfall_figure(shap_vals, idx=0, X=st.session_state.X)
+                fig = get_shap_waterfall_figure(shap_display, idx=0, X=st.session_state.X)
                 st.pyplot(fig, use_container_width=True)
                 plt.close(fig)  # Free memory
             except Exception as e:
@@ -688,23 +715,44 @@ with tab2:
 
             with col1:
                 st.metric(
-                    label="OOT Gini",
+                    label="Gini Coefficient (OOT)",
                     value=f"{eval_metrics.get('Gini', 0):.4f}",
+                )
+                st.caption(
+                    "**Rank-ordering power.** Ranges 0–1; higher is better. "
+                    "0 = random guessing, 1 = perfect separation. "
+                    "Industry benchmark: ≥0.60 is strong. "
+                    "Evaluated on the held-out 20% test set (out-of-time, never seen during training)."
                 )
             with col2:
                 st.metric(
-                    label="KS Statistic",
+                    label="KS Statistic (OOT)",
                     value=f"{eval_metrics.get('KS', 0):.4f}",
+                )
+                st.caption(
+                    "**Kolmogorov–Smirnov statistic.** Maximum gap between the cumulative "
+                    "default rate and non-default rate curves. Ranges 0–1; higher is better. "
+                    "≥0.40 = strong discriminating power (Basel III standard)."
                 )
             with col3:
                 st.metric(
-                    label="AUC-ROC",
+                    label="AUC-ROC (OOT)",
                     value=f"{eval_metrics.get('AUC-ROC', 0):.4f}",
+                )
+                st.caption(
+                    "**Area Under the ROC Curve.** Probability that the model ranks a "
+                    "random defaulter above a random non-defaulter. "
+                    "0.5 = random, 1.0 = perfect. Related to Gini by: AUC = (Gini + 1) / 2."
                 )
             with col4:
                 st.metric(
-                    label="Brier Score",
+                    label="Brier Score (OOT)",
                     value=f"{eval_metrics.get('Brier', 0):.4f}",
+                )
+                st.caption(
+                    "**Probability calibration accuracy.** Mean squared error between "
+                    "predicted default probability and actual outcome. "
+                    "Lower = better calibrated. <0.08 = well-calibrated at the 8% default rate."
                 )
 
             st.divider()
@@ -742,6 +790,20 @@ with tab3:
                 st.error(f"❌ CSV is missing columns: {missing_cols}")
                 st.info(f"Expected columns: {required_cols}")
             else:
+                # Explain column meanings before showing the table
+                with st.expander("ℹ️ How to read this table", expanded=True):
+                    st.markdown(
+                        """
+| Column | What it measures |
+|--------|-----------------|
+| **group_name** | Demographic subgroup (e.g. Gender: Male / Female; Age: Young / Mid / Senior) |
+| **demographic_parity** | Average predicted default probability for this group. If groups differ greatly, the model treats them unequally. |
+| **tpr** | **True Positive Rate** — fraction of actual defaulters the model correctly flagged as high-risk in this group. Higher = fewer missed defaults. |
+| **fpr** | **False Positive Rate** — fraction of non-defaulters incorrectly flagged as high-risk in this group. Lower = fewer unfair rejections. |
+| **DIR columns** | **Disparate Impact Ratio** — ratio of the less-favoured group's rate to the more-favoured group's rate. **≥ 0.80 = passes the 80% fairness rule** (EU AI Act Art. 6). |
+                        """
+                    )
+
                 # Display full fairness table
                 st.dataframe(df_fair, use_container_width=True)
 
