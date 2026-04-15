@@ -27,6 +27,7 @@ pydantic==2.12.5
 
 # Dashboard
 streamlit==1.55.0
+huggingface-hub==0.24.7
 
 # Visualisation
 matplotlib==3.10.8

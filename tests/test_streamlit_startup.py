@@ -171,6 +171,14 @@ def test_load_model_uses_hf_hub_when_env_set(tmp_path):
 
     Forward-compatible: passes as a no-op if hf_hub_download is not yet in the module
     (pre-Plan-02), and verifies the HF call path when it is integrated.
+
+    Uses the same two-step isolation pattern as the fallback test:
+      1. Pre-import under a neutral mock so the module is resident in sys.modules.
+      2. Apply _MODEL_PATH and hf_hub_download patches against the already-resident
+         module, clear the @st.cache_resource cache, then re-invoke.
+    Entering a patch() context manager forces an import to resolve the target; if
+    _fresh_import() is called *inside* that context it creates a new module object
+    that is no longer the patch target, causing silent misses.
     """
     missing_path = tmp_path / "nonexistent.pkl"
     fake_downloaded_path = str(tmp_path / "downloaded.pkl")
@@ -180,22 +188,26 @@ def test_load_model_uses_hf_hub_when_env_set(tmp_path):
     fake_model = MagicMock(name="FakeCatBoostModelFromHF")
     hf_download_mock = MagicMock(return_value=fake_downloaded_path)
 
+    # Step 1: get module into sys.modules under a neutral mock (no real I/O)
+    with patch("app.streamlit_app.load_model", return_value=MagicMock()):
+        mod = _fresh_import(_APP_MODULE)
+
+    hf_integrated = hasattr(mod, "hf_hub_download")
+
+    if not hf_integrated:
+        # Pre-Plan-02: test is a no-op
+        assert mod.model is None or mod.model is not None  # vacuously true
+        return
+
+    # Step 2: patch the already-resident module, clear cache, verify HF Hub path
     with (
         patch("app.streamlit_app._MODEL_PATH", missing_path),
         patch.dict(os.environ, {"HF_REPO_ID": "testuser/credit-risk-models"}, clear=False),
-        patch("app.streamlit_app.load_model", side_effect=FileNotFoundError("no local")),
+        patch("app.streamlit_app.hf_hub_download", hf_download_mock),
+        patch("app.streamlit_app.load_model", return_value=fake_model),
     ):
-        mod = _fresh_import(_APP_MODULE)
-        hf_integrated = hasattr(mod, "hf_hub_download")
+        mod.load_catboost_model.clear()
+        result = mod.load_catboost_model()
 
-        if hf_integrated:
-            # After Plan 02: patch load_model to succeed on HF path and verify download called
-            mod.hf_hub_download = hf_download_mock
-            mod.load_catboost_model.clear()
-            with patch("app.streamlit_app.load_model", return_value=fake_model):
-                result = mod.load_catboost_model()
-            hf_download_mock.assert_called_once()
-            assert result is fake_model
-        else:
-            # Pre-Plan-02: module gracefully returns None; test is a no-op
-            assert mod.model is None or mod.model is not None  # vacuously true
+    hf_download_mock.assert_called_once()
+    assert result is fake_model

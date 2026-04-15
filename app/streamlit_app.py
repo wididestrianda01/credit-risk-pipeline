@@ -28,9 +28,12 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+import os
+
 import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
+from huggingface_hub import hf_hub_download
 
 from app.api import (
     _TRAINING_MEDIANS,
@@ -61,24 +64,62 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _MODEL_PATH = _PROJECT_ROOT / "models" / "catboost_raw_calibrated_v2.pkl"
 
 
+_HF_MODEL_FILENAME = "catboost_raw_calibrated_v2.pkl"
+
+
 @st.cache_resource
 def load_catboost_model():
     """Load calibrated CatBoost model once per session.
 
+    Loading priority:
+    1. Local disk at ``_MODEL_PATH`` (fast; works in development).
+    2. Hugging Face Hub download when ``HF_REPO_ID`` is set (required on
+       Streamlit Community Cloud where the pickle is not in git).
+
+    ``HF_REPO_ID`` is read from ``st.secrets`` first, then ``os.environ``
+    so both ``secrets.toml`` (local) and the Streamlit Cloud Secrets UI work.
+
     Returns
     -------
     model or None
-        Loaded CatBoost model, or None if loading fails.
+        Loaded CatBoost model, or None if all loading paths fail.
     """
+    # --- Path 1: local disk ---
+    if _MODEL_PATH.exists():
+        try:
+            return load_model(str(_MODEL_PATH))
+        except Exception as e:
+            st.warning(f"⚠️ Local model load failed: {e}. Trying Hugging Face Hub…")
+
+    # --- Path 2: Hugging Face Hub ---
+    # st.secrets raises StreamlitSecretNotFoundError when secrets.toml is absent
+    # (e.g. local dev without the file, or bare Python import in tests).
+    # Fall back silently to os.environ in that case.
+    hf_repo_id = None
     try:
-        return load_model(str(_MODEL_PATH))
-    except FileNotFoundError:
-        st.error(f"❌ Model file not found at {_MODEL_PATH}")
-        st.info("Expected: `models/catboost_raw_calibrated_v2.pkl`")
-        return None
-    except Exception as e:
-        st.error(f"❌ Failed to load model: {str(e)}")
-        return None
+        hf_repo_id = st.secrets.get("HF_REPO_ID", None)
+    except Exception:
+        pass
+    if hf_repo_id is None:
+        hf_repo_id = os.environ.get("HF_REPO_ID", None)
+
+    if hf_repo_id:
+        try:
+            cached_path = hf_hub_download(
+                repo_id=hf_repo_id,
+                filename=_HF_MODEL_FILENAME,
+            )
+            return load_model(cached_path)
+        except Exception as e:
+            st.error(f"❌ Hugging Face Hub download failed: {e}")
+            return None
+
+    # --- Both paths failed ---
+    st.error(
+        f"❌ Model file not found at {_MODEL_PATH} and HF_REPO_ID not configured. "
+        "Set HF_REPO_ID in your environment or .streamlit/secrets.toml."
+    )
+    return None
 
 
 model = load_catboost_model()
