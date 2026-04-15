@@ -654,25 +654,6 @@ score_button = st.sidebar.button(
 )
 
 # ---------------------------------------------------------------------------
-# Auto-score on first load using training-median defaults
-# Runs exactly once per session so the user sees a result immediately.
-# ---------------------------------------------------------------------------
-if not st.session_state.get("_auto_scored", False) and model is not None:
-    try:
-        _request = ApplicantFeaturesRequest(**form_data)
-        _X = _build_inference_features(_request)
-        _pd_score: float = float(model.predict_proba(_X)[0, 1])
-        _risk_band = _get_risk_band(_pd_score)
-        st.session_state.pd_score = _pd_score
-        st.session_state.risk_band = _risk_band
-        st.session_state.X = _X
-        st.session_state.form_data = form_data
-        st.session_state.result_available = True
-        st.session_state._auto_scored = True
-    except Exception:
-        pass  # silently skip — user can still score manually
-
-# ---------------------------------------------------------------------------
 # Three-Tab Layout
 # ---------------------------------------------------------------------------
 
