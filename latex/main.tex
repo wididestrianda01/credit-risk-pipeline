@@ -496,7 +496,7 @@ Response:
 }
 \end{lstlisting}
 
-\paragraph{Streamlit dashboard.} The interactive dashboard allows credit officers to enter applicant features, receive a PD estimate with a visual SHAP waterfall decomposition, and review the top adverse action factors. The dashboard also displays portfolio-level statistics (score distribution, calibration curve, feature importance) for monitoring purposes. This interface satisfies the EU AI Act Article 14 requirement for human oversight of high-risk AI decisions.
+\paragraph{Streamlit dashboard.} The interactive dashboard allows credit officers to enter applicant features, receive a calibrated PD estimate with a visual SHAP waterfall decomposition, and review the top-5 adverse action factors. A second tab shows key model performance metrics (Gini, AUC-ROC, KS, Brier Score) sourced from the canonical evaluation JSON, and a third tab displays fairness metrics (disparate impact ratios by gender and age group). This interface satisfies the GDPR Article~22 requirement for human-readable explanations and supports the EU AI Act Article~6 high-risk AI obligations through transparent, auditable scoring decisions.
 
 % ============================================================================
 % 8. BUSINESS INTERPRETATION

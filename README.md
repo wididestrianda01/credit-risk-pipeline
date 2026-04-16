@@ -176,7 +176,7 @@ OOT Gini: **0.5695**, KS: 0.4346
 ```bash
 python scripts/train_catboost_raw.py  # uses X_cat_v2
 ```
-OOT Gini: **0.5814**, KS: 0.4275 ⭐
+OOT Gini: **0.5814**, KS: 0.4147 ⭐
 
 ---
 
@@ -209,7 +209,7 @@ pytest tests/ -v -m "not slow"
 pytest tests/ --cov=src --cov-report=term-missing
 ```
 
-**Coverage:** 428 tests, 80%+ coverage maintained
+**Coverage:** 574 tests, 80%+ coverage maintained
 
 ---
 
@@ -283,9 +283,9 @@ Opens interactive web interface at http://localhost:8501
 - Applicant input form (sidebar)
 - Real-time PD scoring + 5-tier risk band
 - SHAP waterfall plot (per-applicant feature contributions)
-- Top-10 feature importance table
-- Fairness metrics dashboard (gender/age disparate impact)
-- Adverse action factor list (GDPR Art. 22 compliance)
+- Top-5 adverse action factors (GDPR Art. 22 compliance)
+- Model performance tab (Gini, AUC-ROC, KS, Brier Score)
+- Fairness metrics tab (gender/age disparate impact ratios)
 - Welcome screen on first load
 
 ---
@@ -426,8 +426,8 @@ else:
 |--------|-------|--------|
 | **OOT Gini** | 0.5814 | ✓ |
 | **AUC-ROC** | 0.7907 | ✓ |
-| **KS Statistic** | 0.4275 | ✓ (Basel III: ≥0.40) |
-| **Brier Score** | 0.0831 | ✓ (<0.08) |
+| **KS Statistic** | 0.4147 | ✓ (Basel III: ≥0.40) |
+| **Brier Score** | 0.0662 | ✓ (<0.08) |
 | **Feature Store** | X_cat_v2 (149 cols) | v2: protected features |
 | **Calibration** | Platt sigmoid | Basel III EL-ready |
 
@@ -435,7 +435,7 @@ else:
 
 | Model | OOT Gini | KS | AUC | Notes |
 |-------|----------|-----|-----|-------|
-| **CatBoost v2** ⭐ | 0.5814 | — | 0.7907 | **Production** — deployed in API & dashboard |
+| **CatBoost v2** ⭐ | 0.5814 | 0.4147 | 0.7907 | **Production** — deployed in API & dashboard |
 | LightGBM v2 | 0.5695 | 0.4346 | — | High rank stability; ensemble diversity |
 | XGBoost v2 | 0.5636 | 0.4183 | 0.7776 | Fast training; good calibration |
 | CatBoost-DFS | 0.5608 | 0.4275 | 0.7804 | Diversity model (DFS features) |
@@ -487,8 +487,12 @@ credit-risk-pipeline/
 ├── README.md                          # This file
 ├── LICENSE                            # MIT License
 ├── requirements.txt                   # Python dependencies
+├── runtime.txt                        # Python version pin (Streamlit Cloud)
+├── conftest.py                        # Root-level pytest fixtures + credit_engine alias
 ├── .gitignore                         # Standard Python + data safety
 ├── .env.example                       # API key template
+├── .streamlit/
+│   └── config.toml                    # Theme + logger configuration (Streamlit Cloud)
 │
 ├── data/
 │   ├── raw/                           # Kaggle CSVs (7 tables, not committed)
@@ -519,7 +523,9 @@ credit-risk-pipeline/
 │   ├── model_benchmark.csv            # 5-model comparison
 │   ├── xgboost_raw_eval.json          # XGB v2 best params + metrics
 │   ├── lgb_raw_X_lgb_v2_eval.json     # LGB v2 best params + metrics
-│   └── catboost_raw_eval.json         # CatBoost v2 best params + metrics
+│   ├── catboost_raw_eval.json         # CatBoost v2 best params + metrics
+│   ├── catboost_v2_best_metrics.json  # Canonical CatBoost v2 metrics (read by dashboard)
+│   └── lr_woe_oot_eval.json           # Logistic baseline OOT evaluation
 │
 ├── src/                               # Core library (canonical package)
 │   ├── data_loader.py                 # 7-table join + dtype enforcement
@@ -538,6 +544,11 @@ credit-risk-pipeline/
 │   ├── api.py                         # FastAPI /predict endpoint
 │   └── streamlit_app.py               # Interactive dashboard
 │
+├── latex/                             # Research report
+│   ├── main.tex                       # Full LaTeX source
+│   ├── main.pdf                       # Compiled PDF report
+│   └── references.bib                 # BibTeX bibliography
+│
 ├── notebooks/                         # Analysis & EDA (outputs stripped on commit)
 │   ├── 01_eda_and_data_quality.ipynb  # Dataset exploration + missing patterns
 │   ├── 02_feature_engineering.ipynb   # Feature interaction analysis
@@ -550,17 +561,15 @@ credit-risk-pipeline/
 │   ├── train_catboost_raw.py          # CatBoost training script
 │   └── run_ensemble.py                # 3-model ensemble orchestration
 │
-├── tests/                             # Unit + integration tests (428 tests)
-│   ├── conftest.py                    # Fixtures + credit_engine alias
-│   ├── test_data_loader.py            # Data loading validation
-│   ├── test_features.py               # Feature engineering tests
-│   ├── test_model.py                  # Model training tests
-│   ├── test_utils.py                  # Metrics + plotting tests
-│   ├── test_auto_features.py          # DFS aggregation tests
-│   └── test_explain.py                # SHAP + fairness tests
-│
-└── .planning/                         # GSD project management (local only)
-    └── ROADMAP.md, STATE.md, etc.     # Session tracking
+└── tests/                             # Unit + integration tests (574 tests)
+    ├── test_data_loader.py            # Data loading validation
+    ├── test_features.py               # Feature engineering tests
+    ├── test_model.py                  # Model training tests
+    ├── test_utils.py                  # Metrics + plotting tests
+    ├── test_auto_features.py          # DFS aggregation tests
+    ├── test_explain.py                # SHAP + fairness tests
+    ├── test_api.py                    # FastAPI endpoint smoke tests
+    └── test_streamlit_startup.py      # Streamlit app startup smoke tests
 ```
 
 ---
