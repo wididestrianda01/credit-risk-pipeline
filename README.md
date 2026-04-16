@@ -683,35 +683,6 @@ You are free to use, modify, and distribute this code for educational, research,
 
 ---
 
-## Citation
-
-If you use this pipeline in your research or production systems, please cite:
-
-```bibtex
-@software{credit_risk_pipeline_2026,
-  title = {Credit Risk Scoring Pipeline},
-  author = {Your Name},
-  year = {2026},
-  url = {https://github.com/your-repo/credit-risk-pipeline}
-}
-```
-
----
-
-## Contributing
-
-We welcome contributions! Please:
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/your-feature`
-3. Make changes, run tests: `pytest tests/ -v`
-4. Commit with clear messages: `git commit -m "feat: your feature"`
-5. Push and open a pull request
-
-All contributions must maintain 80%+ test coverage and pass linting checks.
-
----
-
 ## Support
 
 For questions or issues:
@@ -722,6 +693,6 @@ For questions or issues:
 
 ---
 
-**Last updated:** 2026-04-15
+**Last updated:** 2026-04-16
 
 **Current deployment model:** CatBoost v2 (OOT Gini = 0.5814, Gender DIR = 0.955 ✓)
