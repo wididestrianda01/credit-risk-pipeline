@@ -440,14 +440,16 @@ else:
 | XGBoost v2 | 0.5636 | 0.4183 | 0.7776 | Fast training; good calibration |
 | CatBoost-DFS | 0.5608 | 0.4275 | 0.7804 | Diversity model (DFS features) |
 | XGBoost-WoE | 0.5519 | 0.4159 | 0.7734 | Interpretability model (WoE) |
-| Logistic Baseline | 0.489 | 0.361 | — | Reference only |
+| Logistic Baseline† | 0.4681 | 0.3486 | 0.7340 | IRB interpretable benchmark (WoE, 80 features) |
 
 **Notes:**
 - OOT Gini = 2 × AUC − 1 (Basel III IRB discrimination metric)
-- KS = Kolmogorov-Smirrov statistic (default/non-default separation)
-- All models Basel CRE36.54 temporal-validation compliant
+- KS = Kolmogorov-Smirnov statistic (default/non-default separation)
+- All models Basel CRE36.54 temporal-validation compliant (sort by `prev_days_decision_mean`, most-recent 20% as OOT)
 - Ensemble attempted but fell short of 0.58 gate (best: 0.5681)
 - CatBoost v2 is single best model and deployment choice
+- CatBoost v2 outperforms logistic baseline by **24.2% on Gini** (same OOT split)
+- † Logistic Baseline: `Pipeline(StandardScaler → LR, class_weight='balanced')`; Brier=0.1495 (uncalibrated — prevalence shift from 8% train to 6.2% OOT inflates raw score)
 
 ---
 
