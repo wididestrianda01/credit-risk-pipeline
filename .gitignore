@@ -83,3 +83,12 @@ kaggle.json
 
 # Private AI assistant context
 CLAUDE.md
+
+# LaTeX build artifacts
+latex/*.aux
+latex/*.bcf
+latex/*.blg
+latex/*.fls
+latex/*.fdb_latexmk
+latex/*.out
+latex/*.run.xml

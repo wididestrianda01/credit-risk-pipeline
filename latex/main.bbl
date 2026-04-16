@@ -1,0 +1,407 @@
+% $ biblatex auxiliary file $
+% $ biblatex bbl format version 3.3 $
+% Do not modify the above lines!
+%
+% This is an auxiliary file used by the 'biblatex' package.
+% This file may safely be deleted. It will be recreated by
+% biber as required.
+%
+\begingroup
+\makeatletter
+\@ifundefined{ver@biblatex.sty}
+  {\@latex@error
+     {Missing 'biblatex' package}
+     {The bibliography requires the 'biblatex' package.}
+      \aftergroup\endinput}
+  {}
+\endgroup
+
+
+\refsection{0}
+  \datalist[entry]{nyt/global//global/global/global}
+    \entry{altman1968}{article}{}{}
+      \name{author}{1}{}{%
+        {{un=0,uniquepart=base,hash=1797dfa1970354cf6550242077ef2401}{%
+           family={Altman},
+           familyi={A\bibinitperiod},
+           given={Edward\bibnamedelima I.},
+           giveni={E\bibinitperiod\bibinitdelim I\bibinitperiod},
+           givenun=0}}%
+      }
+      \list{publisher}{1}{%
+        {Wiley}%
+      }
+      \strng{namehash}{1797dfa1970354cf6550242077ef2401}
+      \strng{fullhash}{1797dfa1970354cf6550242077ef2401}
+      \strng{fullhashraw}{1797dfa1970354cf6550242077ef2401}
+      \strng{bibnamehash}{1797dfa1970354cf6550242077ef2401}
+      \strng{authorbibnamehash}{1797dfa1970354cf6550242077ef2401}
+      \strng{authornamehash}{1797dfa1970354cf6550242077ef2401}
+      \strng{authorfullhash}{1797dfa1970354cf6550242077ef2401}
+      \strng{authorfullhashraw}{1797dfa1970354cf6550242077ef2401}
+      \field{sortinit}{A}
+      \field{sortinithash}{2f401846e2029bad6b3ecc16d50031e2}
+      \field{extradatescope}{labelyear}
+      \field{labeldatesource}{}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{The Journal of Finance}
+      \field{number}{4}
+      \field{title}{Financial Ratios, Discriminant Analysis and the Prediction of Corporate Bankruptcy}
+      \field{volume}{23}
+      \field{year}{1968}
+      \field{pages}{589\bibrangedash 609}
+      \range{pages}{21}
+    \endentry
+    \entry{bcbs_basel_framework_2024}{misc}{}{}
+      \name{author}{1}{}{%
+        {{un=0,uniquepart=base,hash=d0ffe6cbb4fa63b7d49592758a445e8c}{%
+           family={{Basel Committee on Banking Supervision}},
+           familyi={B\bibinitperiod}}}%
+      }
+      \strng{namehash}{d0ffe6cbb4fa63b7d49592758a445e8c}
+      \strng{fullhash}{d0ffe6cbb4fa63b7d49592758a445e8c}
+      \strng{fullhashraw}{d0ffe6cbb4fa63b7d49592758a445e8c}
+      \strng{bibnamehash}{d0ffe6cbb4fa63b7d49592758a445e8c}
+      \strng{authorbibnamehash}{d0ffe6cbb4fa63b7d49592758a445e8c}
+      \strng{authornamehash}{d0ffe6cbb4fa63b7d49592758a445e8c}
+      \strng{authorfullhash}{d0ffe6cbb4fa63b7d49592758a445e8c}
+      \strng{authorfullhashraw}{d0ffe6cbb4fa63b7d49592758a445e8c}
+      \field{sortinit}{B}
+      \field{sortinithash}{d7095fff47cda75ca2589920aae98399}
+      \field{extradatescope}{labelyear}
+      \field{labeldatesource}{}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{howpublished}{\url{https://www.bis.org/basel_framework/}}
+      \field{note}{Bank for International Settlements}
+      \field{title}{The Basel Framework: {CRE36} -- {IRB} Approach: Risk Quantification}
+      \field{year}{2024}
+    \endentry
+    \entry{bluhm2010}{book}{}{}
+      \name{author}{3}{}{%
+        {{un=0,uniquepart=base,hash=ac1d85a57b080a90aaa6ebc8990c1bed}{%
+           family={Bluhm},
+           familyi={B\bibinitperiod},
+           given={Christian},
+           giveni={C\bibinitperiod},
+           givenun=0}}%
+        {{un=0,uniquepart=base,hash=93fe61584bfcfbd774201f869e166c5f}{%
+           family={Overbeck},
+           familyi={O\bibinitperiod},
+           given={Ludger},
+           giveni={L\bibinitperiod},
+           givenun=0}}%
+        {{un=0,uniquepart=base,hash=91eae26fedc0f93e5dd2b2437d9344e1}{%
+           family={Wagner},
+           familyi={W\bibinitperiod},
+           given={Christoph},
+           giveni={C\bibinitperiod},
+           givenun=0}}%
+      }
+      \list{publisher}{2}{%
+        {Chapman}%
+        {Hall/CRC}%
+      }
+      \strng{namehash}{5cf3a9f6e5c6525e9c11c16a5e2c1ef7}
+      \strng{fullhash}{89b258d0d4d2e5b5f937b0a032366172}
+      \strng{fullhashraw}{89b258d0d4d2e5b5f937b0a032366172}
+      \strng{bibnamehash}{89b258d0d4d2e5b5f937b0a032366172}
+      \strng{authorbibnamehash}{89b258d0d4d2e5b5f937b0a032366172}
+      \strng{authornamehash}{5cf3a9f6e5c6525e9c11c16a5e2c1ef7}
+      \strng{authorfullhash}{89b258d0d4d2e5b5f937b0a032366172}
+      \strng{authorfullhashraw}{89b258d0d4d2e5b5f937b0a032366172}
+      \field{sortinit}{B}
+      \field{sortinithash}{d7095fff47cda75ca2589920aae98399}
+      \field{extradatescope}{labelyear}
+      \field{labeldatesource}{}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{edition}{2nd}
+      \field{title}{Introduction to Credit Risk Modeling}
+      \field{year}{2010}
+    \endentry
+    \entry{chen2016xgboost}{inproceedings}{}{}
+      \name{author}{2}{}{%
+        {{un=0,uniquepart=base,hash=48461ccdf50ba5a54e29a354aa734c0b}{%
+           family={Chen},
+           familyi={C\bibinitperiod},
+           given={Tianqi},
+           giveni={T\bibinitperiod},
+           givenun=0}}%
+        {{un=0,uniquepart=base,hash=c9ab8ac486d7f85ac914b1a8e51e512b}{%
+           family={Guestrin},
+           familyi={G\bibinitperiod},
+           given={Carlos},
+           giveni={C\bibinitperiod},
+           givenun=0}}%
+      }
+      \list{publisher}{1}{%
+        {ACM}%
+      }
+      \strng{namehash}{f79ceb030bcf791e5521f87ac6ada03b}
+      \strng{fullhash}{f79ceb030bcf791e5521f87ac6ada03b}
+      \strng{fullhashraw}{f79ceb030bcf791e5521f87ac6ada03b}
+      \strng{bibnamehash}{f79ceb030bcf791e5521f87ac6ada03b}
+      \strng{authorbibnamehash}{f79ceb030bcf791e5521f87ac6ada03b}
+      \strng{authornamehash}{f79ceb030bcf791e5521f87ac6ada03b}
+      \strng{authorfullhash}{f79ceb030bcf791e5521f87ac6ada03b}
+      \strng{authorfullhashraw}{f79ceb030bcf791e5521f87ac6ada03b}
+      \field{sortinit}{C}
+      \field{sortinithash}{4d103a86280481745c9c897c925753c0}
+      \field{extradatescope}{labelyear}
+      \field{labeldatesource}{}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{booktitle}{Proceedings of the 22nd ACM SIGKDD International Conference on Knowledge Discovery and Data Mining}
+      \field{title}{{XGBoost}: A Scalable Tree Boosting System}
+      \field{year}{2016}
+      \field{pages}{785\bibrangedash 794}
+      \range{pages}{10}
+    \endentry
+    \entry{ssm_guide_2025}{misc}{}{}
+      \name{author}{1}{}{%
+        {{un=0,uniquepart=base,hash=fc0835c66c6644c8a6ca0239bce9cc73}{%
+           family={{European Central Bank}},
+           familyi={E\bibinitperiod}}}%
+      }
+      \strng{namehash}{fc0835c66c6644c8a6ca0239bce9cc73}
+      \strng{fullhash}{fc0835c66c6644c8a6ca0239bce9cc73}
+      \strng{fullhashraw}{fc0835c66c6644c8a6ca0239bce9cc73}
+      \strng{bibnamehash}{fc0835c66c6644c8a6ca0239bce9cc73}
+      \strng{authorbibnamehash}{fc0835c66c6644c8a6ca0239bce9cc73}
+      \strng{authornamehash}{fc0835c66c6644c8a6ca0239bce9cc73}
+      \strng{authorfullhash}{fc0835c66c6644c8a6ca0239bce9cc73}
+      \strng{authorfullhashraw}{fc0835c66c6644c8a6ca0239bce9cc73}
+      \field{sortinit}{E}
+      \field{sortinithash}{8da8a182d344d5b9047633dfc0cc9131}
+      \field{extradatescope}{labelyear}
+      \field{labeldatesource}{}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{howpublished}{\url{https://www.bankingsupervision.europa.eu}}
+      \field{note}{SSM Supervisory Guide}
+      \field{title}{{ECB} Guide to Internal Models}
+      \field{year}{2025}
+    \endentry
+    \entry{crr_irb_2013}{misc}{}{}
+      \name{author}{1}{}{%
+        {{un=0,uniquepart=base,hash=3179956fa9e74184739a2680047976ee}{%
+           family={{European Parliament and Council}},
+           familyi={E\bibinitperiod}}}%
+      }
+      \strng{namehash}{3179956fa9e74184739a2680047976ee}
+      \strng{fullhash}{3179956fa9e74184739a2680047976ee}
+      \strng{fullhashraw}{3179956fa9e74184739a2680047976ee}
+      \strng{bibnamehash}{3179956fa9e74184739a2680047976ee}
+      \strng{authorbibnamehash}{3179956fa9e74184739a2680047976ee}
+      \strng{authornamehash}{3179956fa9e74184739a2680047976ee}
+      \strng{authorfullhash}{3179956fa9e74184739a2680047976ee}
+      \strng{authorfullhashraw}{3179956fa9e74184739a2680047976ee}
+      \field{extraname}{1}
+      \field{sortinit}{E}
+      \field{sortinithash}{8da8a182d344d5b9047633dfc0cc9131}
+      \field{extradatescope}{labelyear}
+      \field{labeldatesource}{}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{Official Journal of the European Union}
+      \field{title}{Regulation ({EU}) No 575/2013 on Prudential Requirements for Credit Institutions ({CRR}), Articles 142--191 ({IRB} Approach)}
+      \field{year}{2013}
+    \endentry
+    \entry{eu_consumer_credit_directive_2023}{misc}{}{}
+      \name{author}{1}{}{%
+        {{un=0,uniquepart=base,hash=3179956fa9e74184739a2680047976ee}{%
+           family={{European Parliament and Council}},
+           familyi={E\bibinitperiod}}}%
+      }
+      \strng{namehash}{3179956fa9e74184739a2680047976ee}
+      \strng{fullhash}{3179956fa9e74184739a2680047976ee}
+      \strng{fullhashraw}{3179956fa9e74184739a2680047976ee}
+      \strng{bibnamehash}{3179956fa9e74184739a2680047976ee}
+      \strng{authorbibnamehash}{3179956fa9e74184739a2680047976ee}
+      \strng{authornamehash}{3179956fa9e74184739a2680047976ee}
+      \strng{authorfullhash}{3179956fa9e74184739a2680047976ee}
+      \strng{authorfullhashraw}{3179956fa9e74184739a2680047976ee}
+      \field{extraname}{2}
+      \field{sortinit}{E}
+      \field{sortinithash}{8da8a182d344d5b9047633dfc0cc9131}
+      \field{extradatescope}{labelyear}
+      \field{labeldatesource}{}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{Official Journal of the European Union}
+      \field{note}{OJ L, 30.10.2023}
+      \field{title}{Directive ({EU}) 2023/2225 on Credit Agreements for Consumers}
+      \field{volume}{L series}
+      \field{year}{2023}
+    \endentry
+    \entry{eu_ai_act_2024_1689}{misc}{}{}
+      \name{author}{1}{}{%
+        {{un=0,uniquepart=base,hash=3179956fa9e74184739a2680047976ee}{%
+           family={{European Parliament and Council}},
+           familyi={E\bibinitperiod}}}%
+      }
+      \strng{namehash}{3179956fa9e74184739a2680047976ee}
+      \strng{fullhash}{3179956fa9e74184739a2680047976ee}
+      \strng{fullhashraw}{3179956fa9e74184739a2680047976ee}
+      \strng{bibnamehash}{3179956fa9e74184739a2680047976ee}
+      \strng{authorbibnamehash}{3179956fa9e74184739a2680047976ee}
+      \strng{authornamehash}{3179956fa9e74184739a2680047976ee}
+      \strng{authorfullhash}{3179956fa9e74184739a2680047976ee}
+      \strng{authorfullhashraw}{3179956fa9e74184739a2680047976ee}
+      \field{extraname}{3}
+      \field{sortinit}{E}
+      \field{sortinithash}{8da8a182d344d5b9047633dfc0cc9131}
+      \field{extradatescope}{labelyear}
+      \field{labeldatesource}{}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{Official Journal of the European Union}
+      \field{note}{OJ L, 12.7.2024}
+      \field{title}{Regulation ({EU}) 2024/1689 Laying Down Harmonised Rules on Artificial Intelligence ({AI} Act)}
+      \field{volume}{L series}
+      \field{year}{2024}
+    \endentry
+    \entry{lundberg2017}{inproceedings}{}{}
+      \name{author}{2}{}{%
+        {{un=0,uniquepart=base,hash=2a1075150e1e1dad8127b019f7ca9031}{%
+           family={Lundberg},
+           familyi={L\bibinitperiod},
+           given={Scott\bibnamedelima M.},
+           giveni={S\bibinitperiod\bibinitdelim M\bibinitperiod},
+           givenun=0}}%
+        {{un=0,uniquepart=base,hash=ee964079d93879aaef2382a5fff343d3}{%
+           family={Lee},
+           familyi={L\bibinitperiod},
+           given={Su-In},
+           giveni={S\bibinithyphendelim I\bibinitperiod},
+           givenun=0}}%
+      }
+      \strng{namehash}{9cd6e49767b1dfa9f5df9a46216a8739}
+      \strng{fullhash}{9cd6e49767b1dfa9f5df9a46216a8739}
+      \strng{fullhashraw}{9cd6e49767b1dfa9f5df9a46216a8739}
+      \strng{bibnamehash}{9cd6e49767b1dfa9f5df9a46216a8739}
+      \strng{authorbibnamehash}{9cd6e49767b1dfa9f5df9a46216a8739}
+      \strng{authornamehash}{9cd6e49767b1dfa9f5df9a46216a8739}
+      \strng{authorfullhash}{9cd6e49767b1dfa9f5df9a46216a8739}
+      \strng{authorfullhashraw}{9cd6e49767b1dfa9f5df9a46216a8739}
+      \field{sortinit}{L}
+      \field{sortinithash}{7c47d417cecb1f4bd38d1825c427a61a}
+      \field{extradatescope}{labelyear}
+      \field{labeldatesource}{}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{booktitle}{Advances in Neural Information Processing Systems}
+      \field{title}{A Unified Approach to Interpreting Model Predictions}
+      \field{volume}{30}
+      \field{year}{2017}
+    \endentry
+    \entry{merton1974}{article}{}{}
+      \name{author}{1}{}{%
+        {{un=0,uniquepart=base,hash=b1e2894bce14479f5a711418ce8f8ffa}{%
+           family={Merton},
+           familyi={M\bibinitperiod},
+           given={Robert\bibnamedelima C.},
+           giveni={R\bibinitperiod\bibinitdelim C\bibinitperiod},
+           givenun=0}}%
+      }
+      \list{publisher}{1}{%
+        {Wiley}%
+      }
+      \strng{namehash}{b1e2894bce14479f5a711418ce8f8ffa}
+      \strng{fullhash}{b1e2894bce14479f5a711418ce8f8ffa}
+      \strng{fullhashraw}{b1e2894bce14479f5a711418ce8f8ffa}
+      \strng{bibnamehash}{b1e2894bce14479f5a711418ce8f8ffa}
+      \strng{authorbibnamehash}{b1e2894bce14479f5a711418ce8f8ffa}
+      \strng{authornamehash}{b1e2894bce14479f5a711418ce8f8ffa}
+      \strng{authorfullhash}{b1e2894bce14479f5a711418ce8f8ffa}
+      \strng{authorfullhashraw}{b1e2894bce14479f5a711418ce8f8ffa}
+      \field{sortinit}{M}
+      \field{sortinithash}{4625c616857f13d17ce56f7d4f97d451}
+      \field{extradatescope}{labelyear}
+      \field{labeldatesource}{}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{The Journal of Finance}
+      \field{number}{2}
+      \field{title}{On the Pricing of Corporate Debt: The Risk Structure of Interest Rates}
+      \field{volume}{29}
+      \field{year}{1974}
+      \field{pages}{449\bibrangedash 470}
+      \range{pages}{22}
+    \endentry
+    \entry{niculescu2005predicting}{inproceedings}{}{}
+      \name{author}{2}{}{%
+        {{un=0,uniquepart=base,hash=b35fbebaaa62ff79aee38093ae22a581}{%
+           family={Niculescu-Mizil},
+           familyi={N\bibinithyphendelim M\bibinitperiod},
+           given={Alexandru},
+           giveni={A\bibinitperiod},
+           givenun=0}}%
+        {{un=0,uniquepart=base,hash=599c5251d489b92dc7856277d56cb1a9}{%
+           family={Caruana},
+           familyi={C\bibinitperiod},
+           given={Rich},
+           giveni={R\bibinitperiod},
+           givenun=0}}%
+      }
+      \list{publisher}{1}{%
+        {ACM}%
+      }
+      \strng{namehash}{daa42a219e7d77fc10d94cb9ba3608f1}
+      \strng{fullhash}{daa42a219e7d77fc10d94cb9ba3608f1}
+      \strng{fullhashraw}{daa42a219e7d77fc10d94cb9ba3608f1}
+      \strng{bibnamehash}{daa42a219e7d77fc10d94cb9ba3608f1}
+      \strng{authorbibnamehash}{daa42a219e7d77fc10d94cb9ba3608f1}
+      \strng{authornamehash}{daa42a219e7d77fc10d94cb9ba3608f1}
+      \strng{authorfullhash}{daa42a219e7d77fc10d94cb9ba3608f1}
+      \strng{authorfullhashraw}{daa42a219e7d77fc10d94cb9ba3608f1}
+      \field{sortinit}{N}
+      \field{sortinithash}{22369a73d5f88983a108b63f07f37084}
+      \field{extradatescope}{labelyear}
+      \field{labeldatesource}{}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{booktitle}{Proceedings of the 22nd International Conference on Machine Learning}
+      \field{title}{Predicting Good Probabilities with Supervised Learning}
+      \field{year}{2005}
+      \field{pages}{625\bibrangedash 632}
+      \range{pages}{8}
+    \endentry
+    \entry{deprado2018}{book}{}{}
+      \name{author}{1}{}{%
+        {{un=0,uniquepart=base,hash=f592fd7a2dd505aa048b4c0e3277ab29}{%
+           family={Prado},
+           familyi={P\bibinitperiod},
+           given={Marcos\bibnamedelima López},
+           giveni={M\bibinitperiod\bibinitdelim L\bibinitperiod},
+           givenun=0,
+           prefix={de},
+           prefixi={d\bibinitperiod},
+           prefixun=0}}%
+      }
+      \list{publisher}{1}{%
+        {John Wiley \& Sons}%
+      }
+      \strng{namehash}{f592fd7a2dd505aa048b4c0e3277ab29}
+      \strng{fullhash}{f592fd7a2dd505aa048b4c0e3277ab29}
+      \strng{fullhashraw}{f592fd7a2dd505aa048b4c0e3277ab29}
+      \strng{bibnamehash}{f592fd7a2dd505aa048b4c0e3277ab29}
+      \strng{authorbibnamehash}{f592fd7a2dd505aa048b4c0e3277ab29}
+      \strng{authornamehash}{f592fd7a2dd505aa048b4c0e3277ab29}
+      \strng{authorfullhash}{f592fd7a2dd505aa048b4c0e3277ab29}
+      \strng{authorfullhashraw}{f592fd7a2dd505aa048b4c0e3277ab29}
+      \field{sortinit}{P}
+      \field{sortinithash}{ff3bcf24f47321b42cb156c2cc8a8422}
+      \field{extradatescope}{labelyear}
+      \field{labeldatesource}{}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{title}{Advances in Financial Machine Learning}
+      \field{year}{2018}
+    \endentry
+  \enddatalist
+\endrefsection
+\endinput
+

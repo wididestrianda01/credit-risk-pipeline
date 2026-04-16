@@ -1,0 +1,17 @@
+{
+  "evaluation_date": "2026-04-16",
+  "model": "Logistic Regression (WoE, balanced class weight)",
+  "n_features": 80,
+  "test_split": "temporal OOT \u2014 most-recent 20% sorted by prev_days_decision_mean",
+  "train_size": 246009,
+  "oot_size": 61502,
+  "oot_default_rate": 0.06209554160840298,
+  "metrics": {
+    "AUC-ROC": 0.734,
+    "Gini": 0.4681,
+    "KS": 0.3486,
+    "Brier": 0.1495,
+    "BrierSkill": -1.5674,
+    "AvgPrecision": 0.1686
+  }
+}

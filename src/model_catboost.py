@@ -69,7 +69,7 @@ from src.model_base import (
     _CAT_L2_LEAF_REG_MIN, _CAT_L2_LEAF_REG_MAX, _CAT_BAGGING_TEMP_MIN, _CAT_BAGGING_TEMP_MAX,
     _CAT_RANDOM_STRENGTH_MIN, _CAT_RANDOM_STRENGTH_MAX, _CAT_BOOTSTRAP_TYPE, _CAT_ITERATIONS,
     _CAT_OBJ_EARLY_STOPPING_ROUNDS, _CAT_EARLY_STOPPING_ROUNDS, _CAT_FINAL_VAL_SIZE, _CAT_OPTUNA_N_TRIALS,
-    _CAT_MODEL_PATH, _CAT_PARAMS_PATH, _CAT_FIGURE_PATH, _CAT_RAW_MIN_DATA_IN_LEAF_MIN, _CAT_RAW_MIN_DATA_IN_LEAF_MAX,
+    _CAT_MODEL_PATH, _CAT_PARAMS_PATH, _CAT_FIGURE_PATH, _CAT_EVAL_PATH, _CAT_RAW_MIN_DATA_IN_LEAF_MIN, _CAT_RAW_MIN_DATA_IN_LEAF_MAX,
     _CATBOOST_RAW_CATS, _CAT_EXTENDED_OPTUNA_N_TRIALS, _CAT_RAW_DEPTH_MIN, _CAT_RAW_DEPTH_MAX,
     _CAT_RAW_LEARNING_RATE_MIN, _CAT_RAW_LEARNING_RATE_MAX, _CAT_RAW_L2_LEAF_REG_MIN, _CAT_RAW_L2_LEAF_REG_MAX,
     _CAT_RAW_ITERATIONS_MIN, _CAT_RAW_ITERATIONS_MAX,
@@ -249,7 +249,7 @@ def train_catboost_optuna(
         sampler=sampler,
         pruner=pruner,
         study_name="catboost_raw_scalepos",
-        storage=f"sqlite:///{_PROJECT_ROOT / 'models' / 'optuna_studies.db'}",
+        storage=f"sqlite:///{_OPTUNA_DB_PATH}",
         load_if_exists=True,
     )
     # Capture count of pre-existing (possibly contaminated) trials before this run
@@ -396,7 +396,7 @@ def train_catboost_optuna(
         _json.dump(best_params, fh, indent=2)
 
     # Save metrics JSON (D-21) — includes all evaluate_model fields + provenance for canonical backup
-    metrics_out_path = _PROJECT_ROOT / "reports" / "catboost_raw_eval.json"
+    metrics_out_path = _CAT_EVAL_PATH
     metrics_out_path.parent.mkdir(parents=True, exist_ok=True)
     with metrics_out_path.open("w") as fh:
         _json.dump({"Model": "CatBoost (Raw, scale_pos_weight)", **metrics}, fh, indent=2)
