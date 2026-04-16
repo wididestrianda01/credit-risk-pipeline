@@ -584,7 +584,7 @@ Optuna's search converged after approximately 35 trials for CatBoost (out of 50 
 \section{External Credit Score Imputation}
 \label{app:imputation}
 
-The three external credit scores (EXT\_SOURCE\_1, EXT\_SOURCE\_2, EXT\_SOURCE\_3) exhibit 45\% to 55\% missing values. Rather than deletion or simple mean imputation, a separate LightGBM model was trained to predict missing external scores from available features. This imputation approach preserves the predictive signal of the external scores while respecting the structural missing-not-at-random pattern. Alternative strategies (KNN imputation, MICE) were evaluated but produced no significant improvement in the final model's Gini coefficient.
+The three external credit scores (EXT\_SOURCE\_1, EXT\_SOURCE\_2, EXT\_SOURCE\_3) exhibit 45\% to 55\% missing values. Rather than deletion or simple mean imputation, a separate LightGBM model was trained to predict missing external scores from available features (\texttt{apply\_ext\_source\_imputer} in \texttt{src/model\_base.py}). This approach preserves the predictive signal of the external scores while respecting the structural missing-not-at-random pattern — the missingness correlates with applicant creditworthiness and is therefore informative rather than random.
 
 % ============================================================================
 % BIBLIOGRAPHY
