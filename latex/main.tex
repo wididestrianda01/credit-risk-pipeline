@@ -99,7 +99,7 @@
 % ============================================================================
 \begin{abstract}
 \noindent
-This report presents an end-to-end machine learning pipeline for credit risk scoring, built on the Home Credit Default Risk dataset comprising 307,511 loan applications across seven relational tables. A total of 169 features are engineered through domain-informed transformations of multi-table relational data. Three gradient boosting models (XGBoost, LightGBM, and CatBoost) are trained using out-of-time validation that follows the Basel Committee on Banking Supervision temporal validation requirements. The production CatBoost model achieves an out-of-time Gini coefficient of 0.5814 (AUC-ROC 0.7907, KS statistic 0.4147), outperforming a logistic regression baseline (Gini 0.4681) by 24.2\%. Fairness analysis finds no statistically significant gender-based disparate impact (Disparate Impact Ratio 0.955, above the 0.80 threshold). Model predictions are accompanied by SHAP-based local explanations that support adverse action notices under GDPR Article 22. Regulatory compliance checks are performed against the Basel III IRB framework, GDPR Article 22 on automated decision-making, the EU Artificial Intelligence Act (Regulation 2024/1689), and the EU Consumer Credit Directive (Directive 2023/2225). The production system is deployed as a FastAPI scoring endpoint and a Streamlit interactive dashboard.
+This report presents an end-to-end machine learning pipeline for credit risk scoring, built on the Home Credit Default Risk dataset of 307,511 loan applications across seven relational tables. A total of 169 features are engineered from the multi-table data using credit-domain aggregations (affordability ratios, delinquency counts and means across bureau and installment records, composite external scores). Three gradient boosting models (XGBoost, LightGBM, and CatBoost) are trained using out-of-time validation that follows the Basel Committee on Banking Supervision temporal validation requirements. The production CatBoost model achieves an out-of-time Gini coefficient of 0.5814 (AUC-ROC 0.7907, KS statistic 0.4147), against a logistic regression baseline Gini of 0.4681 on the same split (a 24.2\% improvement). Fairness analysis finds no statistically significant gender-based disparate impact (Disparate Impact Ratio 0.955, above the 0.80 threshold). SHAP-based local explanations are produced for each prediction to support adverse action notices under GDPR Article 22. Regulatory compliance is assessed against the Basel III IRB framework, GDPR Article 22 on automated decision-making, the EU Artificial Intelligence Act (Regulation 2024/1689), and the EU Consumer Credit Directive (Directive 2023/2225). The production system is deployed as a FastAPI scoring endpoint and a Streamlit interactive dashboard.
 
 \medskip
 \noindent
@@ -115,7 +115,7 @@ This report presents an end-to-end machine learning pipeline for credit risk sco
 \section{Introduction}
 \label{sec:introduction}
 
-Credit risk assessment is at the core of modern banking. The ability to estimate the probability that a borrower will fail to meet contractual obligations determines capital allocation, loan pricing, and portfolio management across the entire financial sector. Quantitative approaches to this problem have a long history: Altman's \citeyear{altman1968} discriminant analysis model introduced the Z-score for bankruptcy prediction, while Merton's \citeyear{merton1974} structural model formalized default as the event that a firm's asset value falls below its debt obligations at maturity. These two traditions, statistical scoring and structural modeling, remain the conceptual foundations for modern credit risk practice.
+Credit risk assessment is central to banking operations. The probability that a borrower fails to meet contractual obligations drives capital allocation, loan pricing, and portfolio provisioning. Altman's \citeyear{altman1968} discriminant analysis model introduced the Z-score for bankruptcy prediction, and Merton's \citeyear{merton1974} structural model formalized default as the event that a firm's asset value falls below its debt obligations at maturity. Statistical scoring and structural default modeling are the two conceptual bases of modern credit risk practice.
 
 In contemporary retail lending, probability of default (PD) estimation is typically performed using statistical or machine learning classifiers trained on historical loan performance data. The PD estimate feeds directly into the Expected Loss formula,
 \begin{equation}
@@ -124,7 +124,7 @@ In contemporary retail lending, probability of default (PD) estimation is typica
 \end{equation}
 where Loss Given Default ($\LGD$) and Exposure at Default ($\EAD$) are estimated separately. Under the Basel III Internal Ratings-Based (IRB) approach \parencite{bcbs_basel_framework_2024}, banks that develop internal PD models may use them for regulatory capital calculations, subject to strict validation requirements.
 
-The European regulatory environment for credit models has evolved considerably in recent years. The EU Artificial Intelligence Act (Regulation 2024/1689) classifies AI systems used for credit scoring as high-risk \parencite{eu_ai_act_2024_1689}, requiring transparency, human oversight, and bias testing. The EU Consumer Credit Directive (Directive 2023/2225) mandates that when creditworthiness assessment involves automated processing, consumers have the right to human intervention and a meaningful explanation of the assessment \parencite{eu_consumer_credit_directive_2023}. These requirements make model explainability and fairness auditing not optional additions, but regulatory necessities.
+Recent EU legislation imposes new obligations on credit scoring models. The EU Artificial Intelligence Act (Regulation 2024/1689) classifies AI systems used for credit scoring as high-risk \parencite{eu_ai_act_2024_1689}, requiring transparency, human oversight, and bias testing. The EU Consumer Credit Directive (Directive 2023/2225) mandates that when creditworthiness assessment involves automated processing, consumers have the right to human intervention and a meaningful explanation of the assessment \parencite{eu_consumer_credit_directive_2023}. Model explainability and fairness auditing are therefore regulatory requirements.
 
 This work develops a calibrated PD model on the Home Credit Default Risk dataset, a multi-table relational dataset with approximately 8\% default rate. Three gradient boosting architectures (XGBoost, LightGBM, CatBoost) are compared against a logistic regression baseline. The best single model (CatBoost, out-of-time Gini = 0.5814) is paired with SHAP-based explainability \parencite{lundberg2017} to meet regulatory requirements. The contribution is twofold: (1) a methodologically sound pipeline with temporal validation compliant with Basel requirements, and (2) a deployed production system combining calibrated PD estimation with per-applicant SHAP attribution and fairness auditing across protected attributes.
 
@@ -161,7 +161,7 @@ where $\rho(\PD)$ is an asset correlation parameter interpolated between 12\% an
 \begin{equation}
 \text{RWA} = 12.5 \times \EAD \times \LGD \times K(\PD) \times M(\PD, \text{MAT}),
 \end{equation}
-where $M$ is a maturity adjustment. This formula makes the point that PD estimation is not merely a classification exercise; the PD value enters directly into capital calculations, and calibration errors propagate through to regulatory capital.
+where $M$ is a maturity adjustment. PD estimation is therefore more than a classification exercise. The PD value enters directly into capital calculations, so calibration errors propagate to regulatory capital.
 
 While Merton's model applies to corporate credit (where equity and asset values are observable or estimable), the consumer credit setting lacks a corresponding asset process. In retail portfolios, PD is estimated empirically from historical default data, typically using logistic regression or tree-based classifiers. The connection to Merton remains conceptual: borrower creditworthiness (the ``distance to default'') is inferred from observable features rather than from an explicit asset value model.
 
@@ -174,7 +174,7 @@ Gradient boosted decision trees have become the dominant method for tabular pred
 \end{equation}
 where $\ell$ is a differentiable loss function (typically log-loss for binary classification), $f_k$ are individual trees, and $\Omega(f_k) = \gamma T_k + \tfrac{1}{2}\lambda \lVert w_k \rVert^2$ penalizes model complexity through the number of leaves $T_k$ and the leaf weight magnitude $\lVert w_k \rVert^2$ \parencite{chen2016xgboost}. The algorithm builds trees greedily, using a second-order Taylor expansion of the loss at each split, which enables efficient computation of optimal split points.
 
-For credit scoring, gradient boosted trees offer several practical advantages over logistic regression: they handle missing values natively (a non-trivial benefit when 45\% to 55\% of external credit scores are missing), they capture non-linear effects and interactions between features without manual engineering, and they are robust to moderate multicollinearity in the feature set. The cost of these advantages is reduced interpretability, which motivates the use of post-hoc explainability methods such as SHAP values.
+For credit scoring, gradient boosted trees have several practical advantages over logistic regression. They handle missing values natively, which matters substantially when 45\% to 55\% of external credit scores are missing. They also capture non-linear effects and interactions between features without manual engineering, and they tolerate moderate multicollinearity in the feature set. The trade-off is reduced interpretability, which is why post-hoc explainability methods such as SHAP values are needed.
 
 \subsection{SHAP: Model-Agnostic Explainability}
 
@@ -208,7 +208,7 @@ The Home Credit Default Risk dataset contains 307,511 loan applications from an 
 
 The target variable is a binary indicator: default (TARGET = 1) within 30 days of loan origination. Approximately 8\% of applications default, producing a class imbalance ratio of roughly 1:11.5. Three external credit bureau scores (EXT\_SOURCE\_1, EXT\_SOURCE\_2, EXT\_SOURCE\_3) are the strongest individual predictors but exhibit 45\% to 55\% missingness. This missing data pattern is structural: not all applicants have records in all external bureaus. The missingness itself carries predictive signal (applicants without external scores may be thinner-file borrowers), which motivates the use of sentinel imputation rather than deletion or mean imputation.
 
-The multi-table structure of this dataset is deliberate. In production credit scoring, applicant data arrives from multiple sources (application forms, internal records, external bureaus), and the ability to join, aggregate, and engineer features from relational data is a core skill. Single-table datasets do not test this capability.
+The multi-table structure of this dataset is deliberate. In production credit scoring, applicant data arrives from application forms, internal records, and external bureaus, so joining and aggregating features across relational sources is part of the job. Single-table datasets do not test this capability.
 
 % ============================================================================
 % 4. METHODOLOGY
@@ -220,9 +220,9 @@ The multi-table structure of this dataset is deliberate. In production credit sc
 
 Raw features from the seven tables were engineered into 169 base features across 12 categories: applicant demographics (age in years, employment tenure), loan affordability ratios (credit-to-income, annuity-to-income), delinquency aggregates from secondary tables (count, mean, max, and standard deviation of days past due across bureau and installment records), and composite external scores (EXT\_SOURCE\_MEAN and EXT\_SOURCE\_MIN computed using robust aggregation to handle missing values).
 
-Division-by-zero protection was applied to all ratio features: values were clipped to $[0, \infty)$, infinities replaced by zero, and NaN values filled with a tree-friendly sentinel of $-999$. This sentinel approach is superior to population-mean imputation for tree-based models, because the tree can learn a dedicated split for sentinel values, effectively treating ``missing'' as a separate category. The missingness pattern itself carries predictive signal in credit data, and this approach preserves that signal.
+Division-by-zero protection was applied to all ratio features: values were clipped to $[0, \infty)$, infinities replaced by zero, and NaN values filled with a tree-friendly sentinel of $-999$. Sentinel imputation is preferred over population-mean imputation for tree-based models because the tree can learn a dedicated split for sentinel values, which treats ``missing'' as a separate category. In credit data the missingness pattern itself carries predictive signal, and sentinel imputation preserves that signal.
 
-No Weight of Evidence (WoE) discretization was applied. While WoE encoding is standard for logistic regression scorecards and offers good interpretability to regulators, it discards information about within-bin variation. Raw continuous features allow tree-based models to learn optimal split points directly from the data, and prior work has shown that raw features yield better performance than WoE-encoded inputs when the downstream model is a gradient boosted tree.
+No Weight of Evidence (WoE) discretization was applied. WoE encoding is standard for logistic regression scorecards and is favored for interpretability, but it discards information about within-bin variation. Raw continuous features allow tree-based models to learn optimal split points directly from the data; in the benchmark reported in Section~\ref{sec:results}, raw features produced a higher OOT Gini than WoE-encoded inputs (CatBoost at 0.5814 against XGBoost-WoE at 0.5519).
 
 \subsection{Validation Strategy: Out-of-Time Testing}
 
@@ -247,9 +247,9 @@ n_{\text{neg}} / n_{\text{pos}} & \text{if } y_i = 1 \text{ (default)}\\
 1 & \text{if } y_i = 0 \text{ (non-default)}
 \end{cases}
 \end{equation}
-This weighting upweights the minority class in the loss function, allowing the model to learn the default boundary more effectively without generating synthetic samples. Alternative approaches (SMOTE oversampling, threshold adjustment) were evaluated but produced inferior KS statistics on the OOT set.
+This weighting upweights the minority class in the loss function, so the model learns the default boundary from the original samples rather than from synthetic ones. Alternative approaches (SMOTE oversampling, threshold adjustment) were evaluated but produced lower KS statistics on the OOT set.
 
-Probability calibration was applied post-hoc to all models using Platt scaling \parencite{niculescu2005predicting}. A separate calibration holdout (30\% of the training data) was carved before hyperparameter optimization and kept entirely separate from both the training folds and the OOT set. Calibration is important because cost-sensitive weighting distorts the predicted probability distribution: a model trained with balanced class weights produces probabilities centered around 0.5 rather than around the true prevalence of 0.08. Platt scaling fits a logistic regression from raw model outputs to observed outcomes, correcting this shift.
+Probability calibration was applied post-hoc to all models using Platt scaling \parencite{niculescu2005predicting}. A separate calibration holdout (30\% of the training data) was carved before hyperparameter optimization and kept entirely separate from both the training folds and the OOT set. Calibration is needed because cost-sensitive weighting distorts the predicted probability distribution: a model trained with balanced class weights produces probabilities centered around 0.5 rather than around the true prevalence of 0.08. Platt scaling fits a logistic regression from raw model outputs to observed outcomes and corrects this shift.
 
 \subsection{Evaluation Metrics}
 
@@ -267,7 +267,7 @@ where $F_1$ and $F_0$ are the CDFs for defaulters and non-defaulters, respective
 \begin{equation}
 \text{Brier} = \frac{1}{n}\sum_{i=1}^{n}(\hat{p}_i - y_i)^2.
 \end{equation}
-Lower Brier scores indicate better calibration. Because PD estimates feed directly into Expected Loss calculations (Equation~\ref{eq:expected_loss}), calibration accuracy is not merely a statistical nicety but a regulatory and business requirement.
+Lower Brier scores indicate better calibration. Because PD estimates feed directly into Expected Loss calculations (Equation~\ref{eq:expected_loss}), calibration accuracy has direct regulatory and business consequences.
 
 \paragraph{AUC-ROC.} The area under the receiver operating characteristic curve, measuring the probability that a randomly chosen defaulter receives a higher predicted score than a randomly chosen non-defaulter.
 
@@ -314,7 +314,7 @@ The production CatBoost model achieves a Gini of 0.5814, representing a 24.2\% i
 \noindent\textsuperscript{a}\,All models are evaluated on the identical out-of-time test set (most-recent 20\% sorted by \texttt{prev\_days\_decision\_mean}), ensuring a like-for-like comparison.
 \textsuperscript{b}\,The logistic regression Brier score is high (0.1495) because the model is uncalibrated: it was trained on a dataset with 8\% default prevalence, whereas the OOT window contains 6.2\% defaults. Discrimination metrics (Gini, KS, AUC-ROC) are unaffected by this miscalibration and remain directly comparable.
 
-Two observations deserve comment. First, LightGBM v2 achieves the highest KS statistic (0.4346) among all models, indicating stronger separation at the tail of the score distribution. This property is valuable for pricing and risk stratification, where the focus is on distinguishing high-risk from moderate-risk applicants. Second, the OOT and out-of-fold (OOF) Gini gap for the production CatBoost model is only 0.028, indicating stable generalization with modest in-sample optimism.
+Two observations are worth noting. First, LightGBM v2 achieves the highest KS statistic (0.4346) among all models, indicating stronger separation at the tail of the score distribution. This property is useful for pricing and risk stratification, where the focus is on distinguishing high-risk from moderate-risk applicants. Second, the OOT and out-of-fold (OOF) Gini gap for the production CatBoost model is only 0.028, indicating stable generalization with modest in-sample optimism.
 
 The logistic regression baseline uses WoE-encoded categorical features and serves two purposes: it establishes a performance floor for comparison, and it represents the type of model that regulators are most familiar with. In a production setting, a ``champion/challenger'' framework would run both the ML model and the logistic regression baseline in parallel, using the latter as a fallback and regulatory reference.
 
@@ -371,9 +371,9 @@ external credit bureau score composites (\texttt{EXT\_SOURCE\_MEAN},
 \texttt{EXT\_SOURCE\_MIN}), loan affordability ratios
 (\texttt{CREDIT\_INCOME\_RATIO}, \texttt{ANNUITY\_INCOME\_RATIO}),
 and employment tenure.
-These are objective financial indicators, which supports the model's fairness
-profile: the model relies on creditworthiness signals rather than demographic
-proxies.
+These are objective financial indicators. The model therefore relies on creditworthiness
+signals rather than demographic proxies, which supports the fairness audit in
+Section~\ref{sec:fairness}.
 
 \subsection{Supporting Visualizations}
 
@@ -532,7 +532,7 @@ Third, the validation is out-of-time but not truly out-of-sample in the distribu
 
 Fourth, the model produces a point estimate of PD. A Bayesian or conformal prediction approach that produces prediction intervals around the PD estimate would be more informative for risk management decisions, as it would quantify model uncertainty for individual predictions.
 
-Future work includes: (1) ensemble stacking of the three base models to improve discrimination power further; (2) survival analysis modeling (Cox proportional hazards or accelerated failure time models) to estimate the time profile of default, not just its probability; (3) incorporation of alternative fairness metrics beyond disparate impact, such as equalized odds and calibration by group; and (4) continuous monitoring of model performance on new loan cohorts with automated drift detection.
+Future work includes: (1) ensemble stacking of the three base models to improve discrimination further; (2) survival analysis modeling (Cox proportional hazards or accelerated failure time models) to estimate the time profile of default in addition to its probability; (3) alternative fairness metrics in addition to disparate impact, such as equalized odds and calibration by group; and (4) continuous monitoring of model performance on new loan cohorts with automated drift detection.
 
 % ============================================================================
 % 10. CONCLUSION
@@ -540,7 +540,7 @@ Future work includes: (1) ensemble stacking of the three base models to improve 
 \section{Conclusion}
 \label{sec:conclusion}
 
-This work demonstrates the feasibility of machine learning for credit risk scoring in a regulated environment. A Gini coefficient of 0.5814 on an out-of-time test set, achieved by CatBoost with cost-sensitive weighting and Platt scaling calibration, exceeds the logistic regression baseline (Gini 0.4681, same OOT split) by 24.2\% while satisfying temporal validation requirements. The production system combines calibrated probability estimation with SHAP-based explainability and fairness auditing, addressing requirements from the Basel III IRB framework, GDPR Article 22, the EU AI Act (Regulation 2024/1689), and the EU Consumer Credit Directive (Directive 2023/2225). The deployed FastAPI endpoint and Streamlit dashboard provide both programmatic scoring and human-in-the-loop review, supporting the regulatory principle that high-risk AI systems must allow for meaningful human oversight.
+This work builds an end-to-end ML pipeline for credit risk scoring under EU regulatory constraints. The production CatBoost model, using cost-sensitive weighting and Platt scaling calibration, achieves an out-of-time Gini of 0.5814 against a logistic regression baseline of 0.4681 on the same split, a 24.2\% improvement under temporal validation. Calibrated PD estimates, SHAP local explanations, and fairness audits by gender and age address the requirements of the Basel III IRB framework, GDPR Article 22, the EU AI Act (Regulation 2024/1689), and the EU Consumer Credit Directive (Directive 2023/2225). The FastAPI endpoint and Streamlit dashboard provide programmatic scoring and human review, which the EU AI Act requires for high-risk AI systems.
 
 % ============================================================================
 % APPENDIX
@@ -584,7 +584,7 @@ Optuna's search converged after approximately 35 trials for CatBoost (out of 50 
 \section{External Credit Score Imputation}
 \label{app:imputation}
 
-The three external credit scores (EXT\_SOURCE\_1, EXT\_SOURCE\_2, EXT\_SOURCE\_3) exhibit 45\% to 55\% missing values. Rather than deletion or simple mean imputation, a separate LightGBM model was trained to predict missing external scores from available features (\texttt{apply\_ext\_source\_imputer} in \texttt{src/model\_base.py}). This approach preserves the predictive signal of the external scores while respecting the structural missing-not-at-random pattern — the missingness correlates with applicant creditworthiness and is therefore informative rather than random.
+The three external credit scores (EXT\_SOURCE\_1, EXT\_SOURCE\_2, EXT\_SOURCE\_3) exhibit 45\% to 55\% missing values. Rather than deletion or simple mean imputation, a separate LightGBM model was trained to predict missing external scores from available features (\texttt{apply\_ext\_source\_imputer} in \texttt{src/model\_base.py}). This approach preserves the predictive signal of the external scores while respecting the structural missing-not-at-random pattern: the missingness correlates with applicant creditworthiness and is therefore informative rather than random.
 
 % ============================================================================
 % BIBLIOGRAPHY
