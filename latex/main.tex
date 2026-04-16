@@ -3,7 +3,7 @@
 % ── Encoding & fonts ──────────────────────────────────────────
 \usepackage[T1]{fontenc}
 \usepackage[utf8]{inputenc}
-% lmodern not available in this texlive installation
+\usepackage{lmodern}   % vector CM fonts — fixes ligature rendering in PDF
 
 % ── Page layout ───────────────────────────────────────────────
 \usepackage[top=2.5cm, bottom=2.5cm, left=2.5cm, right=2.5cm]{geometry}
@@ -366,7 +366,14 @@ The calibration diagram (Figure~\ref{fig:calibration}) shows that after Platt sc
   \label{fig:feature_iv}
 \end{figure}
 
-The SHAP analysis confirms that external credit bureau score composites (EXT\_SOURCE\_MEAN, EXT\_SOURCE\_MIN), loan affordability ratios (CREDIT\_INCOME\_RATIO, ANNUITY\_INCOME\_RATIO), and employment tenure are the primary drivers of the model's predictions. These are objective financial indicators, which supports the model's fairness profile: the model relies on creditworthiness signals rather than demographic proxies.
+The SHAP analysis confirms that the primary drivers of the model's predictions are
+external credit bureau score composites (\texttt{EXT\_SOURCE\_MEAN},
+\texttt{EXT\_SOURCE\_MIN}), loan affordability ratios
+(\texttt{CREDIT\_INCOME\_RATIO}, \texttt{ANNUITY\_INCOME\_RATIO}),
+and employment tenure.
+These are objective financial indicators, which supports the model's fairness
+profile: the model relies on creditworthiness signals rather than demographic
+proxies.
 
 \subsection{Supporting Visualizations}
 
