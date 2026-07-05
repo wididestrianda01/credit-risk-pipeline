@@ -676,13 +676,3 @@ def compute_shap_stability(
     corr, _ = spearmanr(importance_train, importance_oot)
 
     return float(corr) if not np.isnan(corr) else 0.0
-
-
-def fairness_report(
-    y_true: pd.Series,
-    y_pred: pd.Series,
-    sensitive_col: pd.Series,
-) -> pd.DataFrame:
-    """Compute group-level fairness metrics."""
-    # TODO: implement
-    raise NotImplementedError

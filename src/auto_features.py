@@ -22,15 +22,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-try:
-    import featuretools as ft
-except ImportError:
-    ft = None  # type: ignore
-
-try:
-    from woodwork.logical_types import Categorical, Double, Integer, BooleanNullable
-except ImportError:
-    Categorical = Double = Integer = BooleanNullable = None  # type: ignore
+import featuretools as ft
+from woodwork.logical_types import Categorical, Double, Integer, BooleanNullable
 
 from src.features import select_features_by_iv
 from src.model import train_xgboost_optuna
@@ -192,15 +185,7 @@ def _build_entity_set(tables: dict[str, pd.DataFrame]) -> Any:
     -------
     ft.EntitySet
         EntitySet with ID "home_credit" and all relationships configured.
-
-    Raises
-    ------
-    ImportError
-        If featuretools is not installed.
     """
-    if ft is None:
-        raise ImportError("featuretools is required for this function")
-
     # --- Task 1: Add STATUS-based bureau_balance DPD aggregations ---
     # Pre-compute DPD flags at bureau level (historical closed loans only)
     bureau_balance = tables["bureau_balance"].copy()
@@ -942,9 +927,6 @@ def apply_featuretools_feature_store(
 
     if mode not in ("test", "train"):
         raise ValueError(f'mode must be "test" or "train", got {mode}')
-
-    if ft is None:
-        raise ImportError("featuretools is required for this function")
 
     data_dir = Path(data_dir)
 
